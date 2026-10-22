@@ -70,21 +70,21 @@ namespace
                 Title->AddSlot().FillWidth(1).HAlign(HAlign_Center).VAlign(VAlign_Center)
                     [SNew(SBox).WidthOverride(22).HeightOverride(2)
                     [SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.6f,.65f,.7f))]];
-                Title->AddSlot().AutoWidth()[SNew(SButton).Tag(TEXT("PluginBarMinimize")).ButtonStyle(&DockButtonStyle()).IsFocusable(false).ContentPadding(FMargin(5,0))
-                    .ToolTipText_Lambda([Mini=Args._Minimized](){return FText::FromString(Mini.Get()?TEXT("Expand plugin bar"):TEXT("Minimize plugin bar"));})
+                Title->AddSlot().AutoWidth()[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ChromeButtonPadding)).Tag(TEXT("PluginBarMinimize")).ButtonStyle(&DockButtonStyle()).IsFocusable(false)
+                    .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([Mini=Args._Minimized](){return FText::FromString(Mini.Get()?TEXT("Expand plugin bar"):TEXT("Minimize plugin bar"));})))
                     .OnClicked_Lambda([Toggle=Args._ToggleMinimized](){Toggle();return FReply::Handled();})
                     [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Bold",12))
                         .Text_Lambda([Mini=Args._Minimized](){return FText::FromString(Mini.Get()?TEXT("+"):TEXT("-"));})]];
             }
             else Title->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SACEPluginText).Text_Lambda([Title=Args._Title]{return FText::FromString(Title.Get());}).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))];
-            if(!IsBar&&Host.IsValid())Title->AddSlot().AutoWidth()[SNew(SButton).Tag(TEXT("PluginFramePin"))
-                .IsFocusable(false).ButtonStyle(&Retail->DockButton).ContentPadding(FMargin(4,0))
-                .ToolTipText(FText::FromString(TEXT("Pin and hide frame. Hold Quick-show pinned windows to move or unpin.")))
+            if(!IsBar&&Host.IsValid())Title->AddSlot().AutoWidth()[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ChromeButtonPadding)).Tag(TEXT("PluginFramePin"))
+                .IsFocusable(false).ButtonStyle(&Retail->DockButton)
+                .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Pin and hide frame. Hold Quick-show pinned windows to move or unpin."))))
                 .OnClicked_Lambda([H=Host,Window=Id]{if(H.IsValid())H->SetPluginWindowPinned(Window,!H->IsPluginWindowPinned(Window));return FReply::Handled();})
                 [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
                     .Text_Lambda([H=Host,Window=Id]{return FText::FromString(H.IsValid()&&H->IsPluginWindowPinned(Window)?TEXT("Unpin"):TEXT("Pin"));})]];
-            if (Args._Close) Title->AddSlot().AutoWidth()[SNew(SButton).IsFocusable(false).ButtonStyle(&DockButtonStyle())
-                .ToolTipText(FText::FromString(TEXT("Hide window (plugin keeps running)")))
+            if (Args._Close) Title->AddSlot().AutoWidth()[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ChromeButtonPadding)).IsFocusable(false).ButtonStyle(&DockButtonStyle())
+                .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Hide window (plugin keeps running)"))))
                 .OnClicked_Lambda([Close=Args._Close](){Close();return FReply::Handled();})[Caption(TEXT("X"))]];
             ChildSlot[SNew(SBorder).BorderImage(&Retail->Frame).Padding(IsBar?0:3)
                 [SNew(SVerticalBox)
@@ -93,7 +93,7 @@ namespace
                     .Visibility_Lambda([Lock=Locked]{return Lock.Get(false)?EVisibility::Collapsed:EVisibility::Visible;})
                     [SNew(SBorder).Tag(IsBar?TEXT("PluginBarHandle"):TEXT("PluginWindowHandle")).BorderImage(&Retail->TitleBackground)
                     .Padding(IsBar?0:3)
-                    .ToolTipText_Lambda([this](){return FText::FromString(CanManipulate&&!CanManipulate()?TEXT("Unlock the UI or hold Quick-show pinned windows to move"):TEXT("Drag to move"));})
+                    .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([this](){return FText::FromString(CanManipulate&&!CanManipulate()?TEXT("Unlock the UI or hold Quick-show pinned windows to move"):TEXT("Drag to move"));})))
                     .Cursor_Lambda([this](){return CanManipulate&&!CanManipulate()?EMouseCursor::Default:EMouseCursor::CardinalCross;})
                     .OnMouseButtonDown_Lambda([this](const FGeometry&, const FPointerEvent& E)
                     {
@@ -105,7 +105,7 @@ namespace
                     .Tag(Args._CompactWhenLocked?FName(TEXT("LedgerContent")):FName(NAME_None))
                     .Visibility_Lambda([Mini=Args._Minimized](){return Mini.Get(false)?EVisibility::Collapsed:EVisibility::Visible;})[Args._Content.Widget]]
                 +SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)[SNew(SBorder).Padding(FMargin(12,2)).Visibility_Lambda([this]{return Resize&&(!CanManipulate||CanManipulate())?EVisibility::Visible:EVisibility::Collapsed;})
-                    .ToolTipText(FText::FromString(TEXT("Drag to resize"))).Cursor(EMouseCursor::ResizeSouthEast)
+                    .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Drag to resize")))).Cursor(EMouseCursor::ResizeSouthEast)
                     .OnMouseButtonDown_Lambda([this](const FGeometry&,const FPointerEvent& E){if(E.GetEffectingButton()!=EKeys::LeftMouseButton||(CanManipulate&&!CanManipulate()))return FReply::Unhandled();Resizing=true;return FReply::Handled().CaptureMouse(SharedThis(this));})[Caption(TEXT("◢"))]]]];
         }
         virtual void Tick(const FGeometry& G,double Time,float Delta) override
@@ -194,7 +194,12 @@ FVector2D SACEPluginDesktop::DisplaySize(const FWindow& W) const
         {
             auto Size=Host->LedgerSize(W.LedgerId);
             Size.X=W.Size.X;
-            if(W.Size.Y>0)Size.Y=W.Size.Y+Host->LedgerChromeHeight(W.LedgerId,Host->IsPluginWindowChromeHidden(W.LedgerId));
+            if(W.Size.Y>0)
+            {
+                const double SavedHeight=W.Size.Y+Host->LedgerChromeHeight(W.LedgerId,Host->IsPluginWindowChromeHidden(W.LedgerId));
+                // Hunt rows must fit even when restoring a height saved before a new metric was added.
+                Size.Y=W.LedgerId==TEXT("huntledger")?FMath::Max(Size.Y,SavedHeight):SavedHeight;
+            }
             return Size;
         }
         if(W.PluginBar&&Host->IsPluginBarMinimized())return FVector2D(Host->IsPluginBarHorizontal()?70:38,18);
@@ -395,10 +400,10 @@ void SACEPluginDesktop::Refresh()
         Buttons->AddSlot().AutoSize().Padding(1)[SNew(SACEPluginOrderTarget).Host(Host.Get()).Id(Id).LockId(BarId).Horizontal(Horizontal)
             .Tag(FName(*(TEXT("PluginBarOrder.")+Id)))
             [SNew(SBox).WidthOverride(32).HeightOverride(32)
-            [SNew(SButton).Tag(Manager?FName(TEXT("PluginOptions")):FName(*(TEXT("PluginBarButton.")+Id)))
-                .ButtonStyle(&DockButtonStyle()).IsFocusable(false).HAlign(HAlign_Center).ContentPadding(2).AllowDragDrop(true)
+            [SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::IconButtonPadding)).Tag(Manager?FName(TEXT("PluginOptions")):FName(*(TEXT("PluginBarButton.")+Id)))
+                .ButtonStyle(&DockButtonStyle()).IsFocusable(false).AllowDragDrop(true)
                 .OnSlateButtonDragDetected_Lambda([H=Host,Id](const FGeometry&,const FPointerEvent&){return ACEPluginOrder::BeginDrag(H.Get(),Id,BarId);})
-                .ToolTipText_Lambda([H=Host,P,Id,Manager]()
+                .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([H=Host,P,Id,Manager]()
                 {
                     FString Tip=Manager?TEXT("Plugin Manager"):P?P->DisplayTitle():Id==TEXT("ucm.log")?TEXT("UCM activity and problem log"):TEXT("Waypoint world / dungeon map");
                     if(P&&P->Id==TEXT("looteditor"))
@@ -408,7 +413,7 @@ void SACEPluginDesktop::Refresh()
                     }
                     else if(P)Tip+=TEXT("\nClick to show/hide\n")+P->Status;
                     return FText::FromString(Tip+TEXT("\nDrag to reorder while unlocked. Hold Quick-show if pinned."));
-                })
+                })))
                 .OnClicked_Lambda([this,Id,Manager](){if(Manager)Host->TogglePanel();else Toggle(Id);return FReply::Handled();})[Icon]]]];
     }
     auto& Bar=Windows.FindChecked(BarId);

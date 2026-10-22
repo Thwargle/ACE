@@ -18,6 +18,8 @@ public:
 	bool SetMotionTable(uint32 MotionTableId);
 	bool BuildTransitionRootTrack(uint32 From, uint32 To, uint32 Style, ACELandingMotion::FRootTrack& Out) const;
 	bool GetCycleVelocity(uint32 MotionCommand, uint32 Style, FVector& Out) const;
+	bool BuildCycleRootTrack(uint32 Command, uint32 Style, ACELandingMotion::FRootTrack& Out, bool Reverse = false) const;
+	bool GetModifierOmega(uint32 MotionCommand, uint32 Style, FVector& Out) const;
 	bool BuildWalkingLink(int8 From, int8 To, uint32 Style, ACEWalkingMotion::FLink& Out) const;
 	bool EvaluateWalkingLink(const ACEWalkingMotion::FLink& Link, int32 Parts, TArray<FTransform>& Out, float Scale, int32& Count, TArray<FACEDatAnimationHook>& Hooks) const;
 	int32 GetCachedMotionTableCount() const { return MotionTableCache.Num(); }

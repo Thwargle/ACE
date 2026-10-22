@@ -11,8 +11,10 @@ struct FRootTrack
     struct FKey { float Time; FTransform Transform; };
     TArray<FKey> Keys;
     float Time = 0.f;
+    FTransform Entry = FTransform::Identity;
+    bool bApplyEntry = false;
 
-    void Reset() { Keys.Reset(); Time = 0.f; }
+    void Reset() { Keys.Reset(); Time = 0.f; Entry = FTransform::Identity; bApplyEntry = false; }
     bool IsActive() const { return Keys.Num() > 1 && Time < Keys.Last().Time; }
     FTransform Sample(float At) const
     {
@@ -32,7 +34,36 @@ struct FRootTrack
         if (!IsActive()) return FTransform::Identity;
         const FTransform Before = Sample(Time);
         Time = FMath::Min(Time+FMath::Max(0.f,Dt),Keys.Last().Time);
-        return Sample(Time).GetRelativeTransform(Before);
+        FTransform Delta = Sample(Time).GetRelativeTransform(Before);
+        if (bApplyEntry && Dt > 0.f)
+        {
+            Delta.SetTranslation(Entry.GetTranslation()+Entry.GetRotation().RotateVector(Delta.GetTranslation()));
+            Delta.SetRotation((Entry.GetRotation()*Delta.GetRotation()).GetNormalized());
+            bApplyEntry = false;
+        }
+        return Delta;
+    }
+    FTransform AdvanceLooping(float Dt)
+    {
+        FTransform Result = FTransform::Identity;
+        if (Keys.Num() < 2 || Keys.Last().Time <= SMALL_NUMBER) return Result;
+        const float Duration = Keys.Last().Time;
+        const bool Reverse = Dt < 0.f;
+        float Remaining = FMath::Abs(Dt);
+        if (bApplyEntry && Remaining > 0.f) { Result = Entry; bApplyEntry = false; }
+        while (Remaining > SMALL_NUMBER)
+        {
+            if (Reverse ? Time <= SMALL_NUMBER : Time >= Duration-SMALL_NUMBER)
+                Time = Reverse ? Duration : 0.f;
+            const float Use = FMath::Min(Remaining, Reverse ? Time : Duration-Time);
+            const FTransform Before = Sample(Time);
+            Time += Reverse ? -Use : Use;
+            const FTransform Delta = Sample(Time).GetRelativeTransform(Before);
+            Result.SetTranslation(Result.GetTranslation()+Result.GetRotation().RotateVector(Delta.GetTranslation()));
+            Result.SetRotation((Result.GetRotation()*Delta.GetRotation()).GetNormalized());
+            Remaining -= Use;
+        }
+        return Result;
     }
 };
 

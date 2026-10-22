@@ -76,7 +76,9 @@ bool FACERemoteSupportTest::RunTest(const FString&)
   for(int I=0;I<3000;++I)Result=Walker->ResolvePredictedMovement(Origin+FVector(0,0,1),Origin+FVector(0,4,1));
   AddInfo(FString::Printf(TEXT("Remote supported step phase %d: %.3f us/call, result %s"),Phase,
    (FPlatformTime::Seconds()-Begin)*1.e6/3000,*(Result-Origin).ToString()));
-  TestTrue(TEXT("Flat supported step preserves velocity"),Result.Equals(Origin+FVector(0,4,1),.1));
+  // Human lower sphere radius .48, center .475: root contact is .5 cm
+  // above the plane, plus the 1 cm collision clearance.
+  TestTrue(TEXT("Flat supported step preserves velocity"),Result.Equals(Origin+FVector(0,4,1.5),.1));
  }
  Walker->Destroy();
  for(bool LowCeiling:{false,true})

@@ -3,6 +3,8 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "ACETypes.h"
+#include "ACELandingMotion.h"
+#include "ACEWalkingMotion.h"
 #include "ACEWorldEntityActor.generated.h"
 
 class UStaticMeshComponent;
@@ -228,7 +230,7 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	bool bAttachedToParent = false;
 
-	/** Exponential correction rate toward the extrapolated remote pose. */
+	/** Presentation smoothing for orientation, projectiles and tracked-avatar handover. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "1.0", ClampMax = "40.0"))
 	float RemotePositionSmoothing = 10.f;
 	/** Shared root presentation for tracked body, hands and equipment. */
@@ -244,10 +246,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "0.0", ClampMax = "2.0"))
 	float RemoteMaxExtrapolate = 2.f;
 
-	/** Degrees/sec at TurnSpeed=1 — matches local ACEPlayerController prediction. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "45.0", ClampMax = "360.0"))
+	/** Signed AC-space degrees/sec at TurnSpeed=1, from the DAT turn modifier. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "-360.0", ClampMax = "360.0"))
 	// UpdateMotion supplies the interpreted multiplier, including Run's 1.5.
-	float RemoteTurnRateDegrees = FMath::RadiansToDegrees(1.5f);
+	float RemoteTurnRateDegrees = FMath::RadiansToDegrees(-1.5f);
 	float RemoteWalkSpeedAc = 3.1199999f;
 	float RemoteRunSpeedAc = 4.f;
 	float RemoteBackSpeedAc = 1.56f;
@@ -277,6 +279,13 @@ protected:
 	/** Local player position is live; its world-object network echo can be stale. */
 	bool ResolveFacingTarget(int32 TargetGuid, FVector& Location) const;
 	bool ResolveMovementTarget(int32 TargetGuid, FVector& Location, float& Radius, float& Height);
+	FVector AdvanceRemoteMoveTo(float Seconds);
+	void SetRemoteLocomotion(float Forward, float Strafe, bool bRunning, float Rate);
+	enum class ERemoteMoveToPhase : uint8 { Begin, Turn, Move, FinalTurn };
+	ERemoteMoveToPhase RemoteMoveToPhase = ERemoteMoveToPhase::Begin;
+	FQuat RemoteMoveToHeading = FQuat::Identity;
+	FQuat RemoteMoveToFinalHeading = FQuat::Identity;
+	bool bRemoteMovingAway = false;
 	/** Collision-constrained extrapolation; authoritative F748 teleports stay authoritative. */
 	FVector ResolvePredictedMovement(const FVector& From, const FVector& Destination, TOptional<bool> Grounded = {}) const;
 	float MovementRadius = 25.f;
@@ -295,7 +304,7 @@ protected:
 	double LastRemotePositionAt = -100.;
 
 	/** Vertical trace (world static, then outdoor heightfield) for the ground Z under a point. */
-	bool TraceGroundZ(const FVector& AtLocation, float& OutGroundZ, bool bCreatureSupport = false) const;
+	bool TraceGroundZ(const FVector& AtLocation, float& OutGroundZ, bool bCreatureSupport = false, const FQuat* Rotation = nullptr) const;
 
 	/** True when LastAceCellId is indoor, or the point sits inside a building EnvCell. */
 	bool ResolveIndoorOccupancy(const FVector& AtLocation, uint32& OutEnvCellId) const;
@@ -334,12 +343,23 @@ protected:
 	FQuat RemotePredictRotation = FQuat::Identity;
 	/** Last authoritative F748 location — used to clamp runaway drift. */
 	FVector RemoteAnchorLocation = FVector::ZeroVector;
+	FQuat RemoteAnchorRotation = FQuat::Identity;
 	/** A confirmed correction must not remain stuck on a different floor forever. */
 	bool bRemoteCorrectionPending = false;
 	int32 RemoteCorrectionFrames = 0;
 	float RemoteCorrectionRequested = 0.f;
 	float RemoteCorrectionBlocked = 0.f;
 	FACEObjectMotionState RemoteMotion;
+	// Physics owns link timing even while the mesh is deferred or culled.
+	ACEWalkingMotion::FSequence RemoteWalkingMotion;
+	ACELandingMotion::FRootTrack RemoteCycleRootTrack;
+	uint32 RemoteCycleCommand = 0, RemoteCycleStyle = 0;
+	bool bRemoteCycleReverse = false;
+	float RemoteCycleElapsed = 0.f;
+	float RemoteMoveToStepLimit = MAX_flt;
+	/** Death position frames belong to physics, independently of culled mesh ticks. */
+	ACELandingMotion::FRootTrack RemoteDeathRootTrack;
+	float RemoteDeathPlayRate = 1.f;
 
 	/** Frozen Unreal XY face direction for TurnToObject / TurnToHeading (set once per packet). */
 	FVector RemoteTurnFaceDir = FVector::ZeroVector;

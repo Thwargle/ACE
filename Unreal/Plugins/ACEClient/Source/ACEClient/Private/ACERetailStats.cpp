@@ -56,6 +56,8 @@ void UACEDatSubsystem::RecomputePlayerStats(FACEPlayerVitals& V, const TArray<FA
 		Modifiers(0x4, 30, Mul, Add); // Int quality, AllegianceRank.
 		V.EffectiveAllegianceRank = FMath::TruncToInt(*Rank * Mul + Add);
 	}
+	// Innate attribute augmentations are already in the server's starting values
+	// (AttributeCache::InqAttribute). Their quality counts must not add them again.
 	Modifiers(1, 1, V.StrengthEnchantMul, V.StrengthEnchantAdd);
 	Modifiers(1, 2, V.EnduranceEnchantMul, V.EnduranceEnchantAdd);
 	Modifiers(1, 3, V.QuicknessEnchantMul, V.QuicknessEnchantAdd);
@@ -78,6 +80,8 @@ void UACEDatSubsystem::RecomputePlayerStats(FACEPlayerVitals& V, const TArray<FA
 			return FMath::RoundToInt((static_cast<double>(Info->FormulaW) + A * Info->FormulaX + B * Info->FormulaY) / Info->FormulaZ);
 		};
 		if (!Name.IsEmpty()) { Skill.Name = Name; }
+		// Retail CACQualities::InqSkill (00592660) includes these augmentations
+		// in both raw and enchanted values, so they do not produce a green bonus.
 		int32 Innate = Skill.InitLevel + Skill.Ranks + FMath::Max(0, V.StatQualityInts.FindRef(0x16D)); // LumAugAllSkills
 		// ACE also grants Enlightenment to trained/specialized skills, before
 		// vitae, just as its extra health bonus is included in the vital below.
@@ -89,6 +93,9 @@ void UACEDatSubsystem::RecomputePlayerStats(FACEPlayerVitals& V, const TArray<FA
 		Skill.Base = Innate + Formula(false);
 		float Mul, Add; Modifiers(0x10, Skill.SkillId, Mul, Add);
 		Skill.Current = FMath::Max(0, FMath::RoundToInt((Innate + Formula(true)) * Vitae * Mul + Add));
+		// Retail deliberately adds Jack of All Trades and LumAugSkilledSpec only
+		// after EnchantSkill in its !raw branch. gmSkillUI displays these as (+N),
+		// even without spells; moving them to Base would break retail parity.
 		if (V.StatQualityInts.FindRef(0x146) > 0) { Skill.Current += 5; }
 		if (Skill.AdvancementClass == 3) { Skill.Current += 2 * FMath::Max(0, V.StatQualityInts.FindRef(0x158)); }
 		if (Skill.SkillId == 22) { V.JumpSkillCurrent = Skill.Current; }
@@ -101,16 +108,20 @@ void UACEDatSubsystem::RecomputePlayerStats(FACEPlayerVitals& V, const TArray<FA
 		float Mul, Add; Modifiers(2, Key, Mul, Add);
 		return FMath::Max(Base < 5 ? 1 : 5, FMath::RoundToInt(Base * Vitae * Mul + Add));
 	};
-	auto Formula = [&](int32 Index)
+	auto Formula = [&](int32 Index, bool Buffed)
 	{
 		const auto& F = VitalFormulas[Index];
-		return FMath::RoundToInt((double(F[0]) + double(F[1])*V.GetAttributeCurrent(F[4])
-			+ double(F[2])*V.GetAttributeCurrent(F[5])) / F[3]);
+		auto Attribute = [&](int32 Id) { return Buffed ? V.GetAttributeCurrent(Id) : V.GetAttributeBase(Id); };
+		return FMath::RoundToInt((double(F[0]) + double(F[1])*Attribute(F[4])
+			+ double(F[2])*Attribute(F[5])) / F[3]);
 	};
 	// CACQualities::InqAttribute2nd adds GearMaxHealth before enchantments.
 	// ACE also publishes Enlightenment; its health bonus is two per level.
 	const int32 HealthBonus = V.StatQualityInts.FindRef(379) + 2*V.StatQualityInts.FindRef(390);
-	V.MaxHealth = Vital(1, V.HealthStart + V.HealthRanks + Formula(0) + HealthBonus);
-	V.MaxStamina = Vital(3, V.StaminaStart + V.StaminaRanks + Formula(1));
-	V.MaxMana = Vital(5, V.ManaStart + V.ManaRanks + Formula(2));
+	V.BaseMaxHealth = V.HealthStart + V.HealthRanks + Formula(0, false) + HealthBonus;
+	V.BaseMaxStamina = V.StaminaStart + V.StaminaRanks + Formula(1, false);
+	V.BaseMaxMana = V.ManaStart + V.ManaRanks + Formula(2, false);
+	V.MaxHealth = Vital(1, V.HealthStart + V.HealthRanks + Formula(0, true) + HealthBonus);
+	V.MaxStamina = Vital(3, V.StaminaStart + V.StaminaRanks + Formula(1, true));
+	V.MaxMana = Vital(5, V.ManaStart + V.ManaRanks + Formula(2, true));
 }

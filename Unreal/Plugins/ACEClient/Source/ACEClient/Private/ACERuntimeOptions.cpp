@@ -3,24 +3,40 @@
 #include "HAL/IConsoleManager.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Engine/UserInterfaceSettings.h"
+#include "Engine/World.h"
+#include "ACEEnvCellActor.h"
+#include "UObject/UObjectIterator.h"
 namespace ACERuntimeOptions
 {
 namespace
 {
  uint64 SoundSettingsFrame=MAX_uint64;
  float AmbientGain=1.f,EffectsGain=1.f;
+ int32 AppliedDynamicLightingQuality=2;
 }
+int32 DynamicLightingQuality() { return AppliedDynamicLightingQuality; }
 float Get(const TCHAR* Key)
 {
  for (const auto& O : Values) if (FCString::Strcmp(O.Key,Key)==0) {
   float V=O.Default;
-  if (GConfig && !GConfig->GetFloat(TEXT("ACE.Presentation"),Key,V,GGameUserSettingsIni)
-   && FCString::Strcmp(Key,TEXT("FieldOfViewDegrees"))==0)
+  if (GConfig && !GConfig->GetFloat(TEXT("ACE.Presentation"),Key,V,GGameUserSettingsIni))
   {
-   // Older builds stored a multiplier. Keep the preference without silently
-   // interpreting an existing value of 1 as a one-degree field of view.
-   float Legacy=1.f;
-   if(GConfig->GetFloat(TEXT("ACE.Presentation"),TEXT("FieldOfView"),Legacy,GGameUserSettingsIni)) V=90.f*Legacy;
+   if (FCString::Strcmp(Key,TEXT("FieldOfViewDegrees"))==0)
+   {
+    // Older builds stored a multiplier. Keep the preference without silently
+    // interpreting an existing value of 1 as a one-degree field of view.
+    float Legacy=1.f;
+    if(GConfig->GetFloat(TEXT("ACE.Presentation"),TEXT("FieldOfView"),Legacy,GGameUserSettingsIni)) V=90.f*Legacy;
+   }
+   else if (FCString::Strcmp(Key,TEXT("ScreenBrightness"))==0)
+   {
+    // Old values were gamma, not an output multiplier. Preserve the neutral
+    // point and the preferred direction without turning 2.2 into 220% gain.
+    float Legacy=2.2f;
+    if(GConfig->GetFloat(TEXT("ACE.Presentation"),TEXT("Brightness"),Legacy,GGameUserSettingsIni) && FMath::IsFinite(Legacy))
+     V=Legacy<2.2f?FMath::GetMappedRangeValueClamped(FVector2D(1.6f,2.2f),FVector2D(.2f,1.f),Legacy)
+      :FMath::GetMappedRangeValueClamped(FVector2D(2.2f,2.8f),FVector2D(1.f,2.f),Legacy);
+   }
   }
   return FMath::IsFinite(V)?FMath::Clamp(V,O.Min,O.Max):O.Default;
  }
@@ -37,7 +53,20 @@ void Set(const TCHAR* Key,float Value)
 void Apply()
 {
  SoundSettingsFrame=MAX_uint64;
- if (auto* C=IConsoleManager::Get().FindConsoleVariable(TEXT("r.TonemapperGamma"))) C->Set(Get(TEXT("Brightness")),ECVF_SetByGameSetting);
+ const int32 LightingQuality=FMath::RoundToInt(Get(TEXT("DynamicLightingQuality")));
+ if(AppliedDynamicLightingQuality!=LightingQuality)
+ {
+  AppliedDynamicLightingQuality=LightingQuality;
+  // Loaded rooms do not tick. Refresh only on preference changes; newly
+  // loaded rooms apply the same preference when creating their lights.
+  for(TObjectIterator<AACEEnvCellActor> It;It;++It)
+   if(IsValid(*It) && It->GetWorld() && It->GetWorld()->IsGameWorld()) It->RefreshLightingOptions();
+ }
+ // Keep the existing neutral transfer function; brightness now adjusts the
+ // final world image rather than bending gamma while leaving whites at full intensity.
+ if (auto* C=IConsoleManager::Get().FindConsoleVariable(TEXT("r.TonemapperGamma"))) C->Set(2.2f,ECVF_SetByGameSetting);
+ if (auto* C=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Display.Brightness"))) C->Set(Get(TEXT("ScreenBrightness")),ECVF_SetByGameSetting);
+ if (auto* C=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Display.Contrast"))) C->Set(Get(TEXT("Contrast")),ECVF_SetByGameSetting);
  if (auto* C=IConsoleManager::Get().FindConsoleVariable(TEXT("r.MaxAnisotropy"))) C->Set(FMath::RoundToInt(Get(TEXT("Anisotropy"))),ECVF_SetByGameSetting);
  if (GConfig) GConfig->Flush(false,GGameUserSettingsIni);
 }

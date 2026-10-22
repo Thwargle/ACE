@@ -50,6 +50,7 @@ private:
 	TSharedPtr<FStreamableHandle> RuntimeMaterialPreload;
 	bool bRuntimeMaterialPreloadStarted = false;
 	TSharedPtr<ISceneViewExtension, ESPMode::ThreadSafe> RetailParticleView;
+	TSharedPtr<ISceneViewExtension, ESPMode::ThreadSafe> DisplayView;
 public:
 	void UntrackRuntimeTexture(UTexture2D* Tex);
 	/** Count + byte LRU trim for textures/setup caches. Safe to call often. */
@@ -374,6 +375,7 @@ public:
 	bool EvaluateIdleMotion(uint32 MotionTableId, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount,
 		const float* PreviousTimeSeconds = nullptr, TArray<FACEDatAnimationHook>* OutCrossedHooks = nullptr) const;
 	bool GetMotionVelocity(uint32 MotionTableId, uint32 Command, uint32 Style, FVector& Out) const;
+	bool GetMotionTurnRate(uint32 MotionTableId, uint32 Style, float& OutRadiansPerSecond) const;
 	bool EvaluateMotionTransition(uint32 MotionTableId, uint32 FromCommand, uint32 ToCommand, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount, bool& bOutFinished,
 		const float* PreviousTimeSeconds = nullptr, TArray<FACEDatAnimationHook>* OutCrossedHooks = nullptr, uint32 PreferredStyle = 0) const;
 	bool EvaluateMotionCommand(uint32 MotionTableId, uint32 MotionCommand, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount,
@@ -383,6 +385,7 @@ public:
 	 *  PreferredStyle = CurrentStyle (HandCombat etc.); 0 = DefaultStyle / NonCombat fallbacks. */
 	bool BuildTransitionRootTrack(uint32 Table, uint32 From, uint32 To, uint32 Style, ACELandingMotion::FRootTrack& Out) const;
 	bool BuildWalkingLink(uint32 Table, int8 From, int8 To, uint32 Style, ACEWalkingMotion::FLink& Out) const;
+	bool BuildCycleRootTrack(uint32 Table, uint32 Command, uint32 Style, ACELandingMotion::FRootTrack& Out, bool Reverse = false) const;
 	bool EvaluateWalkingLink(const ACEWalkingMotion::FLink& Link, int32 Parts, TArray<FTransform>& Out, float Scale, int32& Count, TArray<FACEDatAnimationHook>& Hooks) const;
 	bool EvaluateMotionLink(uint32 MotionTableId, uint32 FromCommand, uint32 ToCommand, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount, bool& bOutFinished,
 		const float* PreviousTimeSeconds = nullptr, TArray<FACEDatAnimationHook>* OutCrossedHooks = nullptr, uint32 PreferredStyle = 0) const;

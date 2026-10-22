@@ -8,6 +8,271 @@ button exists, its opcode has a constant, or a focused regression test passes.
 This is the working acceptance record, most recently reviewed on 2026-10-13. The client
 is **not yet a feature-complete retail replacement**.
 
+## Apostate elevated selection and quest completion: 2026-10-20
+
+Compared retail `Render::GfxObjUnderSelectionRay`, `GetMouseSelectionObjectID`
+and `Position::cylinder_distance`: selection is a 3D drawing-polygon/sphere ray;
+interaction reach separately includes vertical cylinder separation. A high
+camera must not prevent a visible hit, and a high player must not bypass reach.
+
+`DesktopHighlights` now drops an attuned Aetheric Resonator onto the stock
+deposit in its real 0x7F020107 room with surrounding DAT geometry loaded. Eight
+views cover four directions at 1.5/3-metre camera heights. Every view picks the
+deposit and emits one GiveObjectRequest, never DropItem. It exports the actual
+16-byte action to `Saved/Automation/ApostateGiveObject.bin` for server replay.
+The existing gateway test also passes from the reported 12-metre-high ledge.
+
+`ApostateQuestIntegrationTests` replays that client action through ACE's normal
+network handler with stock 40808/40809/40807 templates and DAT setup dimensions.
+Players 0/2 metres above the deposit are in reach; a player 12 metres above it
+retains the resonator and receives no quest credit until the simulated approach
+arrives. The original pending Give then consumes the resonator and stamps
+NexusCrawlResonatorTurnIn0509. Using Ned completes NexusCrawlCompleted0509,
+clears the intermediate flags, awards XP, 18,000 luminance and the Nexus Crawler
+title. Repeated use grants no duplicate reward. All three cases pass.
+
+This is a functional hand-in/reward integration test, starting with the quest
+already accepted. It does not drive combat or navigation through the whole
+dungeon, and does not reproduce the reported live invisible object. The fixture
+captures persistence requests in an inert queue: no shard writes, sockets or
+persistent GUID allocation. No runtime bounds/range exception was needed.
+
+Validation: editor build, `DesktopHighlights`, `CustomWorldPresentation`, and
+all three server cases passed. Reports: `Unreal/Saved/ApostateHandIn-client-tests`
+and `Unreal/Saved/ApostateHandIn-server-tests`. The level-200 fixture earned
+297,235,840 XP and 18,000 luminance in each case. Shared Quest source was synced.
+
+## Chat expand/restore and text margins: 2026-10-20
+
+Compared `gmMainChatUI::HandleMaximizeButton`, `gmFloatyMainChatUI`,
+`gmFloatyChatUI`, and `ChatInterface` with the resolved retail main/extra chat
+layouts (2100006F and 2100005B). The main chat control now explicitly selects
+retail state 10000048/10000047 and textures 06005E65/06005E64. It adds half the
+screen height, grows upward or downward according to its position, and restores
+the prior height and Y within the current screen. It does not hide the chat.
+Width changes and unsent drafts survive. The button remains available with UI
+movement locked; auxiliary chat windows retain their retail close/resize controls.
+
+All five logs now use the DAT text margins. The main layout already reserves
+space for numbered window buttons, so adding another fixed 16-pixel text gutter
+shifted text too far right and wrapped it prematurely. Entry placement also no
+longer adds an extra horizontal inset. Expand/restore and unread-arrow artwork
+and hit surfaces paint above selectable log text, within their own window's
+stacking order. Unread arrows track messages received while browsing history,
+clear on returning to the bottom or clearing the log, and do not appear merely
+because the user scrolls upward.
+
+The rendered chat fixture covers all five windows' resize grips, margins,
+wrapping, saved geometry, independent scrolling, unread indicators and Slate
+hit paths. Main expand/restore checks cover upper/lower placement, locked UI,
+two display scales, both DAT icons, preserved width and drafts. It is kept in a
+separate helper to avoid MSVC's optimizer limit on the larger screen suite.
+
+Validation: Win64 Development editor build succeeded. `ChatInputAndCommands`
+and `UIScreens` passed with zero errors or warnings; the expanded main chat and
+main/auxiliary unread-control captures were visually reviewed. Results are in
+`Unreal/Saved/ChatParity-tests/index.json`. Shared Quest source was synchronized
+and `Quest/Sync-ClientSource.ps1 -CheckOnly` reported no differences.
+
+## UCM post-combat corpse handoff: 2026-10-20
+
+ACE's `Creature_Death` waits for the death animation before `CreateCorpse` and
+destroying the defeated object. UCM already scheduled visible corpses before
+ordinary navigation, but could start retracing its route during this gap and
+then reverse again when the corpse arrived.
+
+The host now exposes the confirmed death of its combat target from zero-health
+or death-motion events, retaining its time and position across deletion. The
+policy holds ordinary navigation for up to eight seconds while waiting for a
+new visible corpse in loot range. Normal ownership, appraisal, transfer and
+close handling then finish before retracing the existing route. Corpse arrival
+wakes the scheduler. Existing combat/recovery priorities remain intact, and
+navigation priority bypasses the spawn wait. Disappearance alone, disabled loot,
+no loot rules, full inventory, range and teleport changes do not cause a wait.
+
+`PostCombatLootHandoff` simulates a route departure, kill, delayed corpse creation,
+delayed contents and transfer confirmation, and return to the original route.
+It also covers navigation priority, recovery/combat, timeouts and excluded cases.
+Host packet regressions cover both death signals, duplicate notifications,
+deletion without death, and GUID reuse. Live server reproduction is still needed
+to confirm the reported player's exact timing.
+
+Validation: Win64 Development editor build succeeded. `PostCombatLootHandoff`,
+`RouteAndTellRequests`, `LootCombatPriority`, `LongCombatRouteRejoin`,
+`SchedulingParity`, `ActivityFailureIsolation`, and `Decisions` passed with zero
+errors. The first handoff run exposed a fixture that moved the cached death
+position instead of moving the player out of loot range; the corrected fixture
+passed on rerun.
+
+## Augmentation base values and bonus colors: 2026-10-20
+
+Verified against retail `CACQualities::InqSkill` (00592660),
+`AttributeCache::InqAttribute` (005CC4E0), `SkillInfoRegion::Update`, and
+`gmSkillUI` in `C:/dev/retail_client_source`. Innate attribute augmentations are
+already included in the attribute starting value sent by the server. Skilled
+Melee/Missile/Magic (+10) and LumAugAllSkills are included in both raw and modified
+skills. These gains must not produce a green bonus by themselves or be added
+again from the augmentation count.
+
+Retail explicitly treats Jack of All Trades (+5) and LumAugSkilledSpec (+2 per
+rank for specialized skills) differently: `InqSkill` adds them after enchantments
+only when `raw == false`. The retail skill row and footer therefore show these
+as green bonuses even with an empty enchantment list. The current implementation
+already follows this distinction; it has been preserved rather than hiding all
+permanent bonuses. ACE's `AugmentationDevice::DoAugmentation` and
+`CreatureSkill::GetAugBonus_Base/GetAugBonus_Current` corroborate the packet and
+skill split (Enlightenment is an ACE extension).
+
+`ACE.RetailParity.AugmentationStats` exercises live attribute and quality packets,
+all six innate attributes, each skill family across untrained/trained/specialized
+skills, all-skills luminance, buff expiry, and the modified-only exceptions under
+vitae. `UIScreens` checks neutral augmented attribute/skill rows and footers,
+plus retail's green Jack/spec-luminance bonus. This is source and automated
+regression verification, not a live side-by-side retail capture.
+
+Validation: Windows editor build passed. `AugmentationStats` and `CharacterStats`
+passed in `Unreal/Saved/AugmentationStats-tests`; the final `UIScreens` run passed
+in `Unreal/Saved/AugmentationStats-ui-tests`, all with zero test errors. Shared
+Quest source synchronization and CheckOnly passed.
+
+## Screen brightness and contrast: 2026-10-20
+
+The desktop brightness control now adjusts the final world image rather than
+only changing gamma between 1.6 and 2.8 (which left white highlights bright).
+Brightness spans 20–200%, with a separate 50–200% contrast control directly below
+it. Both are neutral at 100%, update and save immediately, and restore through
+Defaults. Existing gamma preferences migrate around the old neutral 2.2 value.
+
+The SDR adjustment runs after retail particle composition and before Slate, so
+world effects dim with the scene and menus stay readable. Neutral settings add
+no rendering pass. Ordinary inventory/character scene captures are excluded to
+avoid applying the settings twice. HDR uses native linear color grading rather
+than clamping encoded HDR output. Validation covers Windows SDR; headset and HDR
+output have not been measured in this change.
+
+`ACE.Rendering.DisplaySettings` checks migration, slider-to-renderer updates,
+on-disk persistence, reopening, defaults, and final-color GPU samples across
+brightness/contrast combinations with opaque surfaces and retail additive
+effects. The existing particle blend and retail UI suites also pass.
+
+## Monster damage rules, route doors, and Apostate objects: 2026-10-20
+
+UCM damage selection no longer exempts explicit melee weapons from an element
+filter. Incompatible main-hand preferences fall back to eligible equipment;
+monster elements can select another spell family despite a global attack-spell
+preference. Offhands must also match or are removed before attacking. Matching
+launcher ammunition remains mandatory for arrows, quarrels, and darts. Coverage
+includes conflicting preferences/resistances, confirmed equipment, missing
+matching equipment, and unchanged global spell selection for unmatched monsters.
+
+Route snapshots now derive door passage from PhysicsState.Ethereal rather than
+InitialMotionCommand. ACE Door.Open/Close broadcasts collision changes separately
+from animation, so a stale On command must not suppress another open request
+after an automatic close. Tests cover both stale On and stale Off with repeated
+passability changes; existing retry limits remain in place. The login Play-tab action is now labeled
+"Remove server".
+
+The standard [Apostate Nexus Gateway (40810)](https://github.com/ACEmulator/ACE-World-16PY-Patches/blob/master/Database/Patches/9%20WeenieDefaults/Creature/Unsorted/40810%20Apostate%20Nexus%20Gateway.sql)
+and [Apostate Aetherium Deposit (40809)](https://github.com/ACEmulator/ACE-World-16PY-Patches/blob/master/Database/Patches/9%20WeenieDefaults/Creature/Unsorted/40809%20Apostate%20Aetherium%20Deposit.sql)
+are object-shaped creatures, using retail setups 0x02000443 / 0x02000B82 and
+motion table 0x0900013D. The supplied screenshots are retail references for
+standard ACE content. Regression fixtures exercise deferred presentation,
+deposit clothing, idle ticks, material opacity, distance levels, room reentry,
+world picking, and PView admission at their standard 0x0110028A / 0x7F020107
+placements. They also check the gateway from the reported 0x011002E7 ledge
+position at camera height, with the surrounding retail dungeon cells loaded.
+Rendered-pixel comparisons with and without each object verify that its actual
+geometry remains visible against the dungeon. Optional captures use
+`-ACESaveApostateCaptures`.
+
+The desktop drag fixture gives an attuned Aetheric Resonator to the stock
+deposit model and checks the recipient, item, and quantity in GiveObjectRequest.
+It also verifies that a missed drop neither gives to the previous recipient nor
+drops the bound item on the ground. No per-object visibility or interaction
+exception was added. Both standard objects work in the current regression
+fixtures; the reported live invisibility remains unreproduced.
+
+Validation: Windows editor build passed. Eight focused suites passed across
+`Unreal/Saved/MonsterDoor-tests` and `Unreal/Saved/MonsterDoor-final-tests`,
+including buff-to-combat equipment handoff and route recovery. The final
+Apostate follow-up passed `CustomWorldPresentation` and `DesktopHighlights` in
+`Unreal/Saved/Apostate-final-tests`, including rendered dungeon views and the
+bound-item hand-in packet. The Windows editor rebuild also passed. These
+fixtures do not substitute for reproducing the affected live session. Shared
+Quest source synchronization passed.
+
+## Stat colors without active spells: 2026-10-20
+
+The Attributes panel painted all three vital values green unconditionally.
+It now compares their maximums with raw maximums computed by the same DAT
+formulas as the effective values. The selected vital footer shows current/max
+and the matching signed bonus. Gear maximum health and ACE Enlightenment are
+included in the raw maximum; they no longer appear as an enchantment bonus.
+Damage and resource consumption do not change the comparison.
+
+Retail `CACQualities::InqSkill` adds Jack of All Trades (+5) and specialized
+skill luminance augmentations (+2 per rank) only to current skill values.
+Those bonuses legitimately produce green skills and a positive suffix with
+an empty enchantment list, so they remain intact. Source references are
+`CACQualities.cpp`, `gmAttributeUI.cpp`, `Attribute2ndInfoRegion.cpp`, and
+`gmSkillUI.cpp` in `C:/dev/retail_client_source`.
+
+`CharacterStats` covers empty registries, permanent skill augmentations,
+raw vital maximums, Endurance buffs, and horn expiry. `UIScreens` exercises
+neutral depleted vitals, gear/enlightenment, positive and negative modifiers,
+expiry, and agreement between the row color and footer.
+Both suites and the Windows editor build passed. The unbuffed vital capture
+was inspected; Quest source synchronization and CheckOnly passed. Evidence:
+`Unreal/Saved/StatDisplay-final-tests` and `Unreal/Saved/StatDisplay-build.log`.
+
+## Remote positions and death-to-corpse handoff: 2026-10-20
+
+Compared the remote actor with retail `CPhysicsObj::UpdatePositionInternal`,
+`MoveOrTeleport`, `CMotionInterp::get_adjusted_max_speed`,
+`InterpolationManager::adjust_offset`, `PositionManager::adjust_offset`, and
+`TargetManager::SendVoyeurUpdate` in `C:/dev/retail_client_source`. ACE's
+`Creature_Death::CreateCorpse` uses the final physics position after the death
+sequence, not the last cached world-object position.
+
+- Remote death previously played only part poses. It now consumes the DAT
+  death transition's position/rotation frames through the actor's collision
+  path, with object scale and action speed. The clock is independent of mesh
+  culling; repeated Dead updates do not replay it. Airborne death retains the
+  physical flight and advances the animation without grounded translation.
+  The human sequence moves approximately 1.185 metres; the Gromnie and Wasp
+  fixtures also contain movement that was previously omitted.
+- Grounded corrections now replace that step's locomotion displacement toward
+  a fixed authoritative endpoint at retail's bounded correction speed. They
+  no longer advance an extrapolated endpoint while exponentially filtering
+  another visible body. The five-centimetre completion tolerance and collision
+  validation remain. Sticky melee spacing follows interpolation, as it does in
+  retail. VR's buffered pose presentation remains separate.
+- Pursuit and sticky spacing resolve another rendered player's/creature's
+  current physics frame. Unrendered targets fall back to their network position;
+  the local player continues to use its live predicted position.
+
+`RemoteMovementReplay` checks independent correction distances at 30/90/144/240
+FPS, fixed death endpoints, authored root displacement and final corpse mesh
+positions for human/Carenzi/Gromnie/Wasp models, duplicate death, wall contact,
+and death during a jump. `MovementReview` checks live remote target lookup
+between packets. The original replay's assertion that late corrections could
+never move backwards was contrary to retail's fixed-destination correction:
+it now checks the retail speed bound. Landing uses retail's five-centimetre
+completion tolerance instead of requiring a one-centimetre residual.
+
+These are source and automated replay checks, not certification of every
+movement path. A simultaneous retail/Unreal live-client comparison under
+network latency remains an acceptance check.
+
+Validation: Windows editor build passed with adaptive unity disabled.
+All eight selected suites passed: AvatarMotion, CustomObjectReplication,
+MovementReview, NetworkTransport, RemoteMovementReplay, RemoteSupport,
+RuntimeActors, and VR.RenderingAndReplication. The new replay assertions
+failed before the fixes. Reports are in `Unreal/Saved/RemoteParity-before`
+and `Unreal/Saved/RemoteParity-final`; build log is
+`Unreal/Saved/RemoteParity-build-final.log`. Quest shared-source sync and
+CheckOnly passed; no Linux/Android binary or release was produced here.
+
 ## Cast movement control handoff: 2026-10-13
 
 Reviewed retail `CommandInterpreter::HandleKeyboardCommand`,
@@ -3203,3 +3468,70 @@ Validation: Win64 Development editor build succeeded. WorldLootPlacement,
 WorldEntry, InteractionRecovery, PvPCombat and EmoteTransitions passed with no
 test errors. This was isolated packet/geometry testing, not a live-server run;
 Linux and Quest binaries were not built in this pass.
+
+## Portal-space interface visibility (2026-10-21)
+
+Retail `gmSmartBoxUI::UseTime` switches the SmartBox world view to its portal
+viewport; it does not hide the gameplay interface. `CPlayerSystem::SetTeleportInProgress`
+increments the UI busy count, and `ClientUISystem::UpdateCursorState` selects
+cursor enum 14 (DAT mapper `2500000F`, image `06004D74`, hotspot 0,0).
+`ClientCombatSystem::SetCombatMode` rejects player-requested mode changes while
+teleporting but accepts server changes. `ItemHolder::UseObject` uses inventory
+request readiness, not a blanket interface lock.
+
+The client now retains the existing canvas/binder, open windows, chat history
+and drafts during transitions. Initial login displays the gameplay interface
+after bounded texture prefetch, before the tunnel finishes. Chat, window
+shortcuts and manual interface visibility remain available. Movement, world
+approaches and combat requests are blocked during the transition; held/repeating
+attacks and pending world-target gestures are cancelled. Server updates continue
+to refresh the interface. The retail busy cursor and portal notice are restored.
+This does not grant inventory actions that the server rejects.
+
+Validation: Win64 Development editor build and all seven tests passed:
+PortalInterface, LoadingTransition, PortalDrops, ChatInputAndCommands,
+KeyboardBindings, UIInteractions and PvPCombat. Reports are in
+`Saved/PortalInterfaceVerified`. Shared Quest source is synchronized. This was
+DAT/loopback automation; live-server portal travel and Linux/Quest binaries were
+not tested in this pass.
+
+## Creature locomotion and corpse placement (2026-10-21)
+
+The same remote motion path now covers rabbit, chicken, rooster and chick DAT
+setups, alongside humanoids, carenzi, gromnies and phyntos wasps. Cycle speed
+and displacement come from animation position frames plus MotionData physics;
+missing explicit Velocity fields no longer substitute human walking speed.
+Sidestep remains the additive motion-table modifier. Physics advances the
+animation clock even when presentation evaluation is throttled.
+
+Retail `CSequence::update_internal` consumes positive frames below High, then
+`advance_to_next_animation` enters the next positive clip at Low. A zero-rate
+Dead cycle adds no root movement. Reverse traversal subtracts Low on exit.
+The root tracks now follow those boundaries, retain unfinished entry/exit links
+on StopCompletely, and start the death motion after those links. This also
+corrects the shared jump-to-run landing endpoint to 0.741333m (four 0.152m
+landing steps plus the run cycle's 0.133333m entry).
+
+ACE `Creature.CreateCorpse` uses the victim's physics position, setup, motion
+table and scale. Corpses now retain that authoritative frame and use authored
+body support rather than dropped-item mesh-bottom alignment. Before this fix,
+the latter lifted tested corpses approximately 6–43cm. Incline support uses the
+DAT spheres against the floor plane, avoiding repeated penetration corrections
+that pushed small creatures sideways. Ascending jumps and gravity-disabled
+actors are not forced onto the floor by the ballistic landing path.
+
+Validation: Win64 Development editor build and all ten suites passed:
+RemoteMovementReplay, WalkingStep, MovementReview, RunSpeed, RemoteSupport,
+NetworkTransport, GroundItemPlacement, WorldLootPlacement, AppearancePlacement
+and AvatarMotion. Evidence: `Saved/CritterCorpseReview/final/index.json` and
+`final.log`; the independent ACE.Server Sequence probe and output are retained
+under `Saved/CritterCorpseReview/ServerProbe` and `server-probe-zero.log`.
+
+The replay includes 168 creature trajectories, 64 independent ACE physics death
+endpoints at 30/60/144/240 FPS, and 96 corpse handoffs on flat/sloped ground and
+in air, including delayed appearance construction. Maximum endpoint error was
+0.00007cm; maximum corpse mesh difference was 0.563cm, including one physics
+frame of falling while appearance was deferred. Shared Quest source is synced.
+This verifies deterministic DAT/physics and packet fixtures; no live retail
+side-by-side capture or Linux/Quest binary test was performed. It is not a
+claim that all movement, collision or networking paths have complete parity.

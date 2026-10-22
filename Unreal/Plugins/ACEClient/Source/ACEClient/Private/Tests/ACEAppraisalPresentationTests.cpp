@@ -33,7 +33,7 @@ bool FACEAppraisalPresentationTest::RunTest(const FString&)
     Gear.IntProperties={{370,5},{371,6},{372,7},{373,8},{374,9},{375,10},{376,11},{377,12},{378,13},{379,25}};
     const FString GearText=ACEAppraisalFormatting::ItemExaminationText(Gear,nullptr);
     TestTrue(TEXT("Equipment ratings come from server Gear qualities in retail order"),GearText.Contains(
-        TEXT("Ratings: Dam 5, Dam Resist 6, Crit 7, Crit Dam 9, Crit Resist 8, Crit Dam Resist 10, Heal Boost 11, Nether Resist 12, Life Resist 13")));
+        TEXT("Ratings: Dam 5, Dam Resist 6, Crit 7, Crit Dam 9, Crit Resist 8, Crit Dam Resist 10, Heal Boost 11, Nether Resist 12, Life Resist 13.")));
     TestTrue(TEXT("Equipment vitality has its separate retail description"),GearText.Contains(TEXT("This item adds 25 Vitality.")));
     Item.bSuccess=Item.bHasValue=Item.bHasBurden=true;Item.Value=9000;Item.Burden=50;
     Item.StringProperties.Add(14,TEXT("Use on a magic item to give the stone's stored Mana to that item."));
@@ -173,7 +173,30 @@ bool FACEAppraisalPresentationTest::RunTest(const FString&)
     const auto RatedArmor=ACEAppraisalFormatting::ItemDetails(Gear);
     TestTrue(TEXT("Gear ratings follow the set and precede armor stats"),RatedArmor.Contains(TEXT("Set: Adept's\nRatings:"))
         && RatedArmor.Find(TEXT("Ratings:"))<RatedArmor.Find(TEXT("Armor Level:")));
-    TestTrue(TEXT("Vitality immediately follows the gear rating row"),RatedArmor.Contains(TEXT("Life Resist 13\nThis item adds 25 Vitality.")));
+    TestTrue(TEXT("Vitality immediately follows the gear rating row"),RatedArmor.Contains(TEXT("Life Resist 13.\nThis item adds 25 Vitality.")));
+    FACEAppraisalInfo Sceptre;Sceptre.bSuccess=true;Sceptre.ItemType=ACEItemType::Caster;
+    Sceptre.IntProperties={{105,6},{370,3},{45,1}};Sceptre.FloatProperties={{152,12.95}};
+    for(bool Chrome:{false,true})
+    {
+        const FString Text=ACEAppraisalFormatting::ItemExaminationText(Sceptre,nullptr,Chrome,Chrome);
+        TestTrue(TEXT("Ratings retain their value and start one blank line below workmanship"),Text.Contains(TEXT("Workmanship: Nearly flawless (6)\n\nRatings: Dam 3.\n\n")));
+        TestTrue(TEXT("Caster retains the server multiplier for PvM and retail half bonus for PvP"),Text.Contains(TEXT("vs. Monsters: +1195.0%.\n vs. Players: +597.5%.")));
+        for(uint32 Flags:{0u,0x20000000u,0x2000u,0x20002000u})
+        {
+            Sceptre.ResistanceEnchantments=Flags;
+            const auto Colors=ACEAppraisalFormatting::ItemTextColors(Sceptre,Text);
+            const FLinearColor Expected=!(Flags&0x2000)?FLinearColor::White
+                :(Flags&0x20000000)?FLinearColor::Green:FLinearColor(1.f,.2f,.15f);
+            for(const TCHAR* Prefix:{TEXT("Damage bonus for "),TEXT(" vs. Monsters:"),TEXT(" vs. Players:")})
+            {
+                const int32 Start=Text.Find(Prefix);
+                if(TestTrue(TEXT("Caster damage row exists"),Start!=INDEX_NONE))
+                    for(int32 I=Start;I<Text.Len() && Text[I]!='\n';++I)
+                        TestEqual(TEXT("Every glyph of caster bonus follows the server enchantment bits"),Colors[I],Expected);
+            }
+            TestEqual(TEXT("Caster bonus coloring leaves ratings white"),Colors[Text.Find(TEXT("Ratings:"))],FLinearColor::White);
+        }
+    }
     FACEAppraisalInfo Portal; Portal.bSuccess=true;
     Portal.IntProperties={{86,20},{87,40}}; Portal.StringProperties={{14,TEXT("Use this portal.")},{38,TEXT("A custom destination")},{16,TEXT("An ancient passage.")}};
     TestTrue(TEXT("Portal limits and destination precede its description"),ACEAppraisalFormatting::ItemExaminationText(Portal,nullptr,false,false).Contains(

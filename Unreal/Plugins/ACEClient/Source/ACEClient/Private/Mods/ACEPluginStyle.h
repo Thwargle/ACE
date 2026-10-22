@@ -4,6 +4,7 @@
 #include "Styling/SlateTypes.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SComboButton.h"
 #include "Dat/ACEDatFileTypes.h"
 #include "Dat/ACEDatTextLayout.h"
 
@@ -26,6 +27,12 @@ public:
     explicit FACEPluginStyle(UACEUIResourceResolver* InResolver);
     static TSharedRef<FACEPluginStyle> Use(UACEPluginSubsystem* Host,const FString& WindowId=FString());
     static TSharedRef<FACEPluginStyle> Current();
+    /** Inventory's DAT tooltip, with live text and resources created only on hover. */
+    static TSharedRef<IToolTip> Tooltip(TAttribute<FText> Text);
+    // Native panels share authored 16/20/24px body and heading sizes.
+    // Lua's explicit font sizes continue to use their requested values.
+    static FSlateFontInfo NativeFont(FName Typeface,int32 Size=15);
+    static constexpr float ButtonPadding=6.f, CompactButtonPadding=4.f, IconButtonPadding=2.f, ChromeButtonPadding=1.f;
     virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
     virtual FString GetReferencerName() const override {return TEXT("ACEPluginStyle");}
     const FSlateBrush* Image(uint32 Id);
@@ -35,11 +42,13 @@ public:
     bool HasDatArtwork() const {return DatArtworkLoaded;}
     bool SetWindowAppearance(float Opacity,bool Frameless);
     TSharedPtr<FACEPluginFont> Typeface(int32 Size);
-    FButtonStyle Button,DockButton,Tab;
+    FButtonStyle Button,DockButton,Tab,MenuItem;
     FSliderStyle Slider;
     FCheckBoxStyle Check;
     FEditableTextBoxStyle Edit;
     FComboButtonStyle Combo;
+    FComboBoxStyle ComboBox;
+    FTableRowStyle ComboRow;
     FSpinBoxStyle Spin;
     FSlateBrush Frame, Background, TitleBackground, SectionFrame, SectionHeader;
     FACEDatFont Font;
@@ -51,17 +60,37 @@ private:
     TMap<uint32,TSharedPtr<FSlateBrush>> Images;
     TMap<FString,TSharedPtr<FSlateBrush>> ItemImages;
     TMap<int32,TSharedPtr<FACEPluginFont>> Fonts;
+    TArray<TObjectPtr<UTexture2D>> ButtonTextures;
     FSlateBrush OriginalFrame,OriginalBackground,OriginalTitle,OriginalSectionFrame,OriginalSectionHeader;
     float BackgroundOpacity=-1;
     bool HideFrame=false;
     bool DatArtworkLoaded=false;
 };
 
-/** Persistent navigation selection, distinct from action buttons and hover. */
-class SACEPluginTab : public SButton
+/** Centered content and equal insets on every edge, including pressed states. */
+class SACEPluginButton : public SButton
 {
 public:
-    SLATE_BEGIN_ARGS(SACEPluginTab):_Selected(false),_FontSize(14),_ContentPadding(FMargin(12,8)){}
+    using FArguments=SButton::FArguments;
+    void Construct(const FArguments& Args);
+    virtual FVector2D ComputeDesiredSize(float LayoutScaleMultiplier) const override;
+private:
+    const FButtonStyle* ContentStyle=nullptr;
+};
+
+/** Menu selectors share action-button spacing without inheriting red artwork. */
+class SACEPluginComboButton : public SComboButton
+{
+public:
+    using FArguments=SComboButton::FArguments;
+    void Construct(const FArguments& Args);
+};
+
+/** Persistent navigation selection, distinct from action buttons and hover. */
+class SACEPluginTab : public SACEPluginButton
+{
+public:
+    SLATE_BEGIN_ARGS(SACEPluginTab):_Selected(false),_FontSize(15),_ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)){}
         SLATE_ATTRIBUTE(bool,Selected)
         SLATE_ATTRIBUTE(FText,Text)
         SLATE_ATTRIBUTE(int32,FontSize)
@@ -83,6 +112,7 @@ class SACEPluginText : public STextBlock
 public:
     using FArguments=STextBlock::FArguments;
     void Construct(const FArguments& Args);
+    void SetJustification(TAttribute<ETextJustify::Type> InJustification);
     virtual FVector2D ComputeDesiredSize(float) const override;
     virtual int32 OnPaint(const FPaintArgs&,const FGeometry&,const FSlateRect&,FSlateWindowElementList&,int32,const FWidgetStyle&,bool) const override;
 private:

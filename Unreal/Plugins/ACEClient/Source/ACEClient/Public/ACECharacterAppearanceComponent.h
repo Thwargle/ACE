@@ -39,10 +39,10 @@ class ACECLIENT_API UACECharacterAppearanceComponent : public UActorComponent
 	friend class FACERetailPortalSpaceTest;
 
 public:
-	// The controller consumes root displacement before collision. Remote actors
-	// advance the same sequence for presentation only, using network positions.
+	// Controllers and remote actors consume authored displacement before collision.
 	void SetWalkingTransitionsEnabled(bool bEnabled);
 	FTransform AdvanceWalkingMotion(float Dt, float& CycleSeconds);
+	void SetRemoteWalkingFrame(const ACEWalkingMotion::FLink& Link, float CycleSeconds, bool bHadTransition, float CycleTime = -1.f);
 	bool HasWalkingTransition() const { return WalkingMotion.HasPending(); }
 	void ResetWalkingMotion() { WalkingMotion.Reset(); }
 	/** World bodies receive scene lights; UI and portal-space previews keep their own lighting. */
@@ -118,6 +118,8 @@ public:
 	/** Part mesh component used as an attach parent for held items (hand / shield / etc.). */
 	UFUNCTION(BlueprintPure, Category = "ACE|Appearance")
 	USceneComponent* GetPartMesh(int32 PartIndex) const;
+	/** Apply the shared object glow to existing parts without rebuilding geometry. */
+	void SetSelectionHighlight(float Strength);
 
 	/** Replace one Setup part's GfxObj geometry (AnimationHook ReplaceObject). */
 	bool ReplacePartGfxObj(int32 PartIndex, uint32 GfxObjId);
@@ -292,6 +294,7 @@ protected:
 	ACEWalkingMotion::FSequence WalkingMotion;
 	bool bWalkingTransitionsEnabled = true;
 	bool bWalkingExternallyAdvanced = false;
+	bool bRemoteWalkingFramePending = false;
 	float LocomotionStrafe = 0.f;
 	bool bLocomotionRunning = false;
 	/** Motion playback rate (1 = authored cycle speed; run often > 1). */

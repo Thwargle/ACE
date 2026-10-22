@@ -169,17 +169,20 @@ bool FACEItemPresentationTest::RunTest(const FString&)
     const auto BasePixels = Pixels(Plain), HalfPixels = Pixels(Half), EmptyPixels = Pixels(Empty), OverfullPixels = Pixels(Overfull);
     if (!TestTrue(TEXT("Composed icons have inspectable RGBA pixels"), BasePixels.Num() == 1024 && HalfPixels.Num() == 1024 && EmptyPixels.Num() == 1024 && OverfullPixels.Num() == 1024)) return false;
     bool bHalfCorrect = true, bEmptyCorrect = true, bClampedCorrect = true, bOutsideUnchanged = true;
+    // Final icon upload extends edge RGB into invisible texels for filtering;
+    // their alpha and all visible artwork must still match the retail composition.
+    auto SameArtwork = [](FColor A, FColor B) { return A.A == B.A && (!A.A || A == B); };
     for (int32 Y = 0; Y < 32; ++Y) for (int32 X = 0; X < 32; ++X)
     {
         const int32 P = Y * 32 + X;
         if (X >= 26 && X < 31 && Y >= 1 && Y < 31)
         {
             const int32 M = (Y - 1) * 5 + X - 26;
-            bHalfCorrect &= HalfPixels[P] == (Y >= 16 ? Fill.Pixels[M] : Frame.Pixels[M]);
-            bEmptyCorrect &= EmptyPixels[P] == Frame.Pixels[M];
-            bClampedCorrect &= OverfullPixels[P] == Fill.Pixels[M];
+            bHalfCorrect &= SameArtwork(HalfPixels[P], Y >= 16 ? Fill.Pixels[M] : Frame.Pixels[M]);
+            bEmptyCorrect &= SameArtwork(EmptyPixels[P], Frame.Pixels[M]);
+            bClampedCorrect &= SameArtwork(OverfullPixels[P], Fill.Pixels[M]);
         }
-        else bOutsideUnchanged &= HalfPixels[P] == BasePixels[P];
+        else bOutsideUnchanged &= SameArtwork(HalfPixels[P], BasePixels[P]);
     }
     TestTrue(TEXT("Half-full salvage clips the original DAT fill from the bottom"), bHalfCorrect);
     TestTrue(TEXT("Empty salvage shows the original DAT empty meter"), bEmptyCorrect);

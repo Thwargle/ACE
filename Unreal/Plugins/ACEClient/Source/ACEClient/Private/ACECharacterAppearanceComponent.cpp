@@ -228,6 +228,16 @@ USceneComponent* UACECharacterAppearanceComponent::GetPartMesh(int32 PartIndex) 
 	return nullptr;
 }
 
+void UACECharacterAppearanceComponent::SetSelectionHighlight(float Strength)
+{
+	for (const auto& Part : PartMeshes)
+		if (Part)
+		{
+			const auto& Data=Part->GetCustomPrimitiveData().Data;
+			if ((Data.IsValidIndex(1) ? Data[1] : 0.f) != Strength) Part->SetCustomPrimitiveDataFloat(1,Strength);
+		}
+}
+
 bool UACECharacterAppearanceComponent::ReplacePartGfxObj(int32 PartIndex, uint32 GfxObjId)
 {
 	if (!PartMeshes.IsValidIndex(PartIndex) || !PartMeshes[PartIndex] || GfxObjId == 0)
@@ -617,6 +627,7 @@ void UACECharacterAppearanceComponent::HideOwnerPrimitiveMeshes()
 void UACECharacterAppearanceComponent::ClearAppearance()
 {
 	WalkingMotion.Reset();
+	bRemoteWalkingFramePending = false;
 	WorldLightingInstances.Reset(); bWorldLightingInterior=false;
 	AppearanceSourceMaterials.Reset();
 	if (AActor* Owner = GetOwner())
@@ -1141,6 +1152,31 @@ FTransform UACECharacterAppearanceComponent::AdvanceWalkingMotion(float Dt, floa
 {
 	bWalkingExternallyAdvanced = true;
 	return WalkingMotion.Advance(Dt, CycleSeconds);
+}
+
+void UACECharacterAppearanceComponent::SetRemoteWalkingFrame(const ACEWalkingMotion::FLink& Link, float CycleSeconds, bool bHadTransition, float CycleTime)
+{
+	WalkingMotion.Display = Link;
+	bRemoteWalkingFramePending = true;
+	if (AnimMode == EACEAnimMode::ActionOneShot && ActionCommand == ACEMotion::Dead && !bHoldActionFinal)
+    {
+        // The unfinished walk exit runs before Dead in CSequence. Advance the
+        // fall only by the remaining time, on the same clock as its physics root.
+        AnimTime += CycleSeconds*ActionPlayRate;
+        if (bHadTransition) { StanceBlendFrom.Reset(); StanceBlendAlpha = 1.f; }
+        return;
+    }
+	if (AnimMode != EACEAnimMode::Locomotion) return;
+	// The physics clock continues even when distance throttles mesh evaluation.
+	// Only the unconsumed tail of the step belongs to the following cycle.
+	if (bHadTransition)
+	{
+		AnimTime = 0.f;
+		StanceBlendFrom.Reset();
+		StanceBlendAlpha = 1.f;
+		bWasLocomotionMoving = !FMath::IsNearlyZero(LocomotionForward) || !FMath::IsNearlyZero(LocomotionStrafe);
+	}
+	AnimTime = CycleTime >= 0.f ? CycleTime : AnimTime + CycleSeconds * LocomotionPlayRate;
 }
 
 void UACECharacterAppearanceComponent::SetLocomotionInput(float Forward, float Strafe, bool bRunning, float PlayRate, bool bInterpretedRate)
@@ -1717,6 +1753,7 @@ void UACECharacterAppearanceComponent::ResetMotionForTeleport()
 	ClearActionMotion();
 	WalkingMotion.Reset();
 	bWalkingExternallyAdvanced = false;
+	bRemoteWalkingFramePending = false;
 	LocomotionForward = LocomotionStrafe = 0.f;
 	LocomotionPlayRate = 1.f;
 	bLocomotionRunning = bLocomotionInterpretedRate = false;
@@ -2050,6 +2087,12 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 	// run at one quarter speed or replay an old idle when the creature approaches.
 	DeltaTime = DeferredPoseDeltaTime;
 	DeferredPoseDeltaTime = 0.f;
+	const bool RemoteWalkingFrame = bRemoteWalkingFramePending;
+	ON_SCOPE_EXIT
+	{
+		if (RemoteWalkingFrame) WalkingMotion.Display = {};
+		bRemoteWalkingFramePending = false;
+	};
 	const bool bNeedsMotionTable = AnimMode != EACEAnimMode::DefaultAnimLoop;
 	if (bNeedsMotionTable && MotionTableId == 0)
 	{
@@ -2064,7 +2107,8 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 	if (bReusePose) Swap(Animated, TickPoseScratch);
 	ON_SCOPE_EXIT { if (bReusePose) Swap(Animated, TickPoseScratch); };
 
-	if (!(AnimMode == EACEAnimMode::ActionOneShot && bHoldActionFinal))
+	if (!(AnimMode == EACEAnimMode::ActionOneShot && bHoldActionFinal)
+		&& !(RemoteWalkingFrame && (AnimMode == EACEAnimMode::Locomotion || ActionCommand == ACEMotion::Dead)))
 	{
 		const float Rate = AnimMode == EACEAnimMode::DoorTransition ? 1.f
 			: (AnimMode == EACEAnimMode::ActionOneShot) ? ActionPlayRate : LocomotionPlayRate;
@@ -2099,6 +2143,18 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 		}
 		return;
 	}
+
+    if (RemoteWalkingFrame && !WalkingMotion.Display.Clips.IsEmpty()
+        && AnimMode == EACEAnimMode::ActionOneShot && ActionCommand == ACEMotion::Dead)
+    {
+        int32 Count = 0; TArray<FACEDatAnimationHook> Hooks;
+        if (Dat->EvaluateWalkingLink(WalkingMotion.Display, PartMeshes.Num(), Animated, WorldScale, Count, Hooks))
+        {
+            ApplyAnimatedPartsWithBlend(Animated, Count, DeltaTime);
+            DispatchCrossedHooks(Hooks);
+            return;
+        }
+    }
 
 	if (AnimMode == EACEAnimMode::ActionOneShot)
 	{
@@ -2374,7 +2430,7 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 	}
 
 	float WalkCycleSeconds = DeltaTime;
-	if (!bWalkingExternallyAdvanced) WalkingMotion.Advance(DeltaTime, WalkCycleSeconds);
+	if (!bWalkingExternallyAdvanced && !RemoteWalkingFrame) WalkingMotion.Advance(DeltaTime, WalkCycleSeconds);
 	if (!WalkingMotion.Display.Clips.IsEmpty())
 	{
 		int32 Count = 0;

@@ -219,7 +219,9 @@ bool FACEVTSettingsTest::RunTest(const FString&)
         auto S=Snapshot();S->SetNumberField(TEXT("health"),100);
         S->SetArrayField(TEXT("targets"),SettingsJSON(TEXT(R"({"v":[{"id":100,"name":"Target","distance":1,"identified":true}]})"))->GetArrayField(TEXT("v")));
         auto Sword=SettingsJSON(TEXT(R"({"id":10,"name":"Sword","type":1,"equipped":true,"identified":true,"can_wield":true,"weapon_type":2,"damage":30,"damage_type":3,"attack_type":0})"));
-        auto Offhand=SettingsJSON(TEXT(R"({"id":11,"name":"Offhand","type":1,"equipped":true,"equipped_slot":2097152})"));
+        // This tests swing power with two eligible piercing weapons. Missing
+        // damage metadata now correctly requests an equipment change first.
+        auto Offhand=SettingsJSON(TEXT(R"({"id":11,"name":"Offhand","type":1,"equipped":true,"equipped_slot":2097152,"identified":true,"can_wield":true,"damage_type":2})"));
         S->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(Sword)});
         auto Power=[&](){FACEPluginVM V;V.Load(Script,Error);auto I=Step(V,S,Profile);return I->GetNumberField(TEXT("power"));};
         TestEqual(TEXT("Slash/pierce single strike uses 20 percent for pierce"),Power(),.2);

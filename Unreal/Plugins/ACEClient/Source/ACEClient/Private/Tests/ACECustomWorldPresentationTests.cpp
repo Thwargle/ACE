@@ -10,11 +10,20 @@
 #include "ACEWorldEntityActor.h"
 #include "ACEVisibleObjectPick.h"
 #include "ACEScriptComponent.h"
+#include "Dat/ACEOutdoorPortalPlan.h"
 #include "Components/BoxComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "Components/SceneCaptureComponent2D.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "ImageUtils.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Misc/App.h"
+#include "Misc/CommandLine.h"
+#include "ShaderCompiler.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECustomWorldPresentationTest,"ACE.RetailParity.CustomWorldPresentation",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -29,6 +38,9 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
     ON_SCOPE_EXIT { GI->Shutdown(); GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
     auto* Dat = GI->GetSubsystem<UACEDatSubsystem>();
     if (!TestTrue(TEXT("Retail DAT opens"),Dat && Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+    for(uint32 Block:{0x01100000u,0x7F020000u})
+        if(const auto Info=Dat->GetLandblockInfo(Block))
+            for(uint32 I=0;I<Info->NumCells;++I)Dat->GetOrBuildEnvCellMesh(Block|(0x100+I),100);
     FACEWorldObject Object;
     Object.Guid=0x71001001; Object.WeenieClassId=900001; Object.ItemType=ACEItemType::Misc;
     Object.bHasPosition=true; Object.Position.CellId=0x016C0101; Object.Position.Location=FVector(50,50,1.5);
@@ -51,6 +63,159 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
     Entity->Destroy();
     Object.PhysicsState=0;
     FTransform Actual;
+
+    // ACE-World-16PY-Patches: the usable gateway and quest hand-in deposit
+    // are both object-shaped creatures using the same retail motion table.
+    for(bool Deposit:{false,true})
+    {
+        FACEWorldObject Gateway=Object;
+        Gateway.WeenieClassId=Deposit?40809:40810; Gateway.Name=Deposit?TEXT("Apostate Aetherium Deposit"):TEXT("Apostate Nexus Gateway");
+        Gateway.ItemType=ACEItemType::Creature; Gateway.ItemUseable=32;Gateway.UseRadius=3;
+        Gateway.bHasServerPhysicsDescription=true;
+        Gateway.SetupId=Deposit?0x02000B82:0x02000443; Gateway.MotionTableId=0x0900013D;
+        Gateway.InitialMotionStyle=ACEMotion::StanceNonCombat;
+        Gateway.InitialMotionCommand=ACEMotion::Ready;
+        Gateway.PhysicsState=6292504; Gateway.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
+        Gateway.Position.CellId=Deposit?0x7F020107:0x0110028A;
+        Gateway.Position.Location=Deposit?FVector(40,-20,.055):FVector(40,-140,12.055);
+        if(Deposit)
+        {
+            FACECharacterCreation Creation;FString Error;
+            TestTrue(TEXT("Deposit clothing table loads"),Creation.Load(*Dat->GetPortalDat(),Error));
+            TestTrue(TEXT("Deposit clothing resolves"),Creation.ApplyClothing(0x10000338,Gateway.SetupId,0,0,Gateway.Appearance));
+        }
+        auto* Owner=World->SpawnActor<AActor>();
+        auto* Presenter=NewObject<UACEWorldPresenterComponent>(Owner);
+        Owner->AddInstanceComponent(Presenter);Presenter->RegisterComponent();Owner->DispatchBeginPlay();
+        auto Session=GI->GetSubsystem<UACEClientSubsystem>()->GetSession();
+        Session->WorldObjects.Add(Gateway.Guid,Gateway);
+        Presenter->SpawnOrUpdateEntity(Gateway,false);
+        Presenter->DrainPendingDatAppearance();
+        auto* Actor=Presenter->FindEntityActor(Gateway.Guid);
+        if(!TestNotNull(TEXT("Deferred Apostate object spawns"),Actor))return false;
+        TestTrue(TEXT("Apostate gateway has DAT geometry"),Actor->Appearance->HasAppearance());
+        for(int32 Frame=0;Frame<120;++Frame)
+        {
+            Actor->Tick(1.f/60);
+            Actor->Appearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+            if(Actor->ScriptComponent->IsComponentTickEnabled())Actor->ScriptComponent->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+        }
+        for(int32 Part=0;auto* Mesh=Actor->Appearance->GetPartMesh(Part);++Part)
+        {
+            TestTrue(TEXT("Apostate part stays visible"),Mesh->IsVisible()&&!Mesh->bHiddenInGame);
+            if(auto* Primitive=Cast<UPrimitiveComponent>(Mesh))
+                if(auto* Material=Cast<UMaterialInstanceDynamic>(Primitive->GetMaterial(0)))
+                    TestTrue(TEXT("Apostate material is not transparent"),Material->K2_GetScalarParameterValue(TEXT("OpacityMul"))>.01f);
+        }
+        FBox Bounds;
+        TestTrue(TEXT("Apostate gateway has visible geometry after idle animation"),Actor->Appearance->GetVisualWorldBounds(Bounds));
+        TestFalse(TEXT("Apostate gateway actor is not hidden"),Actor->IsHidden());
+        if(Bounds.IsValid)
+        {
+            const FVector Center=Bounds.GetCenter();
+            TArray<AACEEnvCellActor*> Rooms;
+            const uint32 Block=uint32(Gateway.Position.CellId)&0xFFFF0000u;
+            if(const auto Info=Dat->GetLandblockInfo(Block))
+                for(uint32 I=0;I<Info->NumCells;++I)
+                {
+                    const uint32 Id=Block|(0x100+I);const auto* Cell=Dat->FindEnvCellMesh(Id,100);
+                    if(!Cell || FVector::DistSquared(FVector(Cell->Origin),Gateway.Position.Location)>FMath::Square(35.))continue;
+                    auto* Room=World->SpawnActor<AACEEnvCellActor>();
+                    Room->LoadEnvCell(Id,FACEPosition::AceVectorToUnreal(FVector((Block>>24)*192,((Block>>16)&255)*192,0),100),100);
+                    Room->SetEnvCellCollisionActive(true);Room->SetEnvCellHiddenInGame(false);Rooms.Add(Room);
+                }
+            auto* CaptureOwner=World->SpawnActor<AActor>();
+            auto* Capture=NewObject<USceneCaptureComponent2D>(CaptureOwner);
+            auto* RenderTarget=NewObject<UTextureRenderTarget2D>(Capture);RenderTarget->InitAutoFormat(512,512);
+            Capture->TextureTarget=RenderTarget;Capture->CaptureSource=SCS_FinalColorLDR;
+            Capture->bCaptureEveryFrame=false;Capture->bCaptureOnMovement=false;
+            Capture->PrimitiveRenderMode=ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
+            Capture->ShowFlags.SetEyeAdaptation(false);Capture->ShowFlags.SetAtmosphere(false);
+            Capture->ShowFlags.SetFog(false);Capture->ShowFlags.SetAntiAliasing(false);Capture->ShowFlags.SetLighting(false);
+            Capture->RegisterComponent();Capture->ShowOnlyActorComponents(Actor);
+            for(auto* Room:Rooms)Capture->ShowOnlyComponent(Room->CellMesh);
+            auto Snap=[&](const FVector& Eye,const TCHAR* Label)
+            {
+                if(!FApp::CanEverRender())return;
+                Capture->SetWorldLocationAndRotation(Eye,(Center-Eye).Rotation());
+                if(GShaderCompilingManager)GShaderCompilingManager->FinishAllCompilation();
+                World->SendAllEndOfFrameUpdates();Capture->CaptureScene();FlushRenderingCommands();
+                TArray<FColor> Pixels;RenderTarget->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
+                Actor->SetActorHiddenInGame(true);World->SendAllEndOfFrameUpdates();Capture->CaptureScene();FlushRenderingCommands();
+                TArray<FColor> Without;RenderTarget->GameThread_GetRenderTargetResource()->ReadPixels(Without);
+                Actor->SetActorHiddenInGame(false);
+                int32 VisiblePixels=0;for(int32 I=0;I<Pixels.Num() && I<Without.Num();++I)
+                    VisiblePixels+=FMath::Abs(int32(Pixels[I].R)-Without[I].R)>3 || FMath::Abs(int32(Pixels[I].G)-Without[I].G)>3 || FMath::Abs(int32(Pixels[I].B)-Without[I].B)>3;
+                TestTrue(*FString::Printf(TEXT("%s has rendered pixels in %s view"),*Gateway.Name,Label),VisiblePixels>20);
+                if(FParse::Param(FCommandLine::Get(),TEXT("ACESaveApostateCaptures")))
+                {
+                    TArray64<uint8> Png;FImageUtils::PNGCompressImageArray(512,512,Pixels,Png);
+                    FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()+FString::Printf(TEXT("Apostate-%s-%s.png"),Deposit?TEXT("deposit"):TEXT("gateway"),Label)));
+                }
+            };
+            const FVector CloseEye=Center+FVector(200,0,150);
+            Snap(CloseEye,TEXT("close"));
+            TestEqual(TEXT("Apostate gateway can be picked for interaction and item drops"),ACEVisibleObjectPick::Trace(*World,
+                CloseEye,Center+(Center-CloseEye).GetSafeNormal()*100,nullptr),static_cast<AActor*>(Actor));
+            // Standard landblock placements: acid-pit gateway and final deposit.
+            // Exercise PView from nearby valid cells, looking toward the model.
+            FACEPosition At;At.CellId=Deposit?0x7F020107:0x0110028A;
+            At.Location=Deposit?FVector(40,-20,.055):FVector(40,-140,12.055);
+            TestNotNull(TEXT("Apostate object's authored dungeon cell loads"),Dat->GetOrBuildEnvCellMesh(At.CellId,100));
+            const FVector Origin=At.ToUnrealLocation();
+            const FVector Focus=Origin+Center-Actor->GetActorLocation();
+            int32 Views=0;
+            for(int32 Yaw=0;Yaw<360;Yaw+=45)for(double Radius:{100.,250.})
+            {
+                const FVector Eye=Origin+FRotator(0,Yaw,0).RotateVector(FVector(Radius,0,150));
+                uint32 ViewCell=0;if(!Dat->ResolveContainingEnvCell(At.CellId,Eye,100,ViewCell))continue;
+                const FQuat Rotation=(Focus-Eye).Rotation().Quaternion();FConvexVolume Frustum;
+                for(const FVector& N:{FVector(-1,1,0),FVector(-1,-1,0),FVector(-1,0,1),FVector(-1,0,-1),FVector(-1,0,0)})
+                    Frustum.Planes.Add(FPlane(Eye,Rotation.RotateVector(N.GetSafeNormal())));
+                Frustum.Init();TSet<int32> Visible;bool Outside=false;
+                ACEOutdoorPortalPlan::CollectIndoorPViewCells(*Dat,ViewCell,Eye,Frustum,100,Visible,Outside,128);
+                TestTrue(TEXT("Nearby dungeon views admit the Apostate object's cell"),Visible.Contains(At.CellId));++Views;
+            }
+            TestTrue(TEXT("Apostate visibility checked from multiple valid dungeon viewpoints"),Views>=4);
+            if(!Deposit)
+            {
+                FACEPosition Reported;Reported.CellId=0x011002E7;
+                Reported.Location=FVector(45.227190,-136.856896,24.006001);
+                TestNotNull(TEXT("Reported gateway ledge cell loads"),Dat->GetOrBuildEnvCellMesh(Reported.CellId,100));
+                for(double Height:{150.,300.})
+                {
+                    const FVector Eye=Reported.ToUnrealLocation()+FVector(0,0,Height);
+                    uint32 ViewCell=Reported.CellId;Dat->ResolveContainingEnvCell(Reported.CellId,Eye,100,ViewCell);
+                    const FQuat Rotation=(Focus-Eye).Rotation().Quaternion();FConvexVolume Frustum;
+                    for(const FVector& N:{FVector(-1,1,0),FVector(-1,-1,0),FVector(-1,0,1),FVector(-1,0,-1),FVector(-1,0,0)})
+                        Frustum.Planes.Add(FPlane(Eye,Rotation.RotateVector(N.GetSafeNormal())));
+                    Frustum.Init();TSet<int32> Visible;bool Outside=false;
+                    ACEOutdoorPortalPlan::CollectIndoorPViewCells(*Dat,ViewCell,Eye,Frustum,100,Visible,Outside,128);
+                    TestTrue(*FString::Printf(TEXT("Reported ledge view %.0f cm from cell %08X admits gateway cell"),Height,ViewCell),Visible.Contains(At.CellId));
+                    TestEqual(TEXT("Gateway can be picked from reported ledge height"),ACEVisibleObjectPick::Trace(*World,
+                        Eye,Center+(Center-Eye).GetSafeNormal()*100,nullptr),static_cast<AActor*>(Actor));
+                }
+                Snap(Reported.ToUnrealLocation()+FVector(0,0,150),TEXT("ledge"));
+            }
+            for(int32 Part=0;auto* Mesh=Cast<UProceduralMeshComponent>(Actor->Appearance->GetPartMesh(Part));++Part)
+            {
+                for(float Distance:{300.f,1500.f,3000.f,6000.f})
+                {
+                    const int32 Level=Mesh->GetDistanceLevel(Center+FVector(Distance,0,0));
+                    TestTrue(TEXT("Quest object has drawable geometry at interaction distances"),
+                        Level==INDEX_NONE?Mesh->GetNumSections()>0:Mesh->GetDistanceLevels()[Level].SectionCount>0);
+                }
+            }
+            Actor->SetCellVisible(false);
+            Actor->InitializeFromObject(Gateway,100,true);
+            Actor->SetCellVisible(true);
+            TestEqual(TEXT("Quest object remains pickable after reentering its room"),ACEVisibleObjectPick::Trace(*World,
+                CloseEye,Center+(Center-CloseEye).GetSafeNormal()*100,nullptr),static_cast<AActor*>(Actor));
+            CaptureOwner->Destroy();
+            for(auto* Room:Rooms)Room->Destroy();
+        }
+        Presenter->ClearSpawned();Owner->Destroy();Session->WorldObjects.Remove(Gateway.Guid);
+    }
 
     // Daralet's supplied Tou-Tou weenie (1050067): an object-looking Creature,
     // not a static prop. Its setup, clothing and motion all come from retail DAT.

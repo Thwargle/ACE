@@ -155,25 +155,6 @@ void UACEUIGameplayBinder::PollAdditionalKeyboardActions(APlayerController* PC)
    Client->SelectObject(TargetGuid);
   }
  }
- struct FPanel {const TCHAR* Action;const TCHAR* Page;const TCHAR* Tab;};
- static const FPanel Panels[]={
-  {TEXT("TogglePositiveEffectsPanel"),TEXT("PositiveEffectsPanel_Field"),nullptr},
-  {TEXT("ToggleNegativeEffectsPanel"),TEXT("NegativeEffectsPanel_Field"),nullptr},
-  {TEXT("ToggleVitaePanel"),TEXT("VitaePanel_Field"),nullptr},
-  {TEXT("ToggleLinkStatusPanel"),TEXT("LinkStatusPanel_Field"),nullptr},
-  {TEXT("ToggleConfigOptionsPanel"),TEXT("OptionsPanel_Field"),TEXT("ConfigPage")},
-  {TEXT("ToggleFriendsPanel"),TEXT("SocialPanel_Field"),TEXT("FriendsPage")},
-  {TEXT("ToggleHousePanel"),TEXT("WorldPanel_Field"),TEXT("HousePage")},
-  {TEXT("ToggleJournalPanel"),TEXT("QuestManagementPanel_Field"),TEXT("JournalPage")},
-  {TEXT("TogglePageListPanel"),TEXT("QuestManagementPanel_Field"),TEXT("PageListPage")},
-  {TEXT("ToggleQuestManagementPanel"),TEXT("QuestManagementPanel_Field"),nullptr}};
- for(const auto& P:Panels)if(Pressed(P.Action))
- {
-  ToggleGameplayPanel(P.Page,P.Tab ? P.Tab : TEXT(""));
- }
- for(int32 I=1;I<=4;++I)if(Pressed(*FString::Printf(TEXT("ToggleFloatingChatWindow%d"),I)))HandleNamedClick(FString::Printf(TEXT("FloatingChat%d"),I));
- if(Pressed(TEXT("LOGOUT")))Client->Logout();
- if(Pressed(TEXT("CaptureScreenshot")))RequestGameplayScreenshot();
  struct FEmote {const TCHAR* Action;uint32 Motion;bool Hold;};
  static const FEmote Emotes[]={
   {TEXT("AFKState"),0x4300011bu,true},{TEXT("BlowKiss"),0x1300007cu,false},
@@ -181,5 +162,4 @@ void UACEUIGameplayBinder::PollAdditionalKeyboardActions(APlayerController* PC)
   {TEXT("TapFootState"),0x430000f5u,true},{TEXT("ThinkerState"),0x43000147u,true},
   {TEXT("Winded"),0x1300009au,false},{TEXT("Woah"),0x13000099u,false},{TEXT("YMCA"),0x1200009bu,false}};
  for(const auto& E:Emotes)if(Pressed(E.Action))PlayEmoteHotkey(E.Motion,E.Hold);
- if(Pressed(TEXT("ToggleKeyboardPanel")))ToggleKeyboardMappingUI();
 }

@@ -2,7 +2,9 @@
 #include "Mods/ACEPluginSubsystem.h"
 #include "Mods/ACELedger.h"
 #include "ACEClientSubsystem.h"
+#include "ACEHoverTooltipWidget.h"
 #include "ACEDatSubsystem.h"
+#include "Dat/ACEDatTextureResolver.h"
 #include "UI/ACEUIFontStyles.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "Engine/GameInstance.h"
@@ -11,8 +13,59 @@
 #include "Brushes/SlateColorBrush.h"
 #include "Styling/CoreStyle.h"
 #include "Rendering/DrawElements.h"
+#include "Widgets/SToolTip.h"
+#include "Widgets/Layout/SBox.h"
 
 namespace { TWeakPtr<FACEPluginStyle> CurrentStyle; }
+namespace
+{
+    class SACEPluginTooltip : public SToolTip, public FGCObject
+    {
+    public:
+        SLATE_BEGIN_ARGS(SACEPluginTooltip) {} SLATE_ATTRIBUTE(FText,Text)
+            SLATE_ARGUMENT(UACEUIResourceResolver*,Resources)
+        SLATE_END_ARGS()
+        void Construct(const FArguments& Args)
+        {
+            Text=Args._Text;Resources=Args._Resources;
+            SToolTip::Construct(SToolTip::FArguments().TextMargin(0).BorderImage(FCoreStyle::Get().GetBrush("NoBrush"))[SNew(SBox)]);
+        }
+        virtual void AddReferencedObjects(FReferenceCollector& Collector) override
+        {Collector.AddReferencedObject(Resources);Collector.AddReferencedObject(Tip);}
+        virtual FString GetReferencerName() const override {return TEXT("SACEPluginTooltip");}
+        virtual bool IsEmpty() const override {return Text.Get().IsEmpty();}
+        virtual void OnOpening() override {Refresh(true);}
+        virtual TSharedRef<SWidget> AsWidget() override {Refresh();return SToolTip::AsWidget();}
+        virtual TSharedRef<SWidget> GetContentWidget() override {Refresh();return SToolTip::GetContentWidget();}
+        virtual void Tick(const FGeometry& G,double Time,float Delta) override
+        {SToolTip::Tick(G,Time,Delta);Refresh();}
+    private:
+        TAttribute<FText> Text;
+        TObjectPtr<UACEUIResourceResolver> Resources=nullptr;
+        TObjectPtr<UACEHoverTooltipWidget> Tip=nullptr;
+        void Refresh(bool Opening=false)
+        {
+            const FText Value=Text.Get();
+            if(!Tip)
+            {
+                if(Value.IsEmpty())return;
+                Tip=NewObject<UACEHoverTooltipWidget>();Tip->Initialize();Tip->SetResources(Resources);
+                Tip->SetTooltipText(Value.ToString(),UACEHoverTooltipWidget::ObjectTemplate);
+                SetContentWidget(Tip->TakeWidget());
+            }
+            else
+            {
+                // DAT resources may have finished loading since the last hover.
+                if(Opening)Tip->SetResources(Resources);
+                Tip->SetTooltipText(Value.ToString(),UACEHoverTooltipWidget::ObjectTemplate);
+            }
+        }
+    };
+}
+TSharedRef<IToolTip> FACEPluginStyle::Tooltip(TAttribute<FText> Text)
+{
+    return SNew(SACEPluginTooltip).Text(Text).Resources(Current()->Resolver);
+}
 TSharedRef<FACEPluginStyle> FACEPluginStyle::Use(UACEPluginSubsystem* Host,const FString& WindowId)
 {
     auto& Style=WindowId.IsEmpty()?Host->RetailPluginStyle:Host->WindowPluginStyles.FindOrAdd(WindowId);
@@ -30,8 +83,13 @@ TSharedRef<FACEPluginStyle> FACEPluginStyle::Current()
     if(auto S=CurrentStyle.Pin())return S.ToSharedRef();
     static TSharedRef<FACEPluginStyle> Fallback=MakeShared<FACEPluginStyle>(nullptr);return Fallback;
 }
+FSlateFontInfo FACEPluginStyle::NativeFont(FName Typeface,int32 Size)
+{
+    const int32 ConsistentSize=Size==13?12:Size>=14&&Size<=16?15:Size>=17&&Size<=20?18:Size;
+    return FCoreStyle::GetDefaultFontStyle(Typeface,ConsistentSize);
+}
 void FACEPluginStyle::AddReferencedObjects(FReferenceCollector& C)
-{C.AddReferencedObject(Resolver);C.AddReferencedObject(Atlas);for(auto& Pair:Fonts)C.AddReferencedObject(Pair.Value->Atlas);}
+{C.AddReferencedObject(Resolver);C.AddReferencedObject(Atlas);for(auto& Pair:Fonts)C.AddReferencedObject(Pair.Value->Atlas);for(auto& Texture:ButtonTextures)C.AddReferencedObject(Texture);}
 const FSlateBrush* FACEPluginStyle::Image(uint32 Id)
 {
     auto& B=Images.FindOrAdd(Id);if(!B)B=MakeShared<FSlateBrush>();
@@ -72,7 +130,7 @@ void FACEPluginStyle::Refresh()
 void FACEPluginStyle::InitializeArtwork()
 {
     DatArtworkLoaded=Resolver&&Resolver->GetDatSubsystem()&&Resolver->GetDatSubsystem()->IsDatReady();
-    const FLinearColor Gold(.65f,.43f,.15f),Ivory(.94f,.89f,.76f);
+    const FLinearColor Gold(.65f,.43f,.15f),Ivory(1.f,.98f,.92f);
     Frame=FSlateRoundedBoxBrush(FLinearColor(.008f,.006f,.003f,.96f),0.f,Gold,2.f);
     const FLinearColor TitleColor(.025f,.012f,.004f,1);
     TitleBackground=FSlateColorBrush(TitleColor);
@@ -87,12 +145,58 @@ void FACEPluginStyle::InitializeArtwork()
         .SetDisabled(FSlateRoundedBoxBrush(FLinearColor(.035f,.02f,.01f),0.f,FLinearColor(.25f,.18f,.08f),1.f))
         .SetNormalPadding(FMargin(0)).SetPressedPadding(FMargin(0))
         .SetNormalForeground(Ivory).SetHoveredForeground(FLinearColor(1,.85f,.35f)).SetPressedForeground(Ivory);
+    // Preserve the authored bevel while stretching the center.
+    auto Beveled=[this](uint32 Id)
+    {
+        auto B=*Image(Id);
+        B.DrawAs=ESlateBrushDrawType::Box;
+        B.Margin=FMargin(2.f/FMath::Max(1.f,float(B.ImageSize.X)),2.f/FMath::Max(1.f,float(B.ImageSize.Y)));
+        return B;
+    };
+    // Button_RedBar (layout 0x21000040) is retail's resizable action button.
+    // Join its three strips once, then let Slate preserve the gold bevel.
+    auto RedBar=[this](uint32 Left,uint32 Middle,uint32 Right,FSlateBrush& Out)
+    {
+        auto* Dat=Resolver?Resolver->GetDatSubsystem():nullptr;
+        auto* Textures=Dat?Dat->GetTextureResolver():nullptr;
+        if(!Textures)return false;
+        FACEDatDecodedSurface Parts[3];const uint32 Ids[]={Left,Middle,Right};
+        int32 Width=0,Height=0;
+        for(int32 I=0;I<3;++I)
+        {
+            FACEDatTexture Raw;
+            if(!Textures->LoadTextureForUi(Ids[I],Raw)||!Textures->DecodeTextureForUi(Raw,Parts[I])||!Parts[I].bHasPixels)return false;
+            if(I&&Height!=Parts[I].Height)return false;
+            Width+=Parts[I].Width;Height=Parts[I].Height;
+        }
+        TArray<FColor> Pixels;Pixels.SetNumUninitialized(Width*Height);int32 Offset=0;
+        for(const auto& Part:Parts)
+        {
+            for(int32 Y=0;Y<Height;++Y)
+                FMemory::Memcpy(Pixels.GetData()+Y*Width+Offset,Part.Pixels.GetData()+Y*Part.Width,Part.Width*sizeof(FColor));
+            Offset+=Part.Width;
+        }
+        auto* Texture=FACEDatTextureResolver::CreateTransientRgbaUi(Width,Height,Pixels);
+        if(!Texture)return false;
+        ButtonTextures.Add(Texture);Out.SetResourceObject(Texture);Out.ImageSize=FVector2D(Width,Height);
+        Out.DrawAs=ESlateBrushDrawType::Box;Out.Margin=FMargin(4.f/Width,4.f/Height);return true;
+    };
+    FSlateBrush Up,Down,Disabled;
+    if(RedBar(0x06004C96,0x06004C99,0x06004C9C,Up)&&RedBar(0x06004C95,0x06004C98,0x06004C9B,Down)
+        &&RedBar(0x06004C94,0x06004C97,0x06004C9A,Disabled))
+        Button.SetNormal(Up).SetHovered(Up).SetPressed(Down).SetDisabled(Disabled);
     DockButton=Button;
-    DockButton.SetNormal(FSlateRoundedBoxBrush(FLinearColor(.008f,.005f,.002f,.9f),0.f,FLinearColor(.4f,.26f,.09f),1.f));
+    // Small frame/icon controls cannot fit the action button's four-pixel
+    // bevel. Keep their one-pixel border in every interaction state.
+    DockButton.SetNormal(FSlateRoundedBoxBrush(FLinearColor(.008f,.005f,.002f,.9f),0.f,FLinearColor(.4f,.26f,.09f),1.f))
+        .SetHovered(FSlateRoundedBoxBrush(FLinearColor(.055f,.039f,.018f),0.f,FLinearColor(.6f,.43f,.2f),1.f))
+        .SetPressed(FSlateRoundedBoxBrush(FLinearColor(.025f,.016f,.007f),0.f,FLinearColor(.9f,.66f,.25f),1.f))
+        .SetDisabled(FSlateRoundedBoxBrush(FLinearColor(.008f,.005f,.002f,.6f),0.f,FLinearColor(.25f,.18f,.08f),1.f));
     Tab=Button;
     Tab.SetNormal(FSlateRoundedBoxBrush(FLinearColor(.012f,.01f,.007f),0.f,FLinearColor(.24f,.18f,.1f),1.f))
         .SetHovered(FSlateRoundedBoxBrush(FLinearColor(.055f,.039f,.018f),0.f,FLinearColor(.6f,.43f,.2f),1.f))
-        .SetPressed(FSlateRoundedBoxBrush(FLinearColor(.16f,.095f,.025f),0.f,FLinearColor(.9f,.66f,.25f),1.f));
+        .SetPressed(FSlateRoundedBoxBrush(FLinearColor(.16f,.095f,.025f),0.f,FLinearColor(.9f,.66f,.25f),1.f))
+        .SetPressedPadding(FMargin(0));
     Check=FCoreStyle::Get().GetWidgetStyle<FCheckBoxStyle>("Checkbox");
     auto Small=[this](uint32 Id){auto B=*Image(Id);B.ImageSize=FVector2D(14,14);return B;};
     // Keep Slate's distinct states until each retail image is available. Empty
@@ -107,7 +211,25 @@ void FACEPluginStyle::InitializeArtwork()
     Edit=FCoreStyle::Get().GetWidgetStyle<FEditableTextBoxStyle>("NormalEditableTextBox");
     FSlateRoundedBoxBrush Well(FLinearColor(.012f,.008f,.004f),0.f,Gold,1.f);
     Edit.SetBackgroundImageNormal(Well).SetBackgroundImageHovered(Well).SetBackgroundImageFocused(Well).SetBackgroundImageReadOnly(Well).SetForegroundColor(Ivory);
-    Combo=FCoreStyle::Get().GetWidgetStyle<FComboButtonStyle>("ComboButton");Combo.SetButtonStyle(Button).SetMenuBorderBrush(Frame);
+    // Config's green selector and row highlight are distinct from red actions.
+    auto Green=Beveled(0x060012B3),SelectedGreen=Beveled(0x060012B4);
+    if(!Green.GetResourceObject())Green=FSlateRoundedBoxBrush(FLinearColor(.015f,.065f,.012f),0.f,Gold,1.f);
+    if(!SelectedGreen.GetResourceObject())SelectedGreen=FSlateRoundedBoxBrush(FLinearColor(.04f,.14f,.025f),0.f,Gold,1.f);
+    MenuItem=Button;
+    MenuItem.SetNormal(Green).SetHovered(SelectedGreen).SetPressed(SelectedGreen)
+        .SetNormalPadding(FMargin(0)).SetPressedPadding(FMargin(0));
+    Combo=FCoreStyle::Get().GetWidgetStyle<FComboButtonStyle>("ComboButton");
+    Combo.SetButtonStyle(MenuItem).SetContentPadding(FMargin(ButtonPadding)).SetMenuBorderBrush(Green).SetMenuBorderPadding(FMargin(2));
+    if(const auto* Arrow=Image(0x060012B1);Arrow->GetResourceObject())
+        Combo.SetDownArrowImage(*Arrow).SetDownArrowPadding(FMargin(6,0,0,0));
+    ComboBox=FCoreStyle::Get().GetWidgetStyle<FComboBoxStyle>("ComboBox");
+    ComboBox.SetComboButtonStyle(Combo).SetContentPadding(FMargin(ButtonPadding));
+    ComboRow=FCoreStyle::Get().GetWidgetStyle<FTableRowStyle>("TableView.Row");
+    ComboRow.SetEvenRowBackgroundBrush(Green).SetOddRowBackgroundBrush(Green)
+        .SetEvenRowBackgroundHoveredBrush(SelectedGreen).SetOddRowBackgroundHoveredBrush(SelectedGreen)
+        .SetActiveBrush(SelectedGreen).SetActiveHoveredBrush(SelectedGreen)
+        .SetInactiveBrush(SelectedGreen).SetInactiveHoveredBrush(SelectedGreen)
+        .SetSelectorFocusedBrush(SelectedGreen).SetTextColor(Ivory).SetSelectedTextColor(FLinearColor::White);
     Spin=FCoreStyle::Get().GetWidgetStyle<FSpinBoxStyle>("SpinBox");Spin.SetBackgroundBrush(Well).SetHoveredBackgroundBrush(Well)
         .SetActiveFillBrush(Well).SetInactiveFillBrush(Well).SetForegroundColor(Ivory);
     if(Resolver&&Resolver->ResolveFont(0x40000000,Font))Atlas=Resolver->ResolveFontAtlas(Font.ForegroundSurfaceDataID,TintAtlas);
@@ -148,15 +270,82 @@ TSharedPtr<FACEPluginFont> FACEPluginStyle::Typeface(int32 Size)
         Face->Atlas=Resolver->ResolveFontAtlas(Face->Font.ForegroundSurfaceDataID,Face->Tint);
     return Face;
 }
+namespace
+{
+    float ButtonBorderWidth(const FButtonStyle& Style)
+    {
+        float Width=0;
+        for(const auto* Brush:{&Style.Normal,&Style.Hovered,&Style.Pressed,&Style.Disabled})
+        {
+            if(Brush->DrawAs==ESlateBrushDrawType::Box||Brush->DrawAs==ESlateBrushDrawType::Border)
+                Width=FMath::Max(Width,FMath::Max(FMath::Max(Brush->Margin.Left,Brush->Margin.Right)*float(Brush->ImageSize.X),
+                    FMath::Max(Brush->Margin.Top,Brush->Margin.Bottom)*float(Brush->ImageSize.Y)));
+            else if(Brush->DrawAs==ESlateBrushDrawType::RoundedBox)
+                Width=FMath::Max(Width,Brush->OutlineSettings.Width);
+        }
+        return Width;
+    }
+    float ButtonInteriorPadding(const FButtonStyle& Style)
+    {
+        const float Border=ButtonBorderWidth(Style);
+        // Keep a clear gap inside the artwork, including compact title controls.
+        // Borderless inventory images retain their exact icon dimensions.
+        return Border>0?Border+(Border>1?2.f:1.f):0.f;
+    }
+    void CenterButtonLabels(const TSharedRef<SWidget>& Widget)
+    {
+        if(Widget->GetType()==TEXT("SACEPluginText"))
+            StaticCastSharedRef<SACEPluginText>(Widget)->SetJustification(ETextJustify::Center);
+        else if(Widget->GetType()==TEXT("STextBlock"))
+            StaticCastSharedRef<STextBlock>(Widget)->SetJustification(ETextJustify::Center);
+        // Button content can include a label and icon or a multiline caption.
+        // This runs once when constructed, never during paint or plugin ticks.
+        auto* Children=Widget->GetChildren();
+        for(int32 I=0;I<Children->Num();++I)CenterButtonLabels(Children->GetChildAt(I));
+    }
+}
+void SACEPluginButton::Construct(const FArguments& A)
+{
+    auto Args=A;ContentStyle=A._ButtonStyle;
+    const auto Padding=A._ContentPadding;
+    Args.HAlign(HAlign_Center).VAlign(VAlign_Center);
+    // Evaluate the style here as DAT artwork may load after the widget is built.
+    Args.ContentPadding_Lambda([this,Padding]
+    {
+        const auto P=Padding.Get();
+        return FMargin(FMath::Max(ButtonInteriorPadding(*ContentStyle),FMath::Max(FMath::Max(P.Left,P.Right),FMath::Max(P.Top,P.Bottom))));
+    });
+    SButton::Construct(Args);
+    CenterButtonLabels(GetContent());
+}
+FVector2D SACEPluginButton::ComputeDesiredSize(float LayoutScaleMultiplier) const
+{
+    auto Size=SButton::ComputeDesiredSize(LayoutScaleMultiplier);
+    // A thick bevel needs a usable interior even for a single '+' or '-' glyph.
+    // Thin frame controls and borderless inventory icons stay compact.
+    if(ContentStyle&&ButtonBorderWidth(*ContentStyle)>1.f)
+    {
+        const float Minimum=16.f+2.f*ButtonInteriorPadding(*ContentStyle);
+        Size.X=FMath::Max(Size.X,double(Minimum));Size.Y=FMath::Max(Size.Y,double(Minimum));
+    }
+    return Size;
+}
+void SACEPluginComboButton::Construct(const FArguments& A)
+{
+    auto Args=A;
+    Args.HAlign(HAlign_Fill).VAlign(VAlign_Center).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding));
+    CenterButtonLabels(A._ButtonContent.Widget);
+    SComboButton::Construct(Args);
+}
 void SACEPluginTab::Construct(const FArguments& A)
 {
     Retail=FACEPluginStyle::Current();Selected=A._Selected;
     TSharedRef<SWidget> Content=A._Content.Widget;
     if(Content==SNullWidget::NullWidget)
         Content=SNew(SACEPluginText).Text(A._Text).Justification(ETextJustify::Center)
-            .Font_Lambda([Size=A._FontSize]{return FCoreStyle::GetDefaultFontStyle("Regular",FMath::Clamp(Size.Get(14),10,36));})
-            .ColorAndOpacity(FLinearColor(.96f,.91f,.8f));
-    SButton::Construct(SButton::FArguments().ButtonStyle(&Retail->Tab).IsFocusable(false)
+            .Font_Lambda([Size=A._FontSize]{return FCoreStyle::GetDefaultFontStyle("Regular",FMath::Clamp(Size.Get(15),10,36));})
+            .ColorAndOpacity(FLinearColor(1.f,.98f,.92f));
+    SACEPluginButton::Construct(SButton::FArguments().ButtonStyle(&Retail->Tab).IsFocusable(false)
         .ContentPadding(A._ContentPadding).HAlign(HAlign_Center).VAlign(VAlign_Center).OnClicked(A._OnClicked)[Content]);
     // Slate tracks this attribute and repaints retained tabs when selection
     // changes, without polling, reconstructing controls or shifting their size.
@@ -182,6 +371,12 @@ void SACEPluginText::Construct(const FArguments& A)
     // Never turn a narrow plugin title, setting or button into stacked fragments.
     SetWrappingPolicy(ETextWrappingPolicy::DefaultWrapping);
     SetClipping(EWidgetClipping::ClipToBounds);
+}
+void SACEPluginText::SetJustification(TAttribute<ETextJustify::Type> InJustification)
+{
+    Justification=InJustification;
+    STextBlock::SetJustification(InJustification);
+    Invalidate(EInvalidateWidgetReason::Paint);
 }
 float SACEPluginText::BitmapScale() const
 {

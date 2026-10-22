@@ -62,6 +62,8 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 {
 	GENERATED_BODY()
 	friend class FACERetailScreenTest;
+	friend class FACEPortalInterfaceTest;
+	friend struct FACERetailAugmentationUIFixture;
 	friend class FACEDungeonInterfacesTest;
 	friend class FACEDesktopHighlightTest;
 	friend class FACEPvPCombatParityTest;
@@ -74,6 +76,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEVRChatTest;
 	friend class AACEPlayerController;
 	friend class FACEChatParityTest;
+	friend struct FACEChatUIFixture;
 	friend class FACEPluginPublicAPITest;
 	friend class FACEEmoteTest;
 	friend class FACEUILayoutCommandsTest;
@@ -135,6 +138,8 @@ private:
 public:
 	void ToggleKeyboardMappingUI();
 	void PollKeyboardActions(APlayerController* PC);
+	/** Panel and window shortcuts which remain available during portal transitions. */
+	void PollInterfaceKeyboardActions(APlayerController* PC);
 	void HandleKeymapImport(const FString& Path);
 	bool ScrollKeyboard(float WheelDelta, FVector2D CanvasLocalPos);
 	void ToggleCombatModeHotkey();
@@ -356,6 +361,8 @@ private:
 
 	FString ActivePanelPage;
 	int32 CombatMode = 1; // ACECombatMode::NonCombat
+	bool bActionDeckCombatBarHidden = false;
+	void RefreshNativeCombatBarVisibility();
 	int32 SelectedPackGuid = 0;
 	int32 InventoryScrollOffset = 0;
 	TWeakPtr<FACEUIElement> ScrollDragBar;
@@ -398,6 +405,9 @@ private:
 	 */
 	int32 ChatSendChannel = 0;
 	bool bChatTargetPopupOpen = false;
+	bool bMainChatExpanded = false;
+	int32 MainChatRestoreY = 0, MainChatRestoreHeight = 0;
+	void ToggleMainChatExpanded();
 	FString LastOutgoingTellName;
 	FString LastOutgoingTellLineKey;
 	double LastOutgoingTellLineTime = 0.0;
@@ -471,6 +481,7 @@ private:
 	/** Last GetScrollOffsetOfEnd while sticking — re-snap when wrap grows content. */
 	float ChatStickEndOffset = -1.f;
 	bool bFloatyChatStickToBottom[4] = { true, true, true, true };
+	bool bChatUnread[5] = {};
 	int32 ScrollDragChatWindow = 0;
 	void RefreshChatRowLayout(int32 Window);
 	float ChatRowWidths[5] = {};

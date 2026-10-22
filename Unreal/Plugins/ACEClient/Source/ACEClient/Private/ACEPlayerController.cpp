@@ -100,10 +100,10 @@ namespace
 {
 EMouseLockMode DesktopMouseLockMode()
 {
-    // LockInFullscreen in UE only covers exclusive fullscreen. Borderless
-    // occupies a monitor too and must not leak its cursor into the next one.
+    // Both windowed modes allow the visible pointer onto the desktop. Camera
+    // turning has its own temporary capture, released when mouse look ends.
     const auto Window=GEngine && GEngine->GameViewport ? GEngine->GameViewport->GetWindow() : nullptr;
-    return Window && Window->GetWindowMode()!=EWindowMode::Windowed
+    return Window && FACEDesktopPointer::ShouldConfine(Window->GetWindowMode(), true, true)
         ? EMouseLockMode::LockAlways : EMouseLockMode::DoNotLock;
 }
 // CTransition::transitional_insert/edge_slide retains the previous supported
@@ -305,7 +305,7 @@ void AACEPlayerController::EnsureDatIntroCanvas()
 
 void AACEPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	UpdateDesktopHighlights(false);
+	UpdateObjectHighlights(false);
 	KeyboardRouter.Reset();
 	DesktopDisplay.Reset();
 	DesktopPointer.Reset();
@@ -966,7 +966,20 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	{
 		if (APawn* P = GetPawn())
 			if (auto* App = P->FindComponentByClass<UACECharacterAppearanceComponent>()) App->ResetWalkingMotion();
-		UpdateDesktopHighlights(false);
+		UpdateObjectHighlights(false);
+		// Retail replaces the SmartBox view, not the gameplay interface. Keep
+		// panel/chat controls available without polling movement or world actions.
+		if (!IsVRActive() && !ACEInputBindings::IsEditing() && !ACEInputBindings::IsTextEntryFocused()
+			&& !(DatGameplayBinder && DatGameplayBinder->IsChatEntryFocused()))
+		{
+			if (ACEInputBindings::Pressed(this, ACEInputBindings::Action(TEXT("ToggleInterface"))))
+				SetDesktopInterfaceHidden(!bDesktopInterfaceHidden);
+			if (DatGameplayBinder && !IsDesktopInterfaceHidden())
+			{
+				DatGameplayBinder->PollInterfaceKeyboardActions(this);
+				if (ACEInputBindings::Pressed(this, EKeys::Escape)) DatGameplayBinder->HandleEscape();
+			}
+		}
 		TickWorldTransition();
 		return;
 	}
@@ -974,7 +987,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	{
 		if (APawn* P = GetPawn())
 			if (auto* App = P->FindComponentByClass<UACECharacterAppearanceComponent>()) App->ResetWalkingMotion();
-		UpdateDesktopHighlights(false);
+		UpdateObjectHighlights(false);
 		if (GameHUDWidget)
 		{
 			DestroyGameHUD();
@@ -1033,7 +1046,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	}
 
 	if (!bVR) { PollObjectHover(); PollObjectClick(); }
-	UpdateDesktopHighlights(!bVR);
+	UpdateObjectHighlights(true,!bVR);
 
 	// Poll logical actions through the retail/rebound keymap: W/X forward/back,
 	// A/D turn, Z/C sidestep by default. Opposing held commands form a stack.
@@ -4586,7 +4599,7 @@ void AACEPlayerController::ShowGameHUD()
 	if (bUseDatDrivenHud)
 	{
 		if (!Client) return; // Wait for initialization; never substitute the development HUD.
-		// Portal transit only hides the HUD. Reinitializing its binder here resets
+		// Portal transit retains the HUD. Reinitializing its binder here resets
 		// the selected panel, inventory position, and chat buffers.
 		if (DatCanvasWidget && DatGameplayBinder)
 		{
@@ -4712,6 +4725,8 @@ void AACEPlayerController::EnsureRetailMouseCursor()
 	}
 
 	RetailCursorDefaultTex = Resolver->GetOrCreateUiTexture(UACEMouseCursorWidget::DefaultCursorDid);
+	if (auto* Resources = Client ? Client->GetUIResourceResolver() : nullptr)
+		RetailCursorBusyTex = Resources->ResolveTexture(Resources->ResolveCursorId(14));
 	RetailCursorInteractableTex = Resolver->GetOrCreateUiTexture(UACEMouseCursorWidget::InteractableCursorDid);
 	RetailCursorTargetTex = Resolver->GetOrCreateUiTexture(UACEMouseCursorWidget::TargetCursorDid);
 	RetailCursorTargetValidTex = Resolver->GetOrCreateUiTexture(UACEMouseCursorWidget::TargetValidCursorDid);
@@ -4769,7 +4784,9 @@ void AACEPlayerController::ApplyRetailMouseCursor(bool bInteractable, bool bComp
 	UTexture2D* Tex = bInteractable && RetailCursorInteractableTex
 		? RetailCursorInteractableTex.Get()
 		: RetailCursorDefaultTex.Get();
-	if (bPendingUseTargeting)
+	const bool bPortal = IsWorldTransitionActive();
+	if (bPortal && RetailCursorBusyTex) Tex = RetailCursorBusyTex;
+	else if (bPendingUseTargeting)
 		Tex = !bInteractable ? RetailCursorTargetTex.Get()
 			: bCompatible ? RetailCursorTargetValidTex.Get() : RetailCursorTargetInvalidTex.Get();
 	if (!Tex)
@@ -4782,7 +4799,7 @@ void AACEPlayerController::ApplyRetailMouseCursor(bool bInteractable, bool bComp
 	const int32 HotY = bPendingUseTargeting ? UACEMouseCursorWidget::TargetHotspot : bInteractable
 		? UACEMouseCursorWidget::InteractableHotspotY
 		: UACEMouseCursorWidget::DefaultHotspotY;
-	MouseCursorWidget->SetCursorTexture(Tex, HotX, HotY);
+	MouseCursorWidget->SetCursorTexture(Tex, bPortal ? 0 : HotX, bPortal ? 0 : HotY);
 	bRetailCursorInteractable = bInteractable;
 }
 
@@ -4811,7 +4828,7 @@ void AACEPlayerController::SetDesktopInterfaceHidden(bool bHideInterface)
 		HoverTooltipText.Reset();
 		if (HoverTooltipWidget) HoverTooltipWidget->SetVisibility(ESlateVisibility::Collapsed);
 	}
-	else if (!IsWorldTransitionActive())
+	else
 	{
 		// Restore the existing canvas, keeping open windows, positions and chat.
 		if (DatCanvasWidget && DatGameplayBinder) DatCanvasWidget->SetVisibility(ESlateVisibility::Visible);
@@ -4824,7 +4841,7 @@ void AACEPlayerController::HideGameHUD()
 {
 	if (GameHUDWidget)
 	{
-		// Soft-hide so portal transitions keep chat history / open panels / scroll state.
+		// The user's interface toggle preserves chat history and panel state.
 		GameHUDWidget->SetVisibility(ESlateVisibility::Collapsed);
 	}
 	if (DatCanvasWidget)
@@ -5225,15 +5242,11 @@ void AACEPlayerController::HandleEnteredWorld(int32 PlayerGuid, const FACEPositi
 
 	HideLoginUI();
 	DestroyCharacterSelectUI();
-	// HUD stays off for the entire portal tunnel — shown only after FinishWorldTransition.
+	// Initial entry warms the HUD incrementally; an existing HUD stays visible.
 	if (!bUseEnterWorldLoadScreen)
 	{
 		ShowGameHUD();
 		EnableGameplayViewportShadows();
-	}
-	else
-	{
-		HideGameHUD();
 	}
 	bLocalPredicting = false;
 	bHavePredictedPose = false;
@@ -5333,9 +5346,18 @@ void AACEPlayerController::BeginWorldTransition(const TCHAR* Reason)
 	PortalSavedControlRotation = GetControlRotation();
 	bHavePortalSavedControlRotation = true;
 
-	// No gameplay UI / cursor while the player is inside the portal object.
-	HideGameHUD();
-	bShowMouseCursor = false;
+	// gmSmartBoxUI::UseTime hides only the world viewport. Chat and the other
+	// gameplay panels remain usable; cancel gestures that started in the world.
+	if (DatGameplayBinder)
+	{
+		DatGameplayBinder->CancelPointerGestures();
+		DatGameplayBinder->CancelPendingUseWith();
+		DatGameplayBinder->CancelCombatAttack();
+		DatGameplayBinder->ShowTransientInfo(TEXT("In Portal Space - Please Wait..."));
+	}
+	if (FSlateApplication::IsInitialized()) FSlateApplication::Get().ReleaseAllPointerCapture();
+	ApplyInWorldInputMode();
+	ApplyRetailMouseCursor(false);
 	if (HoverTooltipWidget)
 	{
 		HoverTooltipWidget->SetVisibility(ESlateVisibility::Collapsed);
@@ -6041,6 +6063,11 @@ void AACEPlayerController::TickWorldTransition()
 
 	// Prefetch ClassicGameplay textures under the tunnel so ShowGameHUD does not pop art later.
 	TryPrefetchGameplayHudAssets();
+	if (bGameplayUiAssetsReady && !DatGameplayBinder && !GameHUDWidget)
+	{
+		ShowGameHUD();
+		if (DatGameplayBinder) DatGameplayBinder->ShowTransientInfo(TEXT("In Portal Space - Please Wait..."));
+	}
 
 	if (bWorldRevealActive)
 	{
@@ -6428,6 +6455,7 @@ void AACEPlayerController::FinishWorldTransition()
 	ShowGameHUD();
 	bShowMouseCursor = true;
 	EnsureRetailMouseCursor();
+	ApplyRetailMouseCursor(false);
 	// The loading screen releases viewport capture. Preserve the user's hold/
 	// toggle intent and restore relative input without replacing the saved cursor.
 	if (bMouseLookActive && !IsVRActive()) SetMouseLookActive(true);
@@ -7357,6 +7385,7 @@ void AACEPlayerController::SendInventoryPickup(int32 Guid, int32 Amount)
 void AACEPlayerController::BeginUseApproach(int32 TargetGuid, float DistanceAc, bool bPickupIntoInventory,
 	bool bFireActionWhenInRange, int32 PickupAmount)
 {
+	if (IsWorldTransitionActive()) return;
 	ApproachPickupAmount = bPickupIntoInventory
 		? (PickupAmount > 0 ? PickupAmount : (DatGameplayBinder ? DatGameplayBinder->GetSelectedItemAmount(TargetGuid) : 0)) : 0;
 	if (TargetGuid == 0)
@@ -7499,7 +7528,7 @@ void AACEPlayerController::InteractWithSelectedObject()
 
 void AACEPlayerController::InteractWithObject(int32 ObjectGuid)
 {
-	if (!Client || ObjectGuid == 0)
+	if (!Client || ObjectGuid == 0 || IsWorldTransitionActive())
 	{
 		return;
 	}
@@ -7567,8 +7596,10 @@ void AACEPlayerController::InteractWithObject(int32 ObjectGuid)
 		return;
 	}
 
-	// Attackable creatures: select only (double-click already selected). Do not Use/run-to.
-	if ((Obj.ItemType & ACEItemType::Creature) != 0 && Obj.IsAttackable() && !Obj.IsVendor())
+	// Retail ItemHolder::UseObject honors useability before attackability. Cows
+	// and other usable creatures must reach the server's Use/emote handler.
+	if ((Obj.ItemType & ACEItemType::Creature) != 0 && Obj.IsAttackable() && !Obj.IsVendor()
+		&& !ACEItemUseable::IsSourceUsable(Obj.ItemUseable))
 	{
 		UE_LOG(LogTemp, Log, TEXT("ACE: Select-only attackable guid=0x%08X name='%s'"), ObjectGuid, *Obj.Name);
 		return;
@@ -8048,21 +8079,37 @@ AACEWorldEntityActor* AACEPlayerController::PickWorldPointer(bool& bHitSelf) con
 	return Pick.Entity;
 }
 
-void AACEPlayerController::UpdateDesktopHighlights(bool bEnabled)
+void AACEPlayerController::UpdateObjectHighlights(bool bEnabled, bool bDesktop)
 {
 	AACEWorldEntityActor* Selection=nullptr;
 	AACEWorldEntityActor* Hover=nullptr;
+	UACECharacterAppearanceComponent* PlayerAppearance=nullptr;
 	if (bEnabled && Client && Client->GetSessionState()==EACESessionState::InWorld
 		&& ACERuntimeOptions::Get(TEXT("ObjectGlow"))>.5f)
 	{
-		Hover=DesktopHover.Get();
-		if (auto* Mode=GetWorld()->GetAuthGameMode())
-			if (auto* Presenter=Mode->FindComponentByClass<UACEWorldPresenterComponent>())
-				Selection=Presenter->FindEntityActor(Client->GetSelectedObject().Guid);
+		const int32 SelectedGuid=Client->GetSelectedObject().Guid;
+		if (SelectedGuid && SelectedGuid==Client->GetPlayerGuid())
+		{
+			// Self is rendered by the possessed pawn, not the world presenter.
+			// Share the same glow in desktop and VR without adding a HUD marker.
+			const auto Session=Client->GetSession();
+			const auto* Self=Session?Session->GetWorldObjects().Find(SelectedGuid):nullptr;
+			if (APawn* LocalPawn=GetPawn(); LocalPawn && !LocalPawn->IsHidden() && Self
+				&& !(Self->ObjectDescriptionFlags & ACEObjectDescFlag::UiHidden) && !(Self->PhysicsState & ACEPhysicsState::NoDraw))
+				PlayerAppearance=LocalPawn->FindComponentByClass<UACECharacterAppearanceComponent>();
+		}
+		if (bDesktop)
+		{
+			Hover=DesktopHover.Get();
+			if (auto* Mode=GetWorld()->GetAuthGameMode())
+				if (auto* Presenter=Mode->FindComponentByClass<UACEWorldPresenterComponent>())
+					Selection=Presenter->FindEntityActor(SelectedGuid);
+		}
 	}
-	auto Visible=[](AACEWorldEntityActor* Actor)
+	auto Visible=[this](AACEWorldEntityActor* Actor)
 	{
 		return Actor && !Actor->IsHidden() && Actor->IsCellVisible()
+			&& (!Client || Actor->GetACEGuid()!=Client->GetPlayerGuid())
 			&& !(Actor->ObjectDescriptionFlags & ACEObjectDescFlag::UiHidden)
 			&& !(Actor->PhysicsState & ACEPhysicsState::NoDraw);
 	};
@@ -8073,6 +8120,10 @@ void AACEPlayerController::UpdateDesktopHighlights(bool bEnabled)
 	DesktopHighlightSelection=Selection; DesktopHighlightHover=Hover;
 	if (Hover && Hover!=Selection) Hover->SetSelectionHighlight(.45f);
 	if (Selection) Selection->SetSelectionHighlight(1.f);
+	if (auto* Previous=HighlightedPlayerAppearance.Get(); Previous && Previous!=PlayerAppearance)
+		Previous->SetSelectionHighlight(0.f);
+	HighlightedPlayerAppearance=PlayerAppearance;
+	if (PlayerAppearance) PlayerAppearance->SetSelectionHighlight(1.f);
 }
 
 void AACEPlayerController::PollObjectHover()

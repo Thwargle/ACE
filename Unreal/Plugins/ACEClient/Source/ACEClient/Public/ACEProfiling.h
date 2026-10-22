@@ -13,6 +13,9 @@ DECLARE_CYCLE_STAT_EXTERN(TEXT("Character animation"), STAT_ACEAnimation, STATGR
 DECLARE_CYCLE_STAT_EXTERN(TEXT("Appearance construction"), STAT_ACEAppearance, STATGROUP_ACE, ACECLIENT_API);
 DECLARE_CYCLE_STAT_EXTERN(TEXT("Scripts / particles / lights"), STAT_ACEEffects, STATGROUP_ACE, ACECLIENT_API);
 DECLARE_CYCLE_STAT_EXTERN(TEXT("HUD refresh"), STAT_ACEHUD, STATGROUP_ACE, ACECLIENT_API);
+DECLARE_CYCLE_STAT_EXTERN(TEXT("Plugin tick"), STAT_ACEPlugins, STATGROUP_ACE, ACECLIENT_API);
+DECLARE_CYCLE_STAT_EXTERN(TEXT("Plugin snapshot"), STAT_ACEPluginSnapshot, STATGROUP_ACE, ACECLIENT_API);
+DECLARE_CYCLE_STAT_EXTERN(TEXT("Plugin Lua"), STAT_ACEPluginLua, STATGROUP_ACE, ACECLIENT_API);
 
 DECLARE_CYCLE_STAT_EXTERN(TEXT("Sky presentation"), STAT_ACESky, STATGROUP_ACE, ACECLIENT_API);
 DECLARE_CYCLE_STAT_EXTERN(TEXT("Sky fog / world materials"), STAT_ACESkyFog, STATGROUP_ACE, ACECLIENT_API);
@@ -22,7 +25,7 @@ DECLARE_CYCLE_STAT_EXTERN(TEXT("Player movement / input"), STAT_ACEPlayer, STATG
 
 namespace ACEProfiling
 {
-enum class EScope : uint8 { Network,World,Terrain,Visibility,Remote,Animation,Appearance,Effects,HUD,Sky,SkyFog,SkyLighting,Player,Count };
+enum class EScope : uint8 { Network,World,Terrain,Visibility,Remote,Animation,Appearance,Effects,HUD,Sky,SkyFog,SkyLighting,Player,Plugins,PluginSnapshot,PluginLua,Count };
 // Fixed storage, no history or per-frame allocation. These are inclusive CPU
 // times; nested categories must not be added together as a total frame time.
 struct FFrameCosts

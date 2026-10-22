@@ -27,8 +27,13 @@ struct FSequence
         auto Append = [&](int8 From, int8 To)
         {
             FLink Link;
-            if (Pending.Num() < 32 && Build(From, To, Link)) Pending.Add(MoveTemp(Link));
+            if (Pending.Num() >= 32 || !Build(From, To, Link)) return false;
+            Link.Root.bApplyEntry = !Pending.IsEmpty();
+            Pending.Add(MoveTemp(Link));
+            return true;
         };
+        // Positive gaits (walk=1, run=2) use a direct link when authored.
+        if (Direction > 0 && Next > 0 && Append(Direction, Next)) { Direction = Next; return; }
         // A sign change leaves through Ready, just as CMotionTable does.
         if (Direction) Append(Direction, 0);
         if (Next) Append(0, Next);

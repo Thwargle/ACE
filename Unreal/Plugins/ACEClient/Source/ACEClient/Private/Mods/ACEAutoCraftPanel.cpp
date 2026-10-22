@@ -17,9 +17,9 @@
 
 namespace
 {
-const FLinearColor CraftInk(.94f,.9f,.8f),CraftMuted(.7f,.65f,.53f),CraftGold(1,.76f,.25f);
+const FLinearColor CraftInk(1.f,.98f,.92f),CraftMuted(.86f,.83f,.75f),CraftGold(1,.76f,.25f);
 TSharedRef<STextBlock> CraftLabel(const FString& Text,int32 Size=14,FLinearColor Color=CraftInk)
-{return SNew(SACEPluginText).Text(FText::FromString(Text)).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size)).ColorAndOpacity(Color).AutoWrapText(true);}
+{return SNew(SACEPluginText).Text(FText::FromString(Text)).Font(FACEPluginStyle::NativeFont("Regular",Size)).ColorAndOpacity(Color).AutoWrapText(true);}
 struct FChoice { FString Key,CraftLabel; FChoice(FString K,FString L):Key(MoveTemp(K)),CraftLabel(MoveTemp(L)){} };
 using FChoices=TArray<TSharedPtr<FChoice>>;
 
@@ -37,9 +37,9 @@ public:
     void Construct(const FArguments& A)
     {
         GetChoices=A._Choices;Choose=A._Choose;Style=A._Style;
-        ChildSlot[SAssignNew(Combo,SComboButton).ComboButtonStyle(&Style->Combo).ButtonStyle(&Style->Button)
+        ChildSlot[SAssignNew(Combo,SACEPluginComboButton).ComboButtonStyle(&Style->Combo)
             .OnGetMenuContent(this,&SCraftPicker::Menu).ButtonContent()
-            [SNew(SACEPluginText).Text(A._Text).Font(FCoreStyle::GetDefaultFontStyle("Regular",15)).AutoWrapText(true)]];
+            [SNew(SACEPluginText).Text(A._Text).Font(FACEPluginStyle::NativeFont("Regular",15)).AutoWrapText(true)]];
     }
 private:
     TFunction<FChoices()> GetChoices;TFunction<void(const FString&)> Choose;TSharedPtr<FACEPluginStyle> Style;
@@ -64,11 +64,11 @@ private:
                         .OnTextCommitted_Lambda([this](const FText&,ETextCommit::Type Type){if(Type==ETextCommit::OnEnter&&!Filtered.IsEmpty())Select(Filtered[0]);})]
                 +SVerticalBox::Slot().FillHeight(1)
                     [SAssignNew(List,SListView<TSharedPtr<FChoice>>).ListItemsSource(&Filtered).SelectionMode(ESelectionMode::Single)
-                        .OnGenerateRow_Lambda([](TSharedPtr<FChoice> Item,const TSharedRef<STableViewBase>& Owner)
-                            {return SNew(STableRow<TSharedPtr<FChoice>>,Owner).Padding(6)[CraftLabel(Item->CraftLabel)];})
+                        .OnGenerateRow_Lambda([Theme=Style](TSharedPtr<FChoice> Item,const TSharedRef<STableViewBase>& Owner)
+                            {return SNew(STableRow<TSharedPtr<FChoice>>,Owner).Style(&Theme->ComboRow).Padding(6)[CraftLabel(Item->CraftLabel)];})
                         .OnSelectionChanged_Lambda([this](TSharedPtr<FChoice> Item,ESelectInfo::Type Type){if(Type!=ESelectInfo::Direct)Select(Item);})]
                 +SVerticalBox::Slot().AutoHeight().Padding(0,6,0,0)
-                    [SNew(SACEPluginText).Tag(TEXT("AutoCraft.Matches")).ColorAndOpacity(CraftMuted).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
+                    [SNew(SACEPluginText).Tag(TEXT("AutoCraft.Matches")).ColorAndOpacity(CraftMuted).Font(FACEPluginStyle::NativeFont("Regular",12))
                         .Text_Lambda([this](){return FText::FromString(Filtered.IsEmpty()?TEXT("No matching items"):FString::Printf(TEXT("%d matches - Enter selects the first result"),Filtered.Num()));})]]];
         Combo->SetMenuContentWidgetToFocus(Search);return Content;
     }
@@ -130,13 +130,13 @@ public:
         Form->AddSlot().AutoHeight().Padding(0,0,0,8)[Toggle(TEXT("confirm"),TEXT("Confirm this job's crafting prompts automatically"),true)];
         Form->AddSlot().AutoHeight().Padding(0,0,0,12)[Toggle(TEXT("stop_on_failure"),TEXT("Stop after a failed attempt"),false)];
         Form->AddSlot().AutoHeight().Padding(0,0,0,10)[CraftLabel(TEXT("Whole batches may exceed the requested quantity. Max assumes successful crafts. Equipped, traded and retained ingredients are protected; reusable retained tools are allowed."),12,CraftMuted)];
-        Form->AddSlot().AutoHeight()[SNew(SACEPluginText).ColorAndOpacity(CraftMuted).AutoWrapText(true).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
+        Form->AddSlot().AutoHeight()[SNew(SACEPluginText).ColorAndOpacity(CraftMuted).AutoWrapText(true).Font(FACEPluginStyle::NativeFont("Regular",12))
             .Text_Lambda([this](){const auto* R=Recipe();return FText::FromString(R?FString::Printf(TEXT("Yield: %d per craft | Difficulty: %d%s"),R->Yield,R->Difficulty,R->Conditional||R->Modified?TEXT(" | Server requirements / item changes apply"):TEXT("")):TEXT(""));})];
         auto Controls=SNew(SHorizontalBox);
         Controls->AddSlot().FillWidth(1)[Button(TEXT("Make"),[this](){Host->StartAutoCraft();},[this](){return !Plugin->Running&&Plugin->Enabled&&Data().Preview.Valid;},TEXT("AutoCraft.Make"))];
-        Controls->AddSlot().FillWidth(1).Padding(6,0)[SNew(SButton).ButtonStyle(&Style->Button).IsEnabled_Lambda([this](){return Plugin->Running;})
+        Controls->AddSlot().FillWidth(1).Padding(6,0)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&Style->Button).IsEnabled_Lambda([this](){return Plugin->Running;})
             .OnClicked_Lambda([this](){Host->PauseAutoCraft();return FReply::Handled();})
-            [SNew(SACEPluginText).Justification(ETextJustify::Center).Font(FCoreStyle::GetDefaultFontStyle("Regular",15)).Text_Lambda([this](){return FText::FromString(Data().Paused?TEXT("Resume"):TEXT("Pause"));})]];
+            [SNew(SACEPluginText).Justification(ETextJustify::Center).Font(FACEPluginStyle::NativeFont("Regular",15)).Text_Lambda([this](){return FText::FromString(Data().Paused?TEXT("Resume"):TEXT("Pause"));})]];
         Controls->AddSlot().FillWidth(1)[Button(TEXT("Stop"),[this](){Host->Stop(Plugin->Id,TEXT("Stopped by player; an in-flight craft may finish."));},[this](){return Plugin->Running;},TEXT("AutoCraft.Stop"))];
         ChildSlot[SNew(SBorder).BorderImage(&Style->Background).Padding(14)[SNew(SVerticalBox)
             +SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility(Args._ShowTitle?EVisibility::Visible:EVisibility::Collapsed)[CraftLabel(TEXT("Auto Craft"),24)]]
@@ -145,17 +145,17 @@ public:
             +SVerticalBox::Slot().AutoHeight().Padding(0,0,0,10)[SNew(SHorizontalBox)
                 +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0,0,8,0)
                     [SNew(SACEPluginText).Tag(TEXT("AutoCraft.InventorySummary")).AutoWrapText(true)
-                        .Font(FCoreStyle::GetDefaultFontStyle("Regular",13))
+                        .Font(FACEPluginStyle::NativeFont("Regular",13))
                         .ColorAndOpacity_Lambda([this](){return FSlateColor(Data().Preview.Valid?FLinearColor(.55f,.9f,.5f):CraftGold);})
                         .Text_Lambda([this](){return FText::FromString(Data().InventorySummary);})]
                 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
                     [Button(TEXT("Check inventory"),[this](){Host->RefreshAutoCraft(true);},[](){return true;},TEXT("AutoCraft.InventoryRefresh"))]]
             +SVerticalBox::Slot().AutoHeight().Padding(0,0,0,12)[SNew(SACEPluginText).AutoWrapText(true).ColorAndOpacity(CraftGold)
-                .Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).Text_Lambda([this](){return FText::FromString(Plugin->Status);})]
+                .Font(FACEPluginStyle::NativeFont("Regular",14)).Text_Lambda([this](){return FText::FromString(Plugin->Status);})]
             +SVerticalBox::Slot().FillHeight(1)[SNew(SScrollBox)+SScrollBox::Slot()[SNew(SVerticalBox)
                 +SVerticalBox::Slot().AutoHeight()[Form]
                 +SVerticalBox::Slot().AutoHeight().Padding(0,12)[SNew(SBorder).BorderImage(&Style->SectionFrame).Padding(12)
-                    [SNew(SACEPluginText).Tag(TEXT("AutoCraft.Materials")).AutoWrapText(true).Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).Text_Lambda([this](){return FText::FromString(Data().Details);})]]]]
+                    [SNew(SACEPluginText).Tag(TEXT("AutoCraft.Materials")).AutoWrapText(true).Font(FACEPluginStyle::NativeFont("Regular",14)).Text_Lambda([this](){return FText::FromString(Data().Details);})]]]]
             +SVerticalBox::Slot().AutoHeight().Padding(0,8,0,0)[SNew(SCheckBox).Style(&Style->Check)
                 .IsChecked_Lambda([this](){return Plugin->Enabled?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                 .OnCheckStateChanged_Lambda([this](ECheckBoxState State){Host->SetEnabled(Plugin->Id,State==ECheckBoxState::Checked);})[CraftLabel(TEXT("Enable Auto Craft"))]]]];
@@ -175,7 +175,7 @@ private:
     {return SNew(SCheckBox).Style(&Style->Check).IsChecked_Lambda([this,Key,Default](){return Option(Key,Default)?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
         .OnCheckStateChanged_Lambda([this,Key](ECheckBoxState State){Plugin->Profile->SetBoolField(Key,State==ECheckBoxState::Checked);Save();})[CraftLabel(Caption)];}
     TSharedRef<SWidget> Button(const FString& Caption,TFunction<void()> Action,TFunction<bool()> Enabled,const TCHAR* ControlTag)
-    {return SNew(SButton).Tag(FName(ControlTag)).ButtonStyle(&Style->Button).ContentPadding(FMargin(10,8)).IsEnabled_Lambda(MoveTemp(Enabled))
+    {return SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).Tag(FName(ControlTag)).ButtonStyle(&Style->Button).IsEnabled_Lambda(MoveTemp(Enabled))
         .OnClicked_Lambda([Action](){Action();return FReply::Handled();})[CraftLabel(Caption,15)];}
 };
 }

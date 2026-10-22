@@ -35,6 +35,8 @@
 #include "RenderingThread.h"
 #include "UObject/StrongObjectPtr.h"
 #include "Input/DragAndDrop.h"
+#include "HAL/IConsoleManager.h"
+#include "UObject/UObjectIterator.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACELauncherDirectoryTest,"ACE.Launcher.DirectoryAndProfiles",
  EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
@@ -443,4 +445,27 @@ bool FACELauncherViewportTest::RunTest(const FString&)
     TestNull(TEXT("A late startup callback cannot cover character selection"),PC->LoginWidget.Get());
     return true;
 }
+// This opt-in process test presses the actual lobby button. It cannot run in
+// PIE or a normal automation batch, because success terminates its own client.
+static FAutoConsoleCommandWithWorld GACEQuitButtonTest(TEXT("ace.TestQuitButton"),
+ TEXT("With -ACEQuitProcessTest, press the lobby Quit button in an isolated -game process."),
+ FConsoleCommandWithWorldDelegate::CreateLambda([](UWorld* World)
+ {
+    if (!World || !World->IsGameWorld() || World->IsPlayInEditor()
+        || !FParse::Param(FCommandLine::Get(),TEXT("ACEQuitProcessTest"))) return;
+    FTimerHandle Handle;
+    World->GetTimerManager().SetTimer(Handle, [Weak=TWeakObjectPtr<UWorld>(World)]()
+    {
+        for (TObjectIterator<UACELoginActionButton> It; It; ++It)
+            if (It->Action==TEXT("quit") && It->Owner.IsValid() && It->Owner->IsInViewport()
+                && It->Owner->GetWorld()==Weak.Get())
+            {
+                UE_LOG(LogTemp, Display, TEXT("ACE quit process test: pressing the lobby Quit button"));
+                It->OnClicked.Broadcast();
+                return;
+            }
+        UE_LOG(LogTemp, Error, TEXT("ACE quit process test: lobby Quit button was not found"));
+        FPlatformMisc::RequestExitWithStatus(false, 1);
+    }, 5.f, false);
+ }));
 #endif

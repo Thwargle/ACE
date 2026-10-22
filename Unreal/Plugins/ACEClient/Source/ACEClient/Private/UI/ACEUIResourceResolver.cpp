@@ -13,6 +13,7 @@ void UACEUIResourceResolver::Initialize(UACEDatSubsystem* InDat)
 	Cache.Reset();
 	IconCache.Reset();
 	CompositeCache.Reset();
+	HitMasks.Reset();
 	FontRenderer.Reset();
 	FontAtlasCache.Reset();
 	FontAtlasTint.Reset();
@@ -38,6 +39,7 @@ void UACEUIResourceResolver::Shutdown()
 	Cache.Reset();
 	IconCache.Reset();
 	CompositeCache.Reset();
+	HitMasks.Reset();
 	FontRenderer.Reset();
 	Dat = nullptr;
 }
@@ -109,6 +111,36 @@ UTexture2D* UACEUIResourceResolver::ResolveTexture(uint32 ResourceId, uint32 Alp
 		return Tex;
 	}
 	return nullptr;
+}
+
+bool UACEUIResourceResolver::IsPointInHitMask(uint32 ResourceId, FIntPoint Point)
+{
+	if (!ResourceId || !Dat || !Dat->IsDatReady() || !Dat->GetTextureResolver()) return true;
+	FHitMask* Mask = HitMasks.Find(ResourceId);
+	if (!Mask)
+	{
+		Mask = &HitMasks.Add(ResourceId);
+		FACEDatTexture Raw;
+		FACEDatDecodedSurface Image;
+		auto* Resolver = Dat->GetTextureResolver();
+		if (Resolver->LoadTextureForUi(ResourceId, Raw) && Resolver->DecodeTextureForUi(Raw, Image)
+			&& Image.Width > 0 && Image.Height > 0 && Image.Pixels.Num() == Image.Width * Image.Height)
+		{
+			Mask->Size = FIntPoint(Image.Width, Image.Height);
+			Mask->HitPixels.Init(false, Image.Pixels.Num());
+			for (int32 I = 0; I < Image.Pixels.Num(); ++I)
+			{
+				// Retail SurfaceWindow::PointTestOverlay ignores alpha, then UIRegion
+				// inverts the result: black accepts input, nonblack passes through.
+				// These are interaction masks, not an opacity threshold on the button art.
+				const FColor& Pixel = Image.Pixels[I];
+				Mask->HitPixels[I] = (Pixel.R | Pixel.G | Pixel.B) == 0;
+			}
+		}
+	}
+	// Retail only applies a mask where it has pixels; an absent mask keeps the region's bounds.
+	if (Point.X < 0 || Point.Y < 0 || Point.X >= Mask->Size.X || Point.Y >= Mask->Size.Y) return true;
+	return Mask->HitPixels[Point.Y * Mask->Size.X + Point.X];
 }
 
 UTexture2D* UACEUIResourceResolver::ResolveFloatingHealthTexture(uint32 ResourceId)
@@ -390,7 +422,7 @@ UTexture2D* UACEUIResourceResolver::ResolveItemBackground(uint32 ItemType,uint32
 	auto* Resolver=Dat->GetTextureResolver();
 	if (!DecodeIcon(Resolver,BackgroundId,Pixels)) return nullptr;
 	if (DecodeIcon(Resolver,UnderlayId,Underlay)) OverIcon(Pixels,Underlay);
-	auto* Texture=FACEDatTextureResolver::CreateTransientRgbaUi(32,32,Pixels);
+	auto* Texture=FACEDatTextureResolver::CreateTransientRgbaUiIcon(32,32,Pixels);
 	ItemCompositeCache.Add(Key,Texture); return Texture;
 }
 
@@ -433,7 +465,7 @@ UTexture2D* UACEUIResourceResolver::ResolveItemForeground(uint32 IconId,uint32 O
 			OverIcon(Pixels,Overlay);
 		}
 	}
-	auto* Texture=FACEDatTextureResolver::CreateTransientRgbaUi(32,32,Pixels);
+	auto* Texture=FACEDatTextureResolver::CreateTransientRgbaUiIcon(32,32,Pixels);
 	ItemCompositeCache.Add(Key,Texture); return Texture;
 }
 
@@ -459,7 +491,7 @@ UTexture2D* UACEUIResourceResolver::ResolveSpellIcon(uint32 SpellId)
 		for (int32 I = 0; I < 1024; ++I) if (Pixels[I] == FColor::White) Pixels[I] = Effect[I];
 	const uint32 TargetOverlay = (Flags & 0x2000) ? 4 : (Flags & 8) ? 3 : 0;
 	if (TargetOverlay && DecodeIcon(Resolver, ResolveMappedDid(EffectMap, TargetOverlay, 33), Overlay)) OverIcon(Pixels, Overlay);
-	auto* Texture = FACEDatTextureResolver::CreateTransientRgbaUi(32, 32, Pixels);
+	auto* Texture = FACEDatTextureResolver::CreateTransientRgbaUiIcon(32, 32, Pixels);
 	SpellIconCache.Add(SpellId, Texture); return Texture;
 }
 
@@ -501,6 +533,12 @@ bool UACEUIResourceResolver::TryGetCursor(uint32 CursorImageId, FCursorDesc& Out
 	Out.HotY = 0;
 	// Hotspots are in UIAssetManifest.json cursor entries — load when cursor table is imported.
 	return CursorImageId != 0;
+}
+
+uint32 UACEUIResourceResolver::ResolveCursorId(uint32 CursorEnum)
+{
+	// ClientUISystem::UpdateCursorState -> DBObj::GetDIDByEnum(enum, 6).
+	return ResolveMappedDid(0x2500000F, CursorEnum, CursorEnum);
 }
 
 uint32 UACEUIResourceResolver::ResolveTargetIndicatorId(uint32 ImageEnum)

@@ -101,6 +101,52 @@ bool FACEUCMElementSelectionTest::RunTest(const FString&)
     TestEqual(TEXT("Explicit manual power remains supported"),Step()->GetNumberField(TEXT("power")),.7);
     return !HasAnyErrors();
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMMonsterDamageTest,"ACE.Plugins.MonsterDamageOverrides",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMMonsterDamageTest::RunTest(const FString&)
+{
+    auto Json=[](const TCHAR* Text){TSharedPtr<FJsonObject> O;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text),O);return O;};
+    FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    auto Snapshot=[&](){return Json(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"action_serial":0,"action_error":0,"combat_mode":8,"components_required":false,"spells":[],"targets":[{"id":500,"name":"Rat","identified":true,"distance":1,"resists":{"8":0.5,"16":2}}],"inventory":[]})"));};
+    auto Profile=[&](){return Json(TEXT(R"({"buffing":false,"recovery":false,"looting":false,"combat":"auto","damage_type":16,"monsters":[{"name":"Rat","damage_type":8}]})"));};
+    auto Step=[&](auto S,auto P){FACEPluginVM VM;TestTrue(TEXT("Monster policy loads"),VM.Load(Source,Error));TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
+    auto Items=[&](auto S,const TCHAR* Value){S->SetArrayField(TEXT("inventory"),Json(Value)->GetArrayField(TEXT("items")));};
+    for(bool Explicit:{false,true})
+    {
+        auto S=Snapshot(),P=Profile();
+        Items(S,TEXT(R"({"items":[{"id":90,"name":"Cold sword","type":1,"damage_type":16,"damage":100,"equipped":true,"equipped_slot":1048576,"identified":true,"can_wield":true},{"id":91,"name":"Fire sword","type":1,"damage_type":8,"damage":20,"identified":true,"can_wield":true}]})"));
+        if(Explicit)P->GetArrayField(TEXT("monsters"))[0]->AsObject()->SetNumberField(TEXT("weapon"),90);
+        else P->SetNumberField(TEXT("melee_weapon"),90);
+        TestEqual(TEXT("Monster fire overrides incompatible weapon preference and resistance"),Step(S,P)->GetNumberField(TEXT("item")),91.);
+        auto Inv=S->GetArrayField(TEXT("inventory"));Inv[0]->AsObject()->SetBoolField(TEXT("equipped"),false);Inv[1]->AsObject()->SetBoolField(TEXT("equipped"),true);
+        TestEqual(TEXT("Confirmed fire weapon attacks"),Step(S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+        Inv[0]->AsObject()->SetBoolField(TEXT("equipped"),true);Inv[0]->AsObject()->SetNumberField(TEXT("equipped_slot"),ACEEquipMask::Shield);
+        auto I=Step(S,P);TestEqual(TEXT("Incompatible offhand produces equipment action"),I->GetStringField(TEXT("action")),FString(TEXT("equip")));
+        TestTrue(TEXT("Incompatible offhand is removed before attacking"),I->GetBoolField(TEXT("unequip")));
+        Inv[0]->AsObject()->SetBoolField(TEXT("equipped"),false);Inv[1]->AsObject()->SetNumberField(TEXT("damage_type"),0);
+        TestEqual(TEXT("Unknown or wrong damage never silently attacks"),Step(S,P)->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
+    }
+    {
+        auto S=Snapshot(),P=Profile();P->SetStringField(TEXT("combat"),TEXT("magic"));P->SetNumberField(TEXT("attack_spell"),10);
+        Items(S,TEXT(R"({"items":[{"id":90,"name":"Wand","type":32768,"identified":true,"can_wield":true,"equipped":true}]})"));
+        S->SetArrayField(TEXT("spells"),Json(TEXT(R"({"items":[{"id":10,"name":"Cold bolt","category":119,"school":1,"power":200,"skill":300},{"id":11,"name":"Fire bolt","category":121,"school":1,"power":100,"skill":300}]})"))->GetArrayField(TEXT("items")));
+        TestEqual(TEXT("Monster fire chooses fire spell over global cold spell"),Step(S,P)->GetNumberField(TEXT("spell")),11.);
+        P->SetArrayField(TEXT("monsters"),{});
+        TestEqual(TEXT("Unmatched monsters retain global spell selection"),Step(S,P)->GetNumberField(TEXT("spell")),10.);
+    }
+    for(int32 AmmoType:{1,2,4})
+    {
+        auto S=Snapshot(),P=Profile();P->SetStringField(TEXT("combat"),TEXT("missile"));
+        Items(S,TEXT(R"({"items":[{"id":90,"name":"Launcher","type":256,"damage_type":2,"damage_mod":2,"identified":true,"can_wield":true,"equipped":true},{"id":91,"name":"Cold ammo","type":256,"slots":8388608,"damage_type":16,"damage":100,"identified":true,"can_wield":true,"equipped":true},{"id":92,"name":"Fire ammo","type":256,"slots":8388608,"damage_type":8,"damage":20,"identified":true,"can_wield":true}]})"));
+        for(auto V:S->GetArrayField(TEXT("inventory")))V->AsObject()->SetNumberField(TEXT("ammo_type"),AmmoType);
+        TestEqual(TEXT("All launcher families switch to monster-requested ammunition"),Step(S,P)->GetNumberField(TEXT("item")),92.);
+        S->GetArrayField(TEXT("inventory"))[2]->AsObject()->SetBoolField(TEXT("equipped"),true);
+        TestEqual(TEXT("Confirmed matching ammo permits attack"),Step(S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+        S->GetArrayField(TEXT("inventory"))[2]->AsObject()->SetBoolField(TEXT("can_wield"),false);
+        TestEqual(TEXT("Missing eligible fire ammo never fires cold ammo"),Step(S,P)->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
+    }
+    return !HasAnyErrors();
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMBlockedRouteTest,"ACE.Plugins.BlockedRouteSafety",
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACEUCMBlockedRouteTest::RunTest(const FString&)

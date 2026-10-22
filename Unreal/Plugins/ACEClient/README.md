@@ -23,6 +23,15 @@ coverage and build-specific results are documented in [Tests/README.md](Tests/RE
 3. Engine modules: `Sockets`, `Networking`, `UMG`, `ProceduralMeshComponent`
 4. Place retail DAT files under `C:/Turbine/Asheron's Call` (or set `ACEDatSubsystem.DatDirectory`)
 
+## Lower-cost video settings
+
+In Options → Config → Rendering Quality Options, set **Shadows** to **Off**
+and **Dynamic lights** to **Off**, then Apply. Low and Medium shadow settings
+reduce shadow distance and cascade count; Dynamic lights Low keeps at most two
+nearby spell or weapon lights and disables doorway spill lights. Full retains
+the normal lighting budget. Particle visuals, sunlight and ambient room
+illumination remain visible. These preferences persist across restarts.
+
 ## Server config
 
 - Valid account (or auto-create)

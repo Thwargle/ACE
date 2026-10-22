@@ -955,6 +955,13 @@ struct ACECLIENT_API FACEPlayerVitals
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Mana = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 MaxMana = 0;
 
+	/** Raw DAT-derived maximums, including innate/gear bonuses but not enchantments or vitae. */
+	int32 BaseMaxHealth = 0, BaseMaxStamina = 0, BaseMaxMana = 0;
+	int32 GetVitalBase(int32 Id) const
+	{
+		return Id == 1 ? BaseMaxHealth : Id == 3 ? BaseMaxStamina : Id == 5 ? BaseMaxMana : 0;
+	}
+
 	/** Base attribute currents (StartingValue + Ranks), indexed Strength..Self order. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Strength = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Endurance = 0;
@@ -1109,9 +1116,10 @@ struct ACECLIENT_API FACEPlayerVitals
 	{
 		// Unbuffed retail formulas. Keep the high-water mark so Current (often full / buffed
 		// at login) never displays larger than Max — and Max stays correct after damage.
-		const int32 FormulaH = HealthStart + HealthRanks + FMath::RoundToInt(Endurance / 2.f);
-		const int32 FormulaS = StaminaStart + StaminaRanks + Endurance;
-		const int32 FormulaM = ManaStart + ManaRanks + Self;
+		const int32 FormulaH = BaseMaxHealth = HealthStart + HealthRanks + FMath::RoundToInt(Endurance / 2.f)
+			+ StatQualityInts.FindRef(379) + 2 * StatQualityInts.FindRef(390);
+		const int32 FormulaS = BaseMaxStamina = StaminaStart + StaminaRanks + Endurance;
+		const int32 FormulaM = BaseMaxMana = ManaStart + ManaRanks + Self;
 		MaxHealth = FMath::Max3(FormulaH, MaxHealth, Health);
 		MaxStamina = FMath::Max3(FormulaS, MaxStamina, Stamina);
 		MaxMana = FMath::Max3(FormulaM, MaxMana, Mana);
@@ -1585,7 +1593,7 @@ struct ACECLIENT_API FACEWorldObject
 	}
 	/**
 	 * Client should run into Use range for these (doors, chests, loot, NPCs).
-	 * Stuck scenery (signs) and Attackable monsters are select/identify only.
+	 * Non-usable stuck scenery and non-usable attackable monsters are select/identify only.
 	 */
 	bool ShouldClientApproachForUse() const
 	{
@@ -1617,8 +1625,10 @@ struct ACECLIENT_API FACEWorldObject
 		}
 		if ((ItemType & ACEItemType::Creature) != 0)
 		{
-			// Town NPCs / quest givers are typically non-Attackable; monsters are Attackable.
-			return !IsAttackable();
+			// Attackability does not exclude Use (e.g. cow tipping). NeverWalk
+			// still sends Use, but leaves any movement decision to the server.
+			return (!IsAttackable() || ACEItemUseable::IsSourceUsable(ItemUseable))
+				&& !ACEItemUseable::HasNeverWalk(ItemUseable);
 		}
 		// Stuck signs: select-only. Stuck world objects with Usable (fountains, etc.): approach
 		// unless NeverWalk (Use in place).

@@ -32,6 +32,13 @@ struct FACEDeckAvailability
     FString Reason;
 };
 
+struct FACEDeckEffectTimer
+{
+    double Remaining=0, Duration=0;
+    float Fraction() const {return Duration>0?float(FMath::Clamp(Remaining/Duration,0.,1.)):0.f;}
+    FString Label() const;
+};
+
 /** Manual shortcuts only. No automation or inventory relocation is performed by the deck. */
 UCLASS()
 class ACECLIENT_API UACEActionDeckSubsystem : public UGameInstanceSubsystem
@@ -49,6 +56,8 @@ public:
     void Refresh(bool Force=false);
     bool IsEnabled() const;
     bool IsOverrideActive() const;
+    bool HidesNativeBar(int32 CombatMode);
+    FACEDeckEffectTimer EffectTimer(int32 Index) const;
     /** Shared by event routing and native polling; never dispatches an action. */
     bool ReservesKey(const FInputChord& Key) const;
     bool HandleKey(const FInputChord& Key,bool Repeat);
@@ -73,6 +82,7 @@ public:
     const FACEDeckAvailability& Availability(int32 Index) const {return Available[Index];}
     bool IsConfigOpen() const {return ConfigOpen;}
     bool Override=false;
+    bool HideSpellBar=false, HideCombatBar=false, ShowTargetTimers=false;
     FString Notice;
 private:
     UPROPERTY() TObjectPtr<UACEClientSubsystem> Client;

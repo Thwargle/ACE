@@ -61,17 +61,17 @@ void LegacyLootPanel()
     {
         auto Input=[&](const TCHAR* Key,const FString& Caption)
         {
-            Add(Text(Caption,15,Muted));Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).Text(FText::FromString(Str(LegacyRule,Key))).OnTextChanged_Lambda([this,Key](const FText& V){LegacyRule->SetStringField(Key,V.ToString());}));
+            Add(Text(Caption,15,Muted));Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).Text(FText::FromString(Str(LegacyRule,Key))).OnTextChanged_Lambda([this,Key](const FText& V){LegacyRule->SetStringField(Key,V.ToString());}));
         };
         Input(TEXT("label"),TEXT("Rule name"));Input(TEXT("expression"),TEXT("VT expression (optional; preserved, not executed by UCM)"));
         const TArray<FString> Actions={TEXT("No loot"),TEXT("Keep"),TEXT("Salvage"),TEXT("Sell"),TEXT("Read"),TEXT("User 1"),TEXT("User 2"),TEXT("User 3"),TEXT("User 4"),TEXT("User 5"),TEXT("Keep up to")};
-        auto Menu=SNew(SVerticalBox);for(int I=0;I<Actions.Num();++I)Menu->AddSlot().AutoHeight()[Button(Actions[I],[this,I](){LegacyRule->SetNumberField(TEXT("action_id"),I);FSlateApplication::Get().DismissAllMenus();Rebuild();})];
+        auto Menu=SNew(SVerticalBox);for(int I=0;I<Actions.Num();++I)Menu->AddSlot().AutoHeight()[MenuButton(Actions[I],[this,I](){LegacyRule->SetNumberField(TEXT("action_id"),I);FSlateApplication::Get().DismissAllMenus();Rebuild();})];
         const int Action=int(Num(LegacyRule,TEXT("action_id")));
-        Add(SNew(SComboButton).ButtonStyle(&Style()).ButtonContent()[Text(Actions.IsValidIndex(Action)?Actions[Action]:FString::Printf(TEXT("Custom action %d"),Action))].MenuContent()[Menu]);
-        if(Action==10){Add(Text(TEXT("Keep # (matching display names; 0 keeps none)"),14,Muted));Add(SNew(SSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).MinValue(0).MaxValue(MAX_int32).Value(int(Num(LegacyRule,TEXT("amount"),1))).OnValueChanged_Lambda([this](int V){LegacyRule->SetNumberField(TEXT("amount"),V);}));}
+        Add(SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[Text(Actions.IsValidIndex(Action)?Actions[Action]:FString::Printf(TEXT("Custom action %d"),Action))].MenuContent()[Menu]);
+        if(Action==10){Add(Text(TEXT("Keep # (matching display names; 0 keeps none)"),14,Muted));Add(SNew(SSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).Font(FACEPluginStyle::NativeFont("Regular",16)).MinValue(0).MaxValue(MAX_int32).Value(int(Num(LegacyRule,TEXT("amount"),1))).OnValueChanged_Lambda([this](int V){LegacyRule->SetNumberField(TEXT("amount"),V);}));}
         if(Action>=5&&Action<=9)Add(Text(TEXT("User actions need their original third-party plugin. The value can be edited and saved, but UCM will not activate it."),14,FLinearColor(1,.65f,.35f)));
         Add(Text(TEXT("Priority (stored by VT; file order controls first-match evaluation)"),14,Muted));
-        Add(SNew(SSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).MinValue(MIN_int32).MaxValue(MAX_int32).Value(int(Num(LegacyRule,TEXT("priority")))).OnValueChanged_Lambda([this](int V){LegacyRule->SetNumberField(TEXT("priority"),V);}));
+        Add(SNew(SSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).Font(FACEPluginStyle::NativeFont("Regular",16)).MinValue(MIN_int32).MaxValue(MAX_int32).Value(int(Num(LegacyRule,TEXT("priority")))).OnValueChanged_Lambda([this](int V){LegacyRule->SetNumberField(TEXT("priority"),V);}));
         auto Reqs=LegacyRule->GetArrayField(TEXT("requirements"));
         for(int I=0;I<Reqs.Num();++I)
         {
@@ -89,14 +89,14 @@ void LegacyLootPanel()
                     {Add(LootPropertyPicker(Kind,Property,[this,Req,J](int32 V){SetLegacyValue(Req,J,FString::FromInt(V));Rebuild();}));continue;}
                     if(Type==9999)
                     {Add(SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).IsChecked(Values[J].Equals(TEXT("true"),ESearchCase::IgnoreCase)?ECheckBoxState::Checked:ECheckBoxState::Unchecked).OnCheckStateChanged_Lambda([this,Req,J](ECheckBoxState S){SetLegacyValue(Req,J,S==ECheckBoxState::Checked?TEXT("true"):TEXT("false"));})[Text(TEXT("Disable this rule"))]);continue;}
-                    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).Text(FText::FromString(Values[J])).OnTextChanged_Lambda([Req,J](const FText& V)
+                    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).Text(FText::FromString(Values[J])).OnTextChanged_Lambda([Req,J](const FText& V)
                     {
                         TArray<FString> Updated;Str(Req,TEXT("body")).Replace(TEXT("\r"),TEXT("")).ParseIntoArray(Updated,TEXT("\n"),false);
                         if(Updated.Num()&&Updated.Last().IsEmpty())Updated.Pop();if(Updated.IsValidIndex(J)){Updated[J]=V.ToString();Req->SetStringField(TEXT("body"),FString::Join(Updated,TEXT("\r\n"))+TEXT("\r\n"));}
                     }));
                 }
             }
-            else Add(SNew(SBox).HeightOverride(100)[SNew(SMultiLineEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).Text(FText::FromString(Str(Req,TEXT("body")))).OnTextChanged_Lambda([Req](const FText& V){Req->SetStringField(TEXT("body"),V.ToString());})]);
+            else Add(SNew(SBox).HeightOverride(100)[SNew(SMultiLineEditableTextBox).Font(FACEPluginStyle::NativeFont("Regular",16)).Text(FText::FromString(Str(Req,TEXT("body")))).OnTextChanged_Lambda([Req](const FText& V){Req->SetStringField(TEXT("body"),V.ToString());})]);
             if(Type>=14&&Type<=16)
             {
                 Add(Text(TEXT("RGB components: 0-255. Hue tolerance is in degrees; saturation/value tolerance is 0-1. Color requirements remain editable but cannot be activated in UCM yet."),13,FLinearColor(1,.65f,.35f)));
@@ -108,17 +108,17 @@ void LegacyLootPanel()
             Add(Button(TEXT("Remove requirement"),[this,I,Reqs]()mutable{Reqs.RemoveAt(I);LegacyRule->SetArrayField(TEXT("requirements"),Reqs);Rebuild();}));
         }
         auto Requirements=SNew(SVerticalBox);TArray<int32> Types;LegacySchemas().GetKeys(Types);Types.Sort();
-        for(int Type:Types){TArray<FString> Fields;LegacySchemas()[Type].ParseIntoArray(Fields,TEXT("|"));Requirements->AddSlot().AutoHeight()[Button(Fields[0],[this,Type,Fields]()
+        for(int Type:Types){TArray<FString> Fields;LegacySchemas()[Type].ParseIntoArray(Fields,TEXT("|"));Requirements->AddSlot().AutoHeight()[MenuButton(Fields[0],[this,Type,Fields]()
         {
             auto Req=MakeShared<FJsonObject>();Req->SetNumberField(TEXT("type"),Type);FString RequirementBody;
             for(int I=1;I<Fields.Num();++I)RequirementBody+=(Type==9999?TEXT("true"):Fields[I].Contains(TEXT("attern"))?TEXT(""):TEXT("0"))+FString(TEXT("\r\n"));
             Req->SetStringField(TEXT("body"),RequirementBody);auto List=LegacyRule->GetArrayField(TEXT("requirements"));List.Add(MakeShared<FJsonValueObject>(Req));LegacyRule->SetArrayField(TEXT("requirements"),List);FSlateApplication::Get().DismissAllMenus();Rebuild();
         })];}
-        Add(SNew(SComboButton).ButtonStyle(&Style()).ButtonContent()[Text(TEXT("+ Add requirement"))].MenuContent()[SNew(SBox).MaxDesiredHeight(320)[SNew(SScrollBox)+SScrollBox::Slot()[Requirements]]]);
+        Add(SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[Text(TEXT("+ Add requirement"))].MenuContent()[SNew(SBox).MaxDesiredHeight(320)[SNew(SScrollBox)+SScrollBox::Slot()[Requirements]]]);
         Add(Button(TEXT("Save rule draft"),[this,Rules]()mutable{auto Check=MakeShared<FJsonObject>();Check->SetStringField(TEXT("format"),TEXT("utl"));Check->SetArrayField(TEXT("rules"),{MakeShared<FJsonValueObject>(LegacyRule)});FString Error;ACEVTProfile::WriteLoot(Check,Error);if(!Error.IsEmpty()){Host->Notice=Error;return;}if(LegacyRuleIndex==INDEX_NONE)Rules.Add(MakeShared<FJsonValueObject>(LegacyRule));else if(Rules.IsValidIndex(LegacyRuleIndex))Rules[LegacyRuleIndex]=MakeShared<FJsonValueObject>(LegacyRule);LegacyDocument->SetArrayField(TEXT("rules"),Rules);LegacyRule.Reset();Rebuild();}));
         Add(Button(TEXT("Cancel rule changes"),[this](){LegacyRule.Reset();Rebuild();}));return;
     }
-    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).HintText(FText::FromString(TEXT("Filter rule names"))).Text(FText::FromString(LegacyFilter)).OnTextCommitted_Lambda([this](const FText& V,ETextCommit::Type){LegacyFilter=V.ToString();LegacyPage=0;Rebuild();}));
+    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).HintText(FText::FromString(TEXT("Filter rule names"))).Text(FText::FromString(LegacyFilter)).OnTextCommitted_Lambda([this](const FText& V,ETextCommit::Type){LegacyFilter=V.ToString();LegacyPage=0;Rebuild();}));
     Add(Button(TEXT("+ New rule"),[this](){LegacyRule=MakeShared<FJsonObject>();LegacyRule->SetStringField(TEXT("label"),TEXT("New rule"));LegacyRule->SetNumberField(TEXT("action_id"),1);LegacyRule->SetNumberField(TEXT("amount"),1);LegacyRule->SetArrayField(TEXT("requirements"),{});LegacyRuleIndex=INDEX_NONE;Rebuild();}));
     TArray<int32> Visible;for(int I=0;I<Rules.Num();++I)if(LegacyFilter.IsEmpty()||Str(Rules[I]->AsObject(),TEXT("label")).Contains(LegacyFilter))Visible.Add(I);
     LegacyPage=FMath::Clamp(LegacyPage,0,FMath::Max(0,(Visible.Num()-1)/25));
@@ -137,7 +137,7 @@ void LegacyLootPanel()
         for(int Direction:{-1,1})if(Rules.IsValidIndex(I+Direction))Buttons->AddSlot()[Button(Direction<0?TEXT("Up"):TEXT("Down"),[this,Rules,I,Direction]()mutable{Rules.Swap(I,I+Direction);LegacyDocument->SetArrayField(TEXT("rules"),Rules);Rebuild();})];
         Buttons->AddSlot()[Button(TEXT("Remove"),[this,Rules,I]()mutable{Rules.RemoveAt(I);LegacyDocument->SetArrayField(TEXT("rules"),Rules);Rebuild();})];RuleCard->AddSlot().AutoHeight()[Buttons];Add(Tile(RuleCard));
     }
-    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).Text(FText::FromString(LegacyName)).HintText(FText::FromString(TEXT("Output filename"))).OnTextChanged_Lambda([this](const FText& V){LegacyName=V.ToString();}));
+    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).Text(FText::FromString(LegacyName)).HintText(FText::FromString(TEXT("Output filename"))).OnTextChanged_Lambda([this](const FText& V){LegacyName=V.ToString();}));
     Add(Button(TEXT("Save UTL copy"),[this](){Host->SaveLegacyLoot(LegacyName,LegacyDocument);}));
     Add(Button(TEXT("Save copy and apply to active loot"),[this]()
     {

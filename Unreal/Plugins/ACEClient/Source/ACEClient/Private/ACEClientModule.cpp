@@ -8,7 +8,7 @@
 void FACEClientModule::StartupModule()
 {
 	ACEProjectMigration::ImportWindowsProfile();
-	// CSM on for a perf pass now that the DAT ring is stable. Virtual/DF stay off.
+	// Use compatible CSM rendering; user scalability controls quality and can disable shadows.
 	// PView (portal draw admission) is not CSM — keep cascaded shadows for lighting.
 	auto ForceInt = [](const TCHAR* Name, int32 Value)
 	{
@@ -19,7 +19,6 @@ void FACEClientModule::StartupModule()
 	};
 	ForceInt(TEXT("r.Shadow.Virtual.Enable"), 0);
 	ForceInt(TEXT("r.Shadow.CSM.Enable"), 1);
-	ForceInt(TEXT("r.Shadow.CSM.MaxCascades"), PLATFORM_ANDROID ? 1 : 4);
 	// UE 5.8 RendererScene initializes PrimitiveOctree with UE_OLD_HALF_WORLD_MAX
 	// (10.5 km). AC coordinates extend to 49 km; octree shadow gathering skips
 	// Yaraq and most of Dereth. The flat gather retains per-primitive frustum and

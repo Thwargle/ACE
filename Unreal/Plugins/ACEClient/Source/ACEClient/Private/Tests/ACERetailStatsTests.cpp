@@ -1,8 +1,21 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
 #include "Engine/GameInstance.h"
+
+
+namespace
+{
+FString ACERetailStatsTestsDatDirectory()
+{
+    FString Directory=TEXT("C:/Turbine/Asheron's Call");
+    FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),Directory);
+    return Directory;
+}
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailStatsTest, "ACE.RetailParity.CharacterStats",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -10,7 +23,7 @@ bool FACERetailStatsTest::RunTest(const FString& Parameters)
 {
     auto* GI = NewObject<UGameInstance>();
     auto* Dat = NewObject<UACEDatSubsystem>(GI);
-    if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat->LoadDatDirectory(ACERetailStatsTestsDatDirectory())) return false;
     FString Tooltip;
     TestTrue(TEXT("Cooking tooltip resolves from the skill table"), Dat->TryGetSkillTooltip(39, Tooltip));
     const FString CookingFormula = TEXT("( (Coordination + Focus) / 3 )\n");
@@ -29,6 +42,24 @@ bool FACERetailStatsTest::RunTest(const FString& Parameters)
     Session.NotifyVitalsChanged();
     TestEqual(TEXT("Cooking uses the DAT coordination/focus formula"), V.Skills[0].Base, 105);
     TestEqual(TEXT("Unbuffed current equals full base, not ranks"), V.Skills[0].Current, 105);
+    {
+        auto Unbuffed=V;Unbuffed.Strength=100;Unbuffed.Quickness=100;Unbuffed.Skills.Reset();
+        for(int32 Id : {6,7,15,22,24,31,32,33,34,39,41,43,44,45,46,47,48,49,54})
+        {
+            auto S=Cooking;S.SkillId=Id;S.Ranks=50;Unbuffed.Skills.Add(S);
+        }
+        Dat->RecomputePlayerStats(Unbuffed,{});
+        for(const auto& S:Unbuffed.Skills)
+            TestEqual(*FString::Printf(TEXT("No phantom bonus without spells or augmentations: skill %d"),S.SkillId),S.Current,S.Base);
+        Unbuffed.StatQualityInts.Add(326,1); // Retail adds Jack of All Trades to current, not raw.
+        Dat->RecomputePlayerStats(Unbuffed,{});
+        for(const auto& S:Unbuffed.Skills)
+            TestEqual(TEXT("Jack of All Trades legitimately shows +5 with an empty spell list"),S.Current-S.Base,5);
+        Unbuffed.Skills[0].AdvancementClass=3;Unbuffed.StatQualityInts.Add(344,3);
+        Dat->RecomputePlayerStats(Unbuffed,{});
+        TestEqual(TEXT("Specialized luminance bonus also affects current without an enchantment"),Unbuffed.Skills[0].Current-Unbuffed.Skills[0].Base,11);
+        TestEqual(TEXT("Specialization bonus does not affect trained skills"),Unbuffed.Skills[1].Current-Unbuffed.Skills[1].Base,5);
+    }
 
     FACEBinaryWriter Skill;
     Skill.WriteUInt8(1); Skill.WriteUInt32(39); Skill.WriteUInt16(10); Skill.WriteUInt16(0);
@@ -66,10 +97,14 @@ bool FACERetailStatsTest::RunTest(const FString& Parameters)
     FACEBinaryWriter Gear; Gear.WriteUInt8(1); Gear.WriteUInt32(379); Gear.WriteInt32(750);
     FACEBinaryReader GearReader(Gear.GetData()); Session.HandlePrivateUpdatePropertyInt(GearReader);
     TestEqual(TEXT("Large health uses server starts, ranks and gear quality"),V.MaxHealth,10800);
+    TestEqual(TEXT("Gear health is part of the raw maximum, not a phantom spell bonus"),V.BaseMaxHealth,V.MaxHealth);
     TestEqual(TEXT("Large stamina has no retail character cap"),V.MaxStamina,14100);
     TestEqual(TEXT("Large mana has no retail character cap"),V.MaxMana,21100);
     End.StatModValue=60; Session.ActiveEnchantments={End}; Session.NotifyVitalsChanged();
     TestEqual(TEXT("Large pool still follows Endurance buff"),V.MaxHealth,10830);
+    TestEqual(TEXT("Raw maximum does not inherit the Endurance buff"),V.MaxHealth-V.BaseMaxHealth,30);
+    TestEqual(TEXT("Stamina uses the same raw-versus-buffed DAT formula"),V.MaxStamina-V.BaseMaxStamina,60);
+    TestEqual(TEXT("Unchanged mana has no bonus"),V.MaxMana,V.BaseMaxMana);
     Session.ActiveEnchantments.Reset(); Session.NotifyVitalsChanged();
     TestEqual(TEXT("Large pool still falls after buff expiry"),V.MaxHealth,10800);
     FACEBinaryWriter RemoveGear; RemoveGear.WriteUInt8(2); RemoveGear.WriteUInt32(379); RemoveGear.WriteInt32(0);
@@ -116,6 +151,7 @@ bool FACERetailStatsTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Removing the strongest horn restores the remaining weaker bonus"),V.MaxHealth,685);
     RemoveHorn(5133);
     TestEqual(TEXT("Horn expiry removes the bonus without retaining a high-water mark"),V.MaxHealth,683);
+    TestEqual(TEXT("Horn expiry restores neutral maximum comparison"),V.MaxHealth,V.BaseMaxHealth);
     Horn(5122,400,10,-600.);
     TestEqual(TEXT("A restored partially elapsed horn still applies its full bonus"),V.MaxHealth,693);
     Session.ActiveEnchantments.Reset(); Session.NotifyVitalsChanged();
@@ -158,6 +194,110 @@ bool FACERetailStatsTest::RunTest(const FString& Parameters)
     float UntrainedProgress=1.f;
     TestFalse(TEXT("Untrained skills have no usage XP progress"),Dat->TryGetSkillRankProgress(1,0,100,UntrainedProgress));
     TestEqual(TEXT("Untrained progress is empty"),UntrainedProgress,0.f);
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailAugmentationStatsTest, "ACE.RetailParity.AugmentationStats",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACERetailAugmentationStatsTest::RunTest(const FString& Parameters)
+{
+    auto* GI = NewObject<UGameInstance>();
+    auto* Dat = NewObject<UACEDatSubsystem>(GI);
+    if (!Dat->LoadDatDirectory(ACERetailStatsTestsDatDirectory())) return false;
+    FACESession Session;
+    Session.StatResolver = [Dat](auto& V, const auto& E) { Dat->RecomputePlayerStats(V, E); };
+    auto& V = Session.PlayerVitals;
+    V.bValid = true;
+    auto Quality = [&](uint32 Key, int32 Value)
+    {
+        FACEBinaryWriter Packet;
+        Packet.WriteUInt8(1); Packet.WriteUInt32(Key); Packet.WriteInt32(Value);
+        FACEBinaryReader Reader(Packet.GetData()); Session.HandlePrivateUpdatePropertyInt(Reader);
+    };
+    auto Attribute = [&](uint32 Id, int32 Start)
+    {
+        FACEBinaryWriter Packet;
+        Packet.WriteUInt8(1); Packet.WriteUInt32(Id); Packet.WriteUInt32(125);
+        Packet.WriteUInt32(Start); Packet.WriteUInt32(0);
+        FACEBinaryReader Reader(Packet.GetData()); Session.HandlePrivateUpdateAttribute(Reader);
+    };
+    // Quickness/Coordination are reversed between attribute and augmentation enums.
+    const uint32 InnateProperties[] = {218, 219, 221, 220, 222, 223};
+    for (uint32 Id = 1; Id <= 6; ++Id)
+    {
+        Attribute(Id, 25);
+        Attribute(Id, 30); // ACE AugmentationDevice raises StartingValue by five.
+        Quality(InnateProperties[Id - 1], 1);
+        TestEqual(TEXT("Innate attribute gain is already in base, counted once"), V.GetAttributeBase(Id), 155);
+        TestEqual(TEXT("Innate attribute gain is not a modified-stat bonus"), V.GetAttributeCurrent(Id), 155);
+    }
+    TestEqual(TEXT("Innate Endurance gain belongs to base health"), V.MaxHealth, V.BaseMaxHealth);
+    TestEqual(TEXT("Innate Endurance gain belongs to base stamina"), V.MaxStamina, V.BaseMaxStamina);
+    TestEqual(TEXT("Innate Self gain belongs to base mana"), V.MaxMana, V.BaseMaxMana);
+
+    const TSet<int32> Melee = {41, 44, 45, 46, 49};
+    const TSet<int32> Magic = {31, 32, 33, 34, 43};
+    const int32 SkillIds[] = {6, 7, 15, 18, 22, 24, 28, 29, 30, 31, 32, 33, 34, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 54};
+    for (int32 Class : {1, 2, 3})
+    {
+        V.Skills.Reset();
+        V.StatQualityInts.Reset();
+        for (int32 Id : SkillIds)
+        {
+            FACESkillInfo Skill;
+            Skill.SkillId = Id; Skill.AdvancementClass = Class;
+            Skill.InitLevel = Class == 3 ? 10 : Class == 2 ? 5 : 0;
+            Skill.Ranks = Class == 1 ? 0 : 50;
+            V.Skills.Add(Skill);
+        }
+        Session.NotifyVitalsChanged();
+        const auto Before = V.Skills;
+        // Apply each skill family separately: no leakage to other skills.
+        for (int32 Property : {300, 301, 302, 365})
+        {
+            Quality(Property, Property == 365 ? 3 : 1);
+            for (int32 Index = 0; Index < V.Skills.Num(); ++Index)
+            {
+                const auto& Skill = V.Skills[Index];
+                const int32 Gain = Property == 365 ? 3 :
+                    ((Property == 300 && Melee.Contains(Skill.SkillId)) ||
+                     (Property == 301 && Skill.SkillId == 47) ||
+                     (Property == 302 && Magic.Contains(Skill.SkillId))) ? 10 : 0;
+                const FString Context = FString::Printf(TEXT("Class %d skill %d augmentation %d"), Class, Skill.SkillId, Property);
+                TestEqual(*Context, Skill.Base, Before[Index].Base + Gain);
+                TestEqual(*(Context + TEXT(" is neutral without spells")), Skill.Current, Skill.Base);
+            }
+            Quality(Property, 0);
+        }
+    }
+
+    // Use a known retail Cooking formula to verify combined bonuses and expiry.
+    V.Skills.Reset();
+    FACESkillInfo Cooking; Cooking.SkillId = 39; Cooking.AdvancementClass = 3;
+    Cooking.InitLevel = 10; Cooking.Ranks = 50; V.Skills.Add(Cooking);
+    Quality(365, 3);
+    TestEqual(TEXT("Cooking base includes rounded augmented attributes and all-skills luminance"), V.Skills[0].Base, 166);
+    FACEActiveEnchantment Focus;
+    Focus.SpellId = 1; Focus.SpellCategory = 101; Focus.StatModType = 0x8001;
+    Focus.StatModKey = 5; Focus.StatModValue = 60;
+    Session.ActiveEnchantments = {Focus}; Session.NotifyVitalsChanged();
+    TestEqual(TEXT("Attribute buff shows only its own increase over augmented base"), V.GetAttributeCurrent(5) - V.GetAttributeBase(5), 60);
+    TestEqual(TEXT("Dependent skill shows only the buff contribution"), V.Skills[0].Current - V.Skills[0].Base, 20);
+    Session.ActiveEnchantments.Reset(); Session.NotifyVitalsChanged();
+    TestEqual(TEXT("Buff expiry restores neutral augmented attributes"), V.GetAttributeCurrent(5), 155);
+    TestEqual(TEXT("Buff expiry restores neutral augmented skills"), V.Skills[0].Current, 166);
+
+    // CACQualities::InqSkill's !raw branch deliberately treats these differently.
+    Quality(326, 1);
+    Quality(344, 3);
+    TestEqual(TEXT("Retail Jack/spec luminance do not overwrite raw skill"), V.Skills[0].Base, 166);
+    TestEqual(TEXT("Retail shows +11 for Jack and three spec luminance ranks without spells"), V.Skills[0].Current, 177);
+    FACEActiveEnchantment Vitae; Vitae.bVitae = true; Vitae.StatModValue = .9f;
+    Session.ActiveEnchantments = {Vitae}; Session.NotifyVitalsChanged();
+    TestEqual(TEXT("Retail applies vitae to innate gains, but not Jack/spec luminance"), V.Skills[0].Current, 160);
+    Session.ActiveEnchantments.Reset(); Session.NotifyVitalsChanged();
+    Quality(326, 0); Quality(344, 0);
+    TestEqual(TEXT("Removing modified-only augmentations restores neutral comparison immediately"), V.Skills[0].Current, V.Skills[0].Base);
+    TestTrue(TEXT("Augmentation updates do not invent active enchantments"), Session.ActiveEnchantments.IsEmpty());
     return true;
 }
 #endif

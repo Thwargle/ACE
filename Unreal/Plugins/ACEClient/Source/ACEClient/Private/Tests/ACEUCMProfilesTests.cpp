@@ -7,6 +7,7 @@
 #include "Mods/ACEUCMProfiles.h"
 #include "Serialization/JsonSerializer.h"
 #include "Mods/ACEPluginSubsystem.h"
+#include "ACEDatSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Slate/WidgetRenderer.h"
@@ -164,6 +165,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMProfilePanelTest, "ACE.Plugins.LinkedPro
 bool FACEUCMProfilePanelTest::RunTest(const FString&)
 {
     auto* GI=NewObject<UGameInstance>();GI->Init();ON_SCOPE_EXIT { GI->Shutdown(); };
+    if(FApp::CanEverRender())
+    {
+        FString Directory=TEXT("C:/Turbine/Asheron's Call");FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),Directory);
+        if(!TestTrue(TEXT("Load retail artwork for profile panel captures"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(Directory)))return false;
+    }
     auto* Host=GI->GetSubsystem<UACEPluginSubsystem>();
     auto CollectText=[](const TSharedRef<SWidget>& Root)
     {

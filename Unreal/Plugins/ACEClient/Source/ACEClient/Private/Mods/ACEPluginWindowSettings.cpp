@@ -101,7 +101,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakePluginWindowControls(const FString&
         .OnValueChanged_Lambda([H,Id](float Value){if(H.IsValid())H->SetPluginWindowOpacity(Id,FMath::RoundToInt(Value)/100.f,false);})
         .OnMouseCaptureEnd_Lambda([H]{if(H.IsValid())H->SaveSettings();})
         .OnControllerCaptureEnd_Lambda([H]{if(H.IsValid())H->SaveSettings();})
-        .ToolTipText(FText::FromString(TEXT("Fade backgrounds and borders only. Text, icons and controls remain readable.")))];
+        .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Fade backgrounds and borders only. Text, icons and controls remain readable."))))];
     Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(8,0,0,0)[SNew(SBox).WidthOverride(42).HAlign(HAlign_Right)
         [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",14))
             .Text_Lambda([H,Id]{return FText::FromString(FString::Printf(TEXT("%d%%"),H.IsValid()?FMath::RoundToInt(H->GetPluginWindowOpacity(Id)*100):100));})]];
@@ -116,9 +116,9 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakePluginWindowControls(const FString&
         Options->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SCheckBox).Tag(FName(*(TEXT("PluginPin.")+Id))).Style(&Theme->Check)
             .IsChecked_Lambda([H,Id]{return H.IsValid()&&H->IsPluginWindowPinned(Id)?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
             .OnCheckStateChanged_Lambda([H,Id](ECheckBoxState V){if(H.IsValid())H->SetPluginWindowPinned(Id,V==ECheckBoxState::Checked);})
-            .ToolTipText(FText::FromString(TEXT("Hide the window frame and lock its position. Hold Quick-show pinned windows to move or unpin.")))
+            .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Hide the window frame and lock its position. Hold Quick-show pinned windows to move or unpin."))))
             [Text(TEXT("Pin / hide frame"))]];
-        Options->AddSlot().AutoWidth()[SNew(SButton).ButtonStyle(&Theme->Button).IsFocusable(false).ContentPadding(6)
+        Options->AddSlot().AutoWidth()[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&Theme->Button).IsFocusable(false)
             .IsEnabled_Lambda([H,Id]{return H.IsValid()&&H->HasPluginWindowOpacity(Id)&&!H->IsPluginOpacityGlobal();})
             .OnClicked_Lambda([H,Id]{if(H.IsValid())H->ResetPluginWindowOpacity(Id);return FReply::Handled();})
             [Text(TEXT("Use plugin/default"))]];

@@ -101,7 +101,7 @@ FVector2D UACEPluginSubsystem::LedgerSize(const FString& Id) const
 {
     const bool Locked=IsPluginWindowChromeHidden(Id);
     return Id==TEXT("supplyledger")?FVector2D(200,14+FMath::Clamp(LedgerSupplies.Num(),1,15)*26+LedgerChromeHeight(Id,Locked))
-        :FVector2D(290,164+LedgerChromeHeight(Id,Locked));
+        :FVector2D(290,190+LedgerChromeHeight(Id,Locked));
 }
 double UACEPluginSubsystem::LedgerChromeHeight(const FString& Id,bool Hidden) const
 {
@@ -125,7 +125,7 @@ namespace
         TWeakObjectPtr<UACEPluginSubsystem> Host;FString Id;
         TSharedPtr<FACEPluginStyle> Style;TSharedPtr<SVerticalBox> Body;
         uint32 Revision=0;bool Locked=false;
-        FText HuntText[4][2], HuntEstimate;
+        FText HuntText[4][2], HuntEstimate, HuntElapsed;
         int64 HuntSecond=-1,HuntXP=-1,HuntLum=-1,CharacterXP=-1;
         int64 AvailableXP=-1,AvailableLum=-1,MaximumLum=-1;
         double HuntStarted=-1;int32 HuntLevel=-1;bool HuntValid=false,LumKnown=false;
@@ -180,11 +180,14 @@ namespace
             if(HasLum&&MaximumLum>0&&AvailableLum>=MaximumLum)
                 HuntText[3][1]=FText::Format(FText::FromString(TEXT("{0} (cap)")),HuntText[3][1]);
             HuntEstimate=EstimateHuntLevel();
+            const int64 Elapsed=FMath::FloorToInt64(L.Elapsed(Now));
+            HuntElapsed=L.Started>0?FText::FromString(FString::Printf(TEXT("%02lld:%02lld:%02lld"),
+                Elapsed/3600,(Elapsed/60)%60,Elapsed%60)):Unknown;
         }
         TSharedRef<SWidget> Label(const FString& Text)
         {return SNew(SACEPluginText).Text(FText::FromString(Text)).Font(FCoreStyle::GetDefaultFontStyle("Regular",12));}
         TSharedRef<SWidget> Button(const FString& Text,const FString& Tip,TFunction<void()> Action)
-        {return SNew(SButton).Tag(Text==TEXT("Reset run")?TEXT("LedgerReset"):TEXT("LedgerEdit")).IsFocusable(false).ButtonStyle(&Style->Button).ContentPadding(FMargin(8,3)).ToolTipText(FText::FromString(Tip)).OnClicked_Lambda([Action]{Action();return FReply::Handled();})[Label(Text)];}
+        {return SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).Tag(Text==TEXT("Reset run")?TEXT("LedgerReset"):TEXT("LedgerEdit")).IsFocusable(false).ButtonStyle(&Style->Button).ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Tip))).OnClicked_Lambda([Action]{Action();return FReply::Handled();})[Label(Text)];}
         void Rebuild()
         {
             if(!Host.IsValid())return;FACEPluginStyle::Use(Host.Get(),Id);Revision=Host->GetSupplyRevision();Locked=Host->IsPluginWindowChromeHidden(Id);Body->ClearChildren();UpdateHuntText();
@@ -195,18 +198,18 @@ namespace
                     .Text(FText::FromString(TEXT("Select item\nthen +"))).Font(FCoreStyle::GetDefaultFontStyle("Regular",10))];
                 for(int32 I=0;I<LedgerSupplies.Num();++I)
                 {
-                    auto Row=SNew(SHorizontalBox).ToolTipText(FText::FromString(LedgerSupplies[I].Name+(Locked?TEXT("\nUse the game UI lock or hold Quick-show pinned windows to move and edit this HUD."):TEXT(""))));
+                    auto Row=SNew(SHorizontalBox).ToolTip(FACEPluginStyle::Tooltip(FText::FromString(LedgerSupplies[I].Name+(Locked?TEXT("\nUse the game UI lock or hold Quick-show pinned windows to move and edit this HUD."):TEXT("")))));
                     const auto& Supply=LedgerSupplies[I];
                     auto Toggle=[H=Host,I]{if(H.IsValid())H->ToggleSupplyName(I);return FReply::Handled();};
-                    Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[SNew(SButton).Tag(FName(*FString::Printf(TEXT("SupplyIcon.%d"),I)))
-                        .ButtonStyle(&FCoreStyle::Get().GetWidgetStyle<FButtonStyle>("NoBorder")).ContentPadding(0).IsFocusable(false)
-                        .ToolTipText(FText::FromString(Supply.Name+TEXT("\nClick icon or name to toggle all item names. Resize the window to move the counts.")))
+                    Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[SNew(SACEPluginButton).ContentPadding(FMargin(0)).Tag(FName(*FString::Printf(TEXT("SupplyIcon.%d"),I)))
+                        .ButtonStyle(&FCoreStyle::Get().GetWidgetStyle<FButtonStyle>("NoBorder")).IsFocusable(false)
+                        .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Supply.Name+TEXT("\nClick icon or name to toggle all item names. Resize the window to move the counts."))))
                         .OnClicked_Lambda(Toggle)[SNew(SBox).WidthOverride(22).HeightOverride(22)
                         [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[SNew(SOverlay)
                         +SOverlay::Slot()[SNew(SImage).Image(Style->ItemImage(Supply,false))]
                         +SOverlay::Slot()[SNew(SImage).Image(Style->ItemImage(Supply,true))]]]]];
-                    Row->AddSlot().FillWidth(1).VAlign(VAlign_Center).Padding(4,0)[SNew(SButton).Tag(FName(*FString::Printf(TEXT("SupplyName.%d"),I)))
-                        .ButtonStyle(&FCoreStyle::Get().GetWidgetStyle<FButtonStyle>("NoBorder")).ContentPadding(0).IsFocusable(false).HAlign(HAlign_Left)
+                    Row->AddSlot().FillWidth(1).VAlign(VAlign_Center).Padding(4,0)[SNew(SACEPluginButton).ContentPadding(FMargin(0)).Tag(FName(*FString::Printf(TEXT("SupplyName.%d"),I)))
+                        .ButtonStyle(&FCoreStyle::Get().GetWidgetStyle<FButtonStyle>("NoBorder")).IsFocusable(false)
                         .Clipping(EWidgetClipping::ClipToBounds).OnClicked_Lambda(Toggle)
                         .Visibility_Lambda([H=Host]{return H.IsValid()&&H->AreSupplyNamesVisible()?EVisibility::Visible:EVisibility::Hidden;})
                         [Label(Supply.Name)]];
@@ -217,7 +220,7 @@ namespace
                     Rows->AddSlot().AutoHeight().Padding(2,2)[Row];
                 }
                 Body->AddSlot().FillHeight(1)[SNew(SScrollBox).ScrollBarThickness(FVector2D(4,4)).ScrollBarPadding(0)+SScrollBox::Slot()[Rows]];
-                Body->SetToolTipText(FText::FromString(Locked?TEXT("Use the game UI lock or hold Quick-show pinned windows to move and edit this HUD."):TEXT("Track selected items across your inventory.")));
+                Body->SetToolTip(FACEPluginStyle::Tooltip(FText::FromString(Locked?TEXT("Use the game UI lock or hold Quick-show pinned windows to move and edit this HUD."):TEXT("Track selected items across your inventory."))));
                 if(!Locked||LedgerSupplies.IsEmpty())
                 {
                     Body->AddSlot().AutoHeight().HAlign(HAlign_Left)[Button(TEXT("+"),TEXT("Track the selected inventory item"),[H=Host]{if(H.IsValid())H->EditSupplySelection(true);})];
@@ -246,10 +249,16 @@ namespace
                 Estimate->AddSlot().AutoWidth().HAlign(HAlign_Right)[SNew(SACEPluginText).Tag(TEXT("HuntNextLevel"))
                     .Font(FCoreStyle::GetDefaultFontStyle("Regular",12)).Text_Lambda([this]{return HuntEstimate;})];
                 Body->AddSlot().AutoHeight().Padding(3,3)[Estimate];
-                Body->SetToolTipText(FText::FromString(FString(TEXT("Last 5 min: gains in the rolling five-minute window. Per hour: average since login or Reset. Spending XP/luminance does not subtract earned totals. Closing this window keeps tracking."))
+                auto Elapsed=SNew(SHorizontalBox);
+                Elapsed->AddSlot().FillWidth(1).Padding(0,0,8,0)[Label(TEXT("Time since last reset"))];
+                Elapsed->AddSlot().AutoWidth().HAlign(HAlign_Right)[SNew(SACEPluginText).Tag(TEXT("HuntElapsed"))
+                    .Font(FCoreStyle::GetDefaultFontStyle("Regular",12)).Text_Lambda([this]{return HuntElapsed;})];
+                Body->AddSlot().AutoHeight().Padding(3,3)[Elapsed];
+                Body->SetToolTip(FACEPluginStyle::Tooltip(FText::FromString(FString(TEXT("Last 5 min: gains in the rolling five-minute window. Per hour: average since login or Reset. Spending XP/luminance does not subtract earned totals. Closing this window keeps tracking."))
                     +TEXT(" Available shows your current spendable balance, not earnings. Luminance counts increases credited by the server, after bonuses and sharing. Rewards blocked by the cap or deposited in an unreported custom bank cannot be measured from this balance. -- means no baseline has arrived yet.")
                     +TEXT(" Next level estimates the remaining time using your average XP rate since login or Reset.")
-                    +(Locked?TEXT("\nUse the game UI lock or hold Quick-show pinned windows to move and edit this HUD."):TEXT(""))));
+                    +TEXT(" Time since last reset shows hours:minutes:seconds since login or Reset.")
+                    +(Locked?TEXT("\nUse the game UI lock or hold Quick-show pinned windows to move and edit this HUD."):TEXT("")))));
                 if(!Locked)Body->AddSlot().AutoHeight()[Button(TEXT("Reset run"),TEXT("Clear totals and begin a new estimate now"),[H=Host]{if(H.IsValid())H->ResetHuntLedger();})];
             }
         }

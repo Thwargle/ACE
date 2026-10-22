@@ -260,7 +260,8 @@ bool FACEAutoCraftTest::RunTest(const FString&)
         Slate.ProcessKeyUpEvent(FKeyEvent(EKeys::SpaceBar,FModifierKeysState(),0,false,0,0));Frame();Frame();
         TestTrue(TEXT("Check inventory rescans and restores Make"),Make->IsEnabled()&&Summary->GetText().ToString().StartsWith(TEXT("Inventory ready:")));
         auto Picker=Find(Panel,TEXT("AutoCraft.Item"),true);if(!TestTrue(TEXT("Item selector renders"),Picker.IsValid()))return false;
-        auto Combo=StaticCastSharedPtr<SComboButton>(Find(Picker.ToSharedRef(),TEXT("SComboButton"),false));
+        auto Combo=StaticCastSharedPtr<SComboButton>(Find(Picker.ToSharedRef(),TEXT("SACEPluginComboButton"),false));
+        if(!TestTrue(TEXT("Craft picker uses the shared dropdown"),Combo.IsValid()))return false;
         Combo->SetIsOpen(true);Frame();auto Menu=Combo->GetMenuWindow();if(!TestTrue(TEXT("Search menu opens"),Menu.IsValid()))return false;
         auto Search=StaticCastSharedPtr<SEditableTextBox>(Find(Menu.ToSharedRef(),TEXT("AutoCraft.Search"),true));
         auto Matches=StaticCastSharedPtr<STextBlock>(Find(Menu.ToSharedRef(),TEXT("AutoCraft.Matches"),true));

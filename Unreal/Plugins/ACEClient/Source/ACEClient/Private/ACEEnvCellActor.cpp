@@ -1,4 +1,5 @@
 #include "ACEEnvCellActor.h"
+#include "ACERuntimeOptions.h"
 #include "Components/PointLightComponent.h"
 #include "Components/SpotLightComponent.h"
 #include "ACEDatSubsystem.h"
@@ -247,15 +248,18 @@ void AACEEnvCellActor::SetEnvCellHiddenInGame(bool bHide)
 
 void AACEEnvCellActor::SetSunCastShadow(bool bCast)
 {
+	bRequestedSunCastShadow = bCast;
 	if (!CellMesh)
 	{
 		return;
 	}
 	// The room also occludes its local entrance light when PView hides its draw.
-	bCast = bCast || !DoorwayLights.IsEmpty();
-	CellMesh->bCastHiddenShadow = !DoorwayLights.IsEmpty();
-	if (static_cast<bool>(CellMesh->CastShadow) != bCast || CellMesh->bCastDynamicShadow != bCast)
+	const bool bDoorwayShadows = ACERuntimeOptions::DynamicLightingQuality() == 2 && !DoorwayLights.IsEmpty();
+	bCast = bCast || bDoorwayShadows;
+	if (static_cast<bool>(CellMesh->CastShadow) != bCast || CellMesh->bCastDynamicShadow != bCast
+		|| CellMesh->bCastHiddenShadow != bDoorwayShadows)
 	{
+		CellMesh->bCastHiddenShadow = bDoorwayShadows;
 		CellMesh->SetCastShadow(bCast);
 		CellMesh->bCastDynamicShadow = bCast;
 		CellMesh->bCastShadowAsTwoSided = bCast;
@@ -264,6 +268,13 @@ void AACEEnvCellActor::SetSunCastShadow(bool bCast)
 		CellMesh->bCastContactShadow = false;
 		CellMesh->MarkRenderStateDirty();
 	}
+}
+
+void AACEEnvCellActor::RefreshLightingOptions()
+{
+	for (UPointLightComponent* Light : DoorwayLights)
+		if (IsValid(Light)) Light->SetVisibility(ACERuntimeOptions::DynamicLightingQuality() == 2);
+	SetSunCastShadow(bRequestedSunCastShadow);
 }
 
 void AACEEnvCellActor::SetLookInDepthBias(float DepthBiasCm)
@@ -1055,6 +1066,7 @@ bool AACEEnvCellActor::LoadEnvCell(int32 InEnvCellId, const FVector& LandblockOr
 		Light->SetLightingChannels(true, true, false);
 		Light->MaxDrawDistance = 4000.f;
 		Light->MaxDistanceFadeRange = 2000.f;
+		Light->SetVisibility(ACERuntimeOptions::DynamicLightingQuality() == 2);
 		DoorwayLightActor->AddInstanceComponent(Light);
 		Light->RegisterComponent();
 		DoorwayLights.Add(Light);

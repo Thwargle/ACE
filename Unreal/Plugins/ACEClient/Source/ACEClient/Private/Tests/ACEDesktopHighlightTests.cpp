@@ -3,6 +3,8 @@
 #include "Misc/ScopeExit.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
+#include "Misc/FileHelper.h"
+#include "HAL/FileManager.h"
 #include "ACEDatSubsystem.h"
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
@@ -10,11 +12,14 @@
 #include "ACEWorldPresenterComponent.h"
 #include "ACEWorldEntityActor.h"
 #include "ACECharacterAppearanceComponent.h"
+#include "ACECharacterCreation.h"
+#include "ACEEnvCellActor.h"
 #include "ACERuntimeOptions.h"
 #include "ACECreatureFixtures.h"
 #include "Components/BoxComponent.h"
 #include "ProceduralMeshComponent.h"
 #include "GameFramework/PlayerInput.h"
+#include "GameFramework/Character.h"
 #include "GameFramework/GameModeBase.h"
 #include "InputKeyEventArgs.h"
 #include "Camera/PlayerCameraManager.h"
@@ -28,6 +33,11 @@
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
+#include "UI/ACEUIResourceResolver.h"
+#include "Slate/WidgetRenderer.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "Components/Border.h"
+#include "Components/CanvasPanel.h"
 #include "Protocol/ACEBinaryReader.h"
 #include "Protocol/ACEBinaryWriter.h"
 #include "Sockets.h"
@@ -106,7 +116,7 @@ bool FACEDesktopHighlightTest::RunTest(const FString&)
    Session->IssacClient=MakeUnique<FACEIsaac>(123u);
    auto* Manager=NewObject<UACEUIElementManager>();Manager->Initialize();
    auto* Canvas=NewObject<UACEUICanvasWidget>();Canvas->Initialize();Canvas->InitializeCanvas(Manager);Canvas->TakeWidget();
-   auto* Binder=NewObject<UACEUIGameplayBinder>();Binder->Client=Client;Binder->PlayerController=PC;Binder->Canvas=Canvas;
+   auto* Binder=NewObject<UACEUIGameplayBinder>();Binder->Client=Client;Binder->PlayerController=PC;Binder->Canvas=Canvas;Binder->Manager=Manager;
    Layers->Geometry=FGeometry::MakeRoot(FVector2D(1600,900),FSlateLayoutTransform());
    FACEWorldObject Self;Self.Guid=Session->PlayerGuid;Self.ItemType=ACEItemType::Creature;Self.bIsPlayer=true;
    FACEWorldObject Pack;Pack.Guid=600;Pack.ContainerId=Self.Guid;Pack.ItemType=ACEItemType::Container;Pack.ItemsCapacity=24;
@@ -114,6 +124,25 @@ bool FACEDesktopHighlightTest::RunTest(const FString&)
    FACEWorldObject Retained=Bread;Retained.Guid=602;Retained.ObjectDescriptionFlags=ACEObjectDescFlag::Retained;
    FACEWorldObject Bound=Bread;Bound.Guid=603;Bound.Attuned=1;
    for(const auto& Item:{Self,Pack,Bread,Retained,Bound})Session->WorldObjects.Add(Item.Guid,Item);
+   {
+    auto* Resources=NewObject<UACEUIResourceResolver>();Resources->Initialize(Dat);Canvas->SetResourceResolver(Resources);
+    FWidgetRenderer Renderer(true,true);auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(1600,900),TF_Bilinear,true);
+    const auto MarkerCanvas=Canvas->TakeWidget();
+    Renderer.DrawWidget(Target,MarkerCanvas,FVector2D(1600,900),.016f);
+    PC->PlayerCameraManager->UpdateCamera(.016f);
+    Client->SelectObject(Object.Guid);Binder->RefreshSelectionOverlay();
+    TestEqual(TEXT("Other creatures retain the visible selection frame"),Binder->SelectionMarkerBox->GetVisibility(),ESlateVisibility::HitTestInvisible);
+    // Use the same visible presentation for self: suppression must depend on
+    // identity, not missing geometry or the camera being inside the avatar.
+    Presenter->Spawned.Add(Self.Guid,Entity);
+    Client->SelectObject(Self.Guid);Binder->RefreshSelectionOverlay();
+    TestEqual(TEXT("Self stays selected for targeted actions"),Client->GetSelectedObject().Guid,Self.Guid);
+    TestEqual(TEXT("Self has no selection frame"),Binder->SelectionMarkerBox->GetVisibility(),ESlateVisibility::Collapsed);
+    Binder->SelectionDirectionArrow->SetVisibility(ESlateVisibility::HitTestInvisible);
+    Binder->RefreshSelectionOverlay();
+    TestEqual(TEXT("Self clears a previous off-screen selection arrow"),Binder->SelectionDirectionArrow->GetVisibility(),ESlateVisibility::Collapsed);
+    Presenter->Spawned.Remove(Self.Guid);Client->SelectObject(0);
+   }
    Session->WorldObjects[Object.Guid].ObjectDescriptionFlags|=ACEObjectDescFlag::Vendor;
    auto Actions=[&](uint32 Action)
    {
@@ -165,6 +194,79 @@ bool FACEDesktopHighlightTest::RunTest(const FString&)
    Session->bUseBusy=false;Drop(Self.Guid,FVector2D(1350,700));
    Session->WorldObjects[Object.Guid].ObjectDescriptionFlags&=~ACEObjectDescFlag::Vendor;Drop(Self.Guid);
    TestTrue(TEXT("Main pack over ground or a non-vendor never moves/gives/drops the player"),Session->CachedC2SPackets.IsEmpty());
+   // Apostate Nexus: the deposit is a nonattackable object-shaped creature.
+   // An attuned resonator can be handed to it even though ground drop is forbidden.
+   FACEWorldObject Deposit=Object;Deposit.WeenieClassId=40809;Deposit.Name=TEXT("Apostate Aetherium Deposit");
+   Deposit.SetupId=0x02000B82;Deposit.MotionTableId=0x0900013D;Deposit.PhysicsState=6292504;
+   Deposit.ItemUseable=32;Deposit.UseRadius=3;Deposit.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
+   Deposit.InitialMotionStyle=ACEMotion::StanceNonCombat;Deposit.InitialMotionCommand=ACEMotion::Ready;
+   FACECharacterCreation Creation;FString Error;
+   TestTrue(TEXT("Apostate deposit clothing decoder loads"),Creation.Load(*Dat->GetPortalDat(),Error));
+   TestTrue(TEXT("Apostate deposit uses its stock clothing appearance"),Creation.ApplyClothing(0x10000338,Deposit.SetupId,0,0,Deposit.Appearance));
+   Session->WorldObjects[Object.Guid]=Deposit;
+   Entity->InitializeFromObject(Deposit,100,true);Entity->SetActorLocation({1000,0,0});
+   View->SetActorLocation({0,0,150});PC->PlayerCameraManager->UpdateCamera(.016f);
+   Bound.Name=TEXT("Aetheric Resonator");Bound.WeenieClassId=40808;Bound.ItemType=ACEItemType::Misc;
+   Bound.StackSize=Bound.MaxStackSize=1;Bound.ContainerId=Self.Guid;Session->WorldObjects[Bound.Guid]=Bound;
+   TestFalse(TEXT("Attuned resonator is not eligible for a ground drop"),Bound.CanDropToWorld());
+   Session->CachedC2SPackets.Reset();Drop(Bound.Guid);
+   TestEqual(TEXT("Dropping the bound resonator onto the deposit sends GiveObjectRequest"),Actions(ACEGameAction::GiveObjectRequest),1);
+   TestEqual(TEXT("Quest hand-in never attempts a ground drop"),Actions(ACEGameAction::DropItem),0);
+   TestEqual(TEXT("Quest hand-in never substitutes targeted item use"),Actions(ACEGameAction::UseWithTarget),0);
+   for(const auto& Pair:Session->CachedC2SPackets)
+   {
+    FACEBinaryReader R(Pair.Value.Payload);R.Skip(24);if(!R.CanRead(4)||R.ReadUInt32()!=ACEGameAction::GiveObjectRequest)continue;
+    TestEqual(TEXT("Hand-in packet targets the deposit"),R.ReadUInt32(),uint32(Deposit.Guid));
+    TestEqual(TEXT("Hand-in packet contains the resonator"),R.ReadUInt32(),uint32(Bound.Guid));
+    TestEqual(TEXT("Hand-in packet gives one resonator"),R.ReadUInt32(),1u);
+   }
+   // Exercise the actual final room and screen-to-world drop ray, not just a
+   // horizontal ray in an empty world. Camera elevation is not player reach.
+   Deposit.Position.CellId=0x7F020107;Deposit.Position.Location=FVector(40,-20,.055);
+   Session->WorldObjects[Deposit.Guid]=Deposit;Entity->InitializeFromObject(Deposit,100,true);
+   FBox DepositBounds;TestTrue(TEXT("Deposit has posed selection artwork"),Entity->Appearance->GetVisualWorldBounds(DepositBounds));
+   TArray<AACEEnvCellActor*> DepositRooms;
+   if(const auto Info=Dat->GetLandblockInfo(0x7F020000))for(uint32 I=0;I<Info->NumCells;++I)
+   {
+    const uint32 Id=0x7F020100+I;Dat->GetOrBuildEnvCellMesh(Id,100);const auto* Cell=Dat->FindEnvCellMesh(Id,100);
+    if(!Cell || FVector::DistSquared(FVector(Cell->Origin),Deposit.Position.Location)>FMath::Square(35.))continue;
+    auto* Room=World->SpawnActor<AACEEnvCellActor>();
+    Room->LoadEnvCell(Id,FACEPosition::AceVectorToUnreal(FVector(127*192,2*192,0),100),100);
+    Room->SetEnvCellCollisionActive(true);Room->SetEnvCellHiddenInGame(false);DepositRooms.Add(Room);
+   }
+   for(float Height:{150.f,300.f})for(float Yaw:{0.f,90.f,180.f,270.f})
+   {
+    const FVector Eye=Deposit.Position.ToUnrealLocation(100)+FRotator(0,Yaw,0).RotateVector(FVector(250,0,Height));
+    View->SetActorLocation(Eye);View->SetActorRotation((DepositBounds.GetCenter()-Eye).Rotation());
+    PC->PlayerCameraManager->UpdateCamera(.016f);
+    const FString ViewLabel=FString::Printf(TEXT("Final room camera height %.0f yaw %.0f"),Height,Yaw);
+    TestEqual(*(ViewLabel+TEXT(" selects the deposit")),PC->PickWorldEntityAtScreenPosition(800,450),Entity);
+    PC->EndUseApproach();Session->bUseBusy=false;Session->CachedC2SPackets.Reset();Drop(Bound.Guid);
+    TestEqual(*(ViewLabel+TEXT(" sends exactly one Give")),Actions(ACEGameAction::GiveObjectRequest),1);
+    TestEqual(*(ViewLabel+TEXT(" never drops the bound item")),Actions(ACEGameAction::DropItem),0);
+    // Replay this real client action through the server quest integration test.
+    for(const auto& Packet:Session->CachedC2SPackets)
+    {
+     FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);
+     if(!R.CanRead(4)||R.ReadUInt32()!=ACEGameAction::GiveObjectRequest)continue;
+     const FString Path=FPaths::ProjectSavedDir()/TEXT("Automation/ApostateGiveObject.bin");
+     IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path),true);
+     TestTrue(TEXT("Client hand-in action saved for server replay"),FFileHelper::SaveArrayToFile(
+      TArrayView<const uint8>(Packet.Value.Payload.GetData()+24,Packet.Value.Payload.Num()-24),*Path));
+    }
+   }
+   const FVector DepositOrigin=Deposit.Position.ToUnrealLocation(100);
+   TestTrue(TEXT("Standing beside the deposit is within its retail use cylinder"),
+    PC->GetUseCylinderDistanceCm(Deposit,DepositOrigin+FVector(250,0,0),DepositOrigin)<=300.f);
+   TestTrue(TEXT("A high ledge is not incorrectly treated as in hand-in range"),
+    PC->GetUseCylinderDistanceCm(Deposit,DepositOrigin+FVector(250,0,1200),DepositOrigin)>300.f);
+   for(auto* Room:DepositRooms)Room->Destroy();
+   View->SetActorLocation({0,0,150});View->SetActorRotation(FRotator::ZeroRotator);PC->PlayerCameraManager->UpdateCamera(.016f);
+   PC->EndUseApproach();Session->bUseBusy=false;Session->CachedC2SPackets.Reset();Drop(Bound.Guid,FVector2D(1350,700));
+   TestEqual(TEXT("An empty-world miss never gives to the previous recipient"),Actions(ACEGameAction::GiveObjectRequest),0);
+   TestEqual(TEXT("An empty-world miss preserves the bound quest item"),Actions(ACEGameAction::DropItem),0);
+   Session->WorldObjects[Object.Guid]=Object;Entity->InitializeFromObject(Object,100,true);Entity->SetActorLocation({1000,0,0});
+   View->SetActorLocation({0,0,25});PC->PlayerCameraManager->UpdateCamera(.016f);
   }
   for(float Scale:{1.f,1.5f,2.f})
   {
@@ -189,16 +291,118 @@ bool FACEDesktopHighlightTest::RunTest(const FString&)
    float X=0,Y=0;TestFalse(TEXT("Dragging outside the viewport cannot highlight a world object"),PC->GetWorldPointerPosition(X,Y));
   }
  }
- PC->PollObjectHover();PC->UpdateDesktopHighlights(true);
+ PC->PollObjectHover();PC->UpdateObjectHighlights(true);
  auto* Appearance=Entity->FindComponentByClass<UACECharacterAppearanceComponent>();
  auto Strength=[&](){auto* Part=Cast<UPrimitiveComponent>(Appearance->GetPartMesh(0));const auto& Data=Part->GetCustomPrimitiveData().Data;return Data.IsValidIndex(1)?Data[1]:0.f;};
  TestEqual(TEXT("Gaze hover uses VR glow strength"),Strength(),.45f);
  auto Click=[&](){PC->PlayerInput->FlushPressedKeys();PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::LeftMouseButton,IE_Pressed,1.f));PC->PlayerInput->ProcessInputStack({},.016f,false);PC->PollObjectClick();};
  Click();TestEqual(TEXT("Mouselook click selects gaze target"),Client->GetSelectedObject().Guid,Object.Guid);
- PC->UpdateDesktopHighlights(true);TestEqual(TEXT("Selected glow uses VR full strength"),Strength(),1.f);
+ PC->UpdateObjectHighlights(true);TestEqual(TEXT("Selected glow uses VR full strength"),Strength(),1.f);
+ {
+  FACEWorldObject Self=Object;Self.Guid=Session->PlayerGuid;Self.bIsSelf=true;Self.bIsPlayer=true;
+  Session->WorldObjects.Add(Self.Guid,Self);
+  auto* Pawn=World->SpawnActor<ACharacter>();Pawn->SetActorLocation({0,500,0});
+  auto* SelfAppearance=NewObject<UACECharacterAppearanceComponent>(Pawn);Pawn->AddInstanceComponent(SelfAppearance);SelfAppearance->RegisterComponent();
+  if(!TestTrue(TEXT("Local player DAT appearance builds"),SelfAppearance->ApplyWorldObject(Self,100,false)))return false;
+  PC->Possess(Pawn);
+  ON_SCOPE_EXIT {PC->UnPossess();PC->SetViewTarget(View);Pawn->Destroy();Session->WorldObjects.Remove(Self.Guid);Client->SelectObject(Object.Guid);};
+  TestNull(TEXT("Self has no duplicate world presenter actor"),Presenter->FindEntityActor(Self.Guid));
+  auto CheckSelf=[&](const TCHAR* Context,float Expected)
+  {
+   for(int32 P=0;P<SelfAppearance->GetPartCount();++P)
+    if(auto* Part=Cast<UPrimitiveComponent>(SelfAppearance->GetPartMesh(P)))
+    {
+     const auto& Data=Part->GetCustomPrimitiveData().Data;
+     TestEqual(Context,Data.IsValidIndex(1)?Data[1]:0.f,Expected);
+    }
+  };
+  const uint64 AppearanceRevision=SelfAppearance->GetAppearanceRevision();
+  Client->SelectObject(Self.Guid);PC->UpdateObjectHighlights(true);
+  CheckSelf(TEXT("Selected self receives the full object glow on every part"),1.f);
+  PC->UpdateObjectHighlights(true,false);
+  CheckSelf(TEXT("VR self selection uses the same local body glow"),1.f);
+  Client->SelectObject(Object.Guid);PC->UpdateObjectHighlights(true);
+  CheckSelf(TEXT("Selecting another object clears the player glow"),0.f);
+  TestEqual(TEXT("Other selected actors still glow"),Strength(),1.f);
+  Client->SelectObject(Self.Guid);PC->UpdateObjectHighlights(true);
+  ACERuntimeOptions::Set(TEXT("ObjectGlow"),0);PC->UpdateObjectHighlights(true);
+  CheckSelf(TEXT("Object glow preference clears the selected player too"),0.f);
+  ACERuntimeOptions::Set(TEXT("ObjectGlow"),1);PC->UpdateObjectHighlights(true);
+  CheckSelf(TEXT("Re-enabling object glow restores self selection"),1.f);
+  PC->UpdateObjectHighlights(false);
+  CheckSelf(TEXT("Portal and session transitions clear the local glow"),0.f);
+  PC->UpdateObjectHighlights(true);PC->UnPossess();PC->UpdateObjectHighlights(true);
+  CheckSelf(TEXT("Changing possession clears the old player model"),0.f);
+  TestEqual(TEXT("Selecting self never rebuilds its appearance"),SelfAppearance->GetAppearanceRevision(),AppearanceRevision);
+ }
+ PC->UpdateObjectHighlights(true);TestEqual(TEXT("Other selected actors still glow"),Strength(),1.f);
  Click();TestEqual(TEXT("Double click consumes the interaction pair"),PC->LastLeftClickGuid,0);
  TestTrue(TEXT("Interaction preserves mouselook"),PC->bMouseLookActive);
- ACERuntimeOptions::Set(TEXT("ObjectGlow"),0);PC->UpdateDesktopHighlights(true);
+ {
+  // Stock cow WCID 14: Creature + Stuck + Attackable, Remote use (32),
+  // setup 02000006 / motion table 0900000D. Its server Use emote is TippedRight.
+  // Retail ItemHolder::UseObject checks useability before attackability.
+  FACEWorldObject Cow=Object;Cow.WeenieClassId=14;Cow.Name=TEXT("Cow");
+  Cow.SetupId=0x02000006;Cow.MotionTableId=0x0900000D;Cow.Scale=.95f;
+  Cow.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck|ACEObjectDescFlag::Attackable;
+  Cow.ItemUseable=32;Cow.InitialMotionStyle=ACEMotion::StanceNonCombat;Cow.InitialMotionCommand=ACEMotion::Ready;
+  Session->WorldObjects[Cow.Guid]=Cow;Entity->InitializeFromObject(Cow,100,true);Entity->SetActorLocation({1000,0,0});
+  FBox CowBounds;TestTrue(TEXT("Cow has retail model bounds"),Appearance->GetVisualWorldBounds(CowBounds));
+  View->SetActorLocation(CowBounds.GetCenter()-FVector(1000,0,0));PC->PlayerCameraManager->UpdateCamera(.016f);
+  auto ResetUse=[&]() {PC->EndUseApproach();Session->bUseBusy=false;Session->CachedC2SPackets.Reset();PC->LastLeftClickGuid=0;};
+  auto UseCount=[&]()
+  {
+   int32 Count=0;for(const auto& Pair:Session->CachedC2SPackets)
+   {
+    FACEBinaryReader R(Pair.Value.Payload);R.Skip(24);
+    if(!R.CanRead(4)||R.ReadUInt32()!=ACEGameAction::Use)continue;
+    TestEqual(TEXT("Use request targets the clicked creature"),R.ReadUInt32(),uint32(Cow.Guid));++Count;
+   }
+   return Count;
+  };
+  ResetUse();
+  Click();TestEqual(TEXT("Single click only selects the cow"),UseCount(),0);
+  TestEqual(TEXT("Cow is selected through the world pick"),Client->GetSelectedObject().Guid,Cow.Guid);
+  Click();TestEqual(TEXT("Double clicking an attackable usable cow sends one Use"),UseCount(),1);
+  TestTrue(TEXT("Cow use waits for the server-controlled approach"),PC->IsUseApproachActive());
+  TestEqual(TEXT("Approach retains the cow's advertised use radius"),PC->ServerMoveToDistance,Cow.UseRadius);
+  Click();Click();TestEqual(TEXT("Repeated clicks while busy do not duplicate the cow Use"),UseCount(),1);
+  ResetUse();PC->InteractWithObject(Cow.Guid);
+  TestEqual(TEXT("Interact key/toolbar shares cow Use after the previous use finishes"),UseCount(),1);
+  ResetUse();Session->WorldObjects[Cow.Guid].Name=TEXT("Usable creature");
+  Session->WorldObjects[Cow.Guid].WeenieClassId=999999;
+  Click();Click();TestEqual(TEXT("Use is driven by server flags, not cow name or template ID"),UseCount(),1);
+  for(int32 Useable:{0,1,0x00200000})
+  {
+   ResetUse();Session->WorldObjects[Cow.Guid].ItemUseable=Useable;
+   Click();Click();TestEqual(TEXT("Ordinary monsters and target-only creatures do not send Use"),UseCount(),0);
+   TestFalse(TEXT("Non-usable monsters do not start an approach"),PC->IsUseApproachActive());
+  }
+  ResetUse();Session->WorldObjects[Cow.Guid].ItemUseable=32|0x40;
+  Click();Click();TestEqual(TEXT("NeverWalk usable creatures still send Use"),UseCount(),1);
+  TestFalse(TEXT("NeverWalk does not start a local approach"),PC->IsUseApproachActive());
+
+  // Replay the stock server emote through the world actor and DAT animator.
+  // Tipping must animate the actual mesh without being mistaken for death.
+  Appearance->SetPreviewCapture(true);Appearance->TickComponent(.05f,LEVELTICK_All,nullptr);
+  TArray<FTransform> Standing;
+  for(int32 Part=0;Part<Appearance->GetPartCount();++Part)
+   Standing.Add(Appearance->GetPartMesh(Part)->GetRelativeTransform());
+  FACEObjectMotionState Tip;Tip.CurrentStyle=ACEMotion::StanceNonCombat;Tip.ForwardCommand=ACEMotion::Ready;
+  Tip.ActionCommand=0x1000004F;Tip.ActionSpeed=1;Tip.bNewAction=true;Entity->ApplyMotionState(Tip);
+  bool Moved=false;
+  for(int32 Frame=0;Frame<60;++Frame)
+  {
+   Appearance->TickComponent(1.f/30.f,LEVELTICK_All,nullptr);
+   for(int32 Part=0;Part<Standing.Num();++Part)
+    Moved|=!Standing[Part].Equals(Appearance->GetPartMesh(Part)->GetRelativeTransform(),.01f);
+  }
+  TestTrue(TEXT("Server TippedRight plays the cow's authored DAT animation"),Moved);
+  TestFalse(TEXT("Tipping does not mark the cow as dead"),Entity->HasReceivedDeathMotion());
+  ResetUse();Session->WorldObjects[Object.Guid]=Object;Entity->InitializeFromObject(Object,100,true);Entity->SetActorLocation({1000,0,0});
+  Appearance->SetPreviewCapture(false);View->SetActorLocation({0,0,25});PC->PlayerCameraManager->UpdateCamera(.016f);
+ }
+ ACERuntimeOptions::Set(TEXT("ObjectGlow"),0);PC->UpdateObjectHighlights(true);
  TestEqual(TEXT("Disabling glow clears existing material highlight"),Strength(),0.f);
  TestTrue(TEXT("Disabling glow retains gaze picking"),PC->PickWorldPointer(HitSelf)==Entity);
  ACERuntimeOptions::Set(TEXT("ObjectGlow"),1);
@@ -207,12 +411,12 @@ bool FACEDesktopHighlightTest::RunTest(const FString&)
  View->SetActorRotation(FRotator::ZeroRotator);
  Entity->ObjectDescriptionFlags|=ACEObjectDescFlag::UiHidden;
  TestNull(TEXT("UiHidden target is not gaze-selectable"),PC->PickWorldPointer(HitSelf));
- PC->UpdateDesktopHighlights(true);TestEqual(TEXT("UiHidden selection cannot glow"),Strength(),0.f);
+ PC->UpdateObjectHighlights(true);TestEqual(TEXT("UiHidden selection cannot glow"),Strength(),0.f);
  Entity->ObjectDescriptionFlags&=~ACEObjectDescFlag::UiHidden;
  auto* Wall=World->SpawnActor<AActor>();auto* Box=NewObject<UBoxComponent>(Wall);Wall->SetRootComponent(Box);Box->SetBoxExtent({10,500,500});
  Box->SetCollisionEnabled(ECollisionEnabled::QueryOnly);Box->SetCollisionResponseToAllChannels(ECR_Ignore);Box->SetCollisionResponseToChannel(ECC_Camera,ECR_Block);Box->RegisterComponent();Wall->SetActorLocation({500,0,0});
  TestNull(TEXT("Walls block gaze selection"),PC->PickWorldPointer(HitSelf));
- PC->UpdateDesktopHighlights(false);TestEqual(TEXT("Mode switch clears desktop glow"),Strength(),0.f);
+ PC->UpdateObjectHighlights(false);TestEqual(TEXT("Mode switch clears desktop glow"),Strength(),0.f);
  return true;
 }
 #endif

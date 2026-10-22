@@ -144,12 +144,36 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
   .SetPadding(FMargin(3,0));
  VSync->SetWidgetStyle(Toggle); VSync->SetContent(Label(TEXT("Sync with Refresh Rate"))); Box->AddChild(Fixed(VSync,272,20));
  AddValue(ACERuntimeOptions::Values[7]);
+ auto* Brightness=ValueSliders[TEXT("ScreenBrightness")].Get();
+ Brightness->OnValueChanged.AddDynamic(this,&UACEVideoSettingsWidget::ChangeScreenBrightness);
+ ScreenBrightnessLabel=Label(TEXT(""),7); ScreenBrightnessLabel->SetJustification(ETextJustify::Right);
+ Box->AddChild(Fixed(ScreenBrightnessLabel,250,14));
+ UACEHoverTooltipWidget::SetWidgetTooltip(Brightness,FText::FromString(TEXT("Dims or brightens the world, including glowing effects. 100% is neutral. Changes save immediately.")));
+ AddValue(ACERuntimeOptions::Values[8]);
+ auto* Contrast=ValueSliders[TEXT("Contrast")].Get();
+ Contrast->OnValueChanged.AddDynamic(this,&UACEVideoSettingsWidget::ChangeScreenContrast);
+ ScreenContrastLabel=Label(TEXT(""),7); ScreenContrastLabel->SetJustification(ETextJustify::Right);
+ Box->AddChild(Fixed(ScreenContrastLabel,250,14));
+ UACEHoverTooltipWidget::SetWidgetTooltip(Contrast,FText::FromString(TEXT("Adjusts the difference between light and dark. 100% is neutral. Changes save immediately.")));
  Section(TEXT("Rendering Quality Options"));
  Quality=Combo(TEXT("Graphics quality")); for(const TCHAR* S:{TEXT("Low"),TEXT("Medium"),TEXT("High"),TEXT("Epic"),TEXT("Cinematic"),TEXT("Custom")})Quality->AddOption(S);
+ Quality->Rename(TEXT("GraphicsQuality"));
  static const TCHAR* QualityNames[] = {TEXT("Texture Detail"),TEXT("Landscape Draw Distance"),TEXT("Shadows"),TEXT("Effects"),TEXT("Post Processing"),TEXT("Anti-Aliasing"),TEXT("Foliage"),TEXT("Shading")};
  for (const TCHAR* Name : QualityNames) {
-  auto* C=Combo(Name); for(const TCHAR* V:{TEXT("Low"),TEXT("Medium"),TEXT("High"),TEXT("Epic"),TEXT("Cinematic")}) C->AddOption(V); QualityLevels.Add(C);
+  auto* C=Combo(Name);
+  if(FCString::Strcmp(Name,TEXT("Shadows"))==0)
+  {
+   C->Rename(TEXT("ShadowQuality"));
+   for(const TCHAR* V:{TEXT("Off"),TEXT("Low"),TEXT("Medium"),TEXT("High"),TEXT("Cinematic")}) C->AddOption(V);
+   UACEHoverTooltipWidget::SetWidgetTooltip(C,FText::FromString(TEXT("Off removes dynamic shadows. Low and Medium reduce shadow distance and detail. Turn off for the lowest GPU cost.")));
+  }
+  else for(const TCHAR* V:{TEXT("Low"),TEXT("Medium"),TEXT("High"),TEXT("Epic"),TEXT("Cinematic")}) C->AddOption(V);
+  QualityLevels.Add(C);
  }
+ DynamicLighting=Combo(TEXT("Dynamic lights")); DynamicLighting->Rename(TEXT("DynamicLightingQuality"));
+ for(const TCHAR* V:{TEXT("Off"),TEXT("Low"),TEXT("Full")}) DynamicLighting->AddOption(V);
+ UACEHoverTooltipWidget::SetWidgetTooltip(DynamicLighting,FText::FromString(TEXT("Off removes light cast by spells, weapons and doorways. Low keeps up to two nearby effect lights. Particles, sunlight and ambient room illumination remain visible. Saved with Apply.")));
+ Box->AddChild(Fixed(Label(TEXT("Older hardware: turn shadows and dynamic lights off."),7),272,18));
  Filtering=Combo(TEXT("Texture Filtering")); for (const TCHAR* V:{TEXT("1x"),TEXT("2x"),TEXT("4x"),TEXT("8x"),TEXT("16x")}) Filtering->AddOption(V);
  Section(TEXT("Input Options"));
  InvertMouseX=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("InvertMouseX"));
@@ -221,8 +245,11 @@ void UACEVideoSettingsWidget::ResetVideo()
  InitialQuality=Quality->GetSelectedIndex();
  const int32 Levels[]={S->GetTextureQuality(),S->GetViewDistanceQuality(),S->GetShadowQuality(),S->GetVisualEffectQuality(),S->GetPostProcessingQuality(),S->GetAntiAliasingQuality(),S->GetFoliageQuality(),S->GetShadingQuality()};
  for(int32 I=0;I<QualityLevels.Num();++I)QualityLevels[I]->SetSelectedIndex(Levels[I]);
+ DynamicLighting->SetSelectedIndex(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("DynamicLightingQuality"))));
  for(auto& P:ValueSliders)P.Value->SetValue(ACERuntimeOptions::Get(*P.Key.ToString()));
  ChangeFieldOfView(GetPreviewFieldOfView());
+ ChangeScreenBrightness(ValueSliders[TEXT("ScreenBrightness")]->GetValue());
+ ChangeScreenContrast(ValueSliders[TEXT("Contrast")]->GetValue());
  ActiveSoundOnly->SetIsChecked(ACERuntimeOptions::Get(TEXT("ActiveSoundOnly"))>.5f);
  Filtering->SetSelectedIndex(FMath::Clamp(FMath::FloorLog2(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("Anisotropy")))),0,4));
  if(auto* GI=GetGameInstance()) if(auto* Client=GI->GetSubsystem<UACEClientSubsystem>()) for(auto& P:CharacterChecks)P.Value->SetIsChecked(Client->IsCharacterOptionSet(P.Key));
@@ -279,6 +306,7 @@ bool UACEVideoSettingsWidget::HasPendingChanges() const
  if(Resolution->GetSelectedOption()!=FString::Printf(TEXT("%d x %d"),R.X,R.Y)
   || WindowMode->GetSelectedIndex()!=int32(S->GetFullscreenMode())
   || Quality->GetSelectedIndex()!=InitialQuality
+  || DynamicLighting->GetSelectedIndex()!=FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("DynamicLightingQuality")))
   || !FMath::IsNearlyEqual(FCString::Atof(*FrameLimit->GetSelectedOption()),S->GetFrameRateLimit())
   || VSync->IsChecked()!=S->IsVSyncEnabled()) return true;
  const int32 Levels[]={S->GetTextureQuality(),S->GetViewDistanceQuality(),S->GetShadowQuality(),S->GetVisualEffectQuality(),S->GetPostProcessingQuality(),S->GetAntiAliasingQuality(),S->GetFoliageQuality(),S->GetShadingQuality()};
@@ -306,12 +334,7 @@ void UACEVideoSettingsWidget::ApplyVideo()
  S->ValidateSettings();
  FString X,Y;if(Resolution->GetSelectedOption().Split(TEXT(" x "),&X,&Y))S->SetScreenResolution(FIntPoint(FCString::Atoi(*X),FCString::Atoi(*Y)));
  S->SetFullscreenMode(EWindowMode::Type(FMath::Clamp(WindowMode->GetSelectedIndex(),0,2)));
- if(Quality->GetSelectedIndex()<5 && Quality->GetSelectedIndex()!=InitialQuality) S->SetOverallScalabilityLevel(Quality->GetSelectedIndex());
- else if(QualityLevels.Num()==8) {
-  S->SetTextureQuality(QualityLevels[0]->GetSelectedIndex()); S->SetViewDistanceQuality(QualityLevels[1]->GetSelectedIndex()); S->SetShadowQuality(QualityLevels[2]->GetSelectedIndex());
-  S->SetVisualEffectQuality(QualityLevels[3]->GetSelectedIndex()); S->SetPostProcessingQuality(QualityLevels[4]->GetSelectedIndex()); S->SetAntiAliasingQuality(QualityLevels[5]->GetSelectedIndex());
-  S->SetFoliageQuality(QualityLevels[6]->GetSelectedIndex()); S->SetShadingQuality(QualityLevels[7]->GetSelectedIndex());
- }
+ ApplyRenderingOptions();
  // Validation can reload/reset the config on first launch or after an engine
  // settings-version change. Save our preferences after that reload completes.
  S->SetFrameRateLimit(FCString::Atof(*FrameLimit->GetSelectedOption()));S->SetVSyncEnabled(VSync->IsChecked());
@@ -320,9 +343,21 @@ void UACEVideoSettingsWidget::ApplyVideo()
  if(auto* PC=Cast<AACEPlayerController>(GetOwningPlayer()))PC->RefreshDesktopDisplayInputMode();
 }
 
+void UACEVideoSettingsWidget::ApplyRenderingOptions()
+{
+ auto* S=UGameUserSettings::GetGameUserSettings(); if(!S || !Quality) return;
+ if(Quality->GetSelectedIndex()<5 && Quality->GetSelectedIndex()!=InitialQuality) S->SetOverallScalabilityLevel(Quality->GetSelectedIndex());
+ else if(QualityLevels.Num()==8) {
+  S->SetTextureQuality(QualityLevels[0]->GetSelectedIndex()); S->SetViewDistanceQuality(QualityLevels[1]->GetSelectedIndex()); S->SetShadowQuality(QualityLevels[2]->GetSelectedIndex());
+  S->SetVisualEffectQuality(QualityLevels[3]->GetSelectedIndex()); S->SetPostProcessingQuality(QualityLevels[4]->GetSelectedIndex()); S->SetAntiAliasingQuality(QualityLevels[5]->GetSelectedIndex());
+  S->SetFoliageQuality(QualityLevels[6]->GetSelectedIndex()); S->SetShadingQuality(QualityLevels[7]->GetSelectedIndex());
+ }
+}
+
 void UACEVideoSettingsWidget::ApplyRuntimeOptions()
 {
  for(const auto& P:ValueSliders) ACERuntimeOptions::Set(*P.Key.ToString(),P.Value->GetValue());
+ ACERuntimeOptions::Set(TEXT("DynamicLightingQuality"),DynamicLighting->GetSelectedIndex());
  ApplyInterfaceOptions();
  ACERuntimeOptions::Set(TEXT("ActiveSoundOnly"),ActiveSoundOnly->IsChecked()?1:0);
  ACERuntimeOptions::Set(TEXT("Anisotropy"),float(1<<FMath::Clamp(Filtering->GetSelectedIndex(),0,4)));
@@ -363,6 +398,24 @@ void UACEVideoSettingsWidget::ChangeMouseTurnSpeed(float Value)
  ACECameraSettings::SetMouseTurnSpeed(Value);
  UACEHoverTooltipWidget::SetWidgetTooltip(MouseTurnSpeed, FText::FromString(FString::Printf(TEXT("Mouse turn speed: %d%%"),FMath::RoundToInt(Value*100.f))));
 }
+void UACEVideoSettingsWidget::ChangeScreenBrightness(float Value)
+{
+ if(ScreenBrightnessLabel) ScreenBrightnessLabel->SetText(FText::FromString(FString::Printf(TEXT("%.0f%% (saved immediately)"),Value*100.f)));
+ if(!FMath::IsNearlyEqual(Value,ACERuntimeOptions::Get(TEXT("ScreenBrightness"))))
+ {
+  ACERuntimeOptions::Set(TEXT("ScreenBrightness"),Value);
+  ACERuntimeOptions::Apply();
+ }
+}
+void UACEVideoSettingsWidget::ChangeScreenContrast(float Value)
+{
+ if(ScreenContrastLabel) ScreenContrastLabel->SetText(FText::FromString(FString::Printf(TEXT("%.0f%% (saved immediately)"),Value*100.f)));
+ if(!FMath::IsNearlyEqual(Value,ACERuntimeOptions::Get(TEXT("Contrast"))))
+ {
+  ACERuntimeOptions::Set(TEXT("Contrast"),Value);
+  ACERuntimeOptions::Apply();
+ }
+}
 void UACEVideoSettingsWidget::ResetMouseTurnSpeed()
 {
  ACECameraSettings::SetMouseTurnSpeed(ACECameraSettings::DefaultMouseTurnSpeed);
@@ -374,8 +427,11 @@ void UACEVideoSettingsWidget::DefaultsVideo()
  WindowMode->SetSelectedIndex(0); Quality->SetSelectedIndex(2); FrameLimit->SetSelectedIndex(0); VSync->SetIsChecked(false);
  for(const auto& O:ACERuntimeOptions::Values) if(auto* V=ValueSliders.Find(O.Key))(*V)->SetValue(O.Default);
  ChangeFieldOfView(GetPreviewFieldOfView());
+ ChangeScreenBrightness(ValueSliders[TEXT("ScreenBrightness")]->GetValue());
+ ChangeScreenContrast(ValueSliders[TEXT("Contrast")]->GetValue());
  ActiveSoundOnly->SetIsChecked(true); Filtering->SetSelectedIndex(4);
  for(UComboBoxString* C:QualityLevels)C->SetSelectedIndex(2);
+ DynamicLighting->SetSelectedIndex(2);
  for(auto& P:CharacterChecks) if(const auto* O=ACECharacterOptions::Find(P.Key)) P.Value->SetIsChecked(((O->bInOptions2?ACECharacterOptions::Options2Default:ACECharacterOptions::Options1Default)&O->Flag)!=0);
  ResetMouseTurnSpeed();
  InvertMouseX->SetIsChecked(false);InvertMouseY->SetIsChecked(false);DesktopScale->SetSelectedIndex(0);

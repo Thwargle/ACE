@@ -3,7 +3,7 @@
 #include "ACETypes.h"
 
 // Weenie setup/motion/scale from ACEmulator/ACE-World-16PY-Patches:
-// Database/Patches/9 WeenieDefaults/Creature/{Carenzi,Gromnie,PhyntosWasp}.
+// Database/Patches/9 WeenieDefaults/Creature/{Carenzi,Gromnie,PhyntosWasp,Rabbit,Chicken}.
 // Physics spheres themselves must come from client_portal.dat, never the
 // setup's enclosing visual radius or a single capsule around the wings.
 namespace ACECreatureFixtures
@@ -12,10 +12,14 @@ namespace ACECreatureFixtures
  inline constexpr FModel Models[]={
   {TEXT("Carenzi Burrower"),11492,0x02000A95,0x090000BD,1.75f},
   {TEXT("Rust Gromnie"),1611,0x02000037,0x0900001B,.9f},
-  {TEXT("White Phyntos Wasp"),7105,0x02001121,0x09000167,1.2f}};
+  {TEXT("White Phyntos Wasp"),7105,0x02001121,0x09000167,1.2f},
+  {TEXT("Black Rabbit"),2566,0x0200047B,0x09000062,1.f},
+  {TEXT("Chicken"),24937,0x020005A2,0x0900012C,1.f},
+  {TEXT("Rooster"),25283,0x02000F96,0x0900012C,1.f},
+  {TEXT("Chick"),26676,0x02001068,0x09000151,1.f}};
  inline void Apply(FACEWorldObject& Object,int32 Index)
  {
-  const auto& Model=Models[Index%3];
+  const auto& Model=Models[Index%UE_ARRAY_COUNT(Models)];
   Object.Name=Model.Name;Object.SetupId=Model.Setup;Object.MotionTableId=Model.Motion;
   Object.Scale=Model.Scale;Object.ItemType=ACEItemType::Creature;
   Object.bIsPlayer=false;Object.bIsSelf=false;

@@ -257,7 +257,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	WebsiteButton=ActionButton(TEXT("Website"),TEXT("website")); Links->AddChildToWrapBox(WebsiteButton);
 	DiscordButton=ActionButton(TEXT("Discord"),TEXT("discord")); Links->AddChildToWrapBox(DiscordButton);
 	Links->AddChildToWrapBox(ActionButton(TEXT("Edit server"),TEXT("editserver")));
-	Links->AddChildToWrapBox(ActionButton(TEXT("Remove"),TEXT("removeserver")));
+	Links->AddChildToWrapBox(ActionButton(TEXT("Remove server"),TEXT("removeserver")));
 	AddLine(Details,Label(TEXT("Accounts"),16,true),8);
 	AccountList=WidgetTree->ConstructWidget<UScrollBox>(); AccountList->SetScrollbarThickness(FVector2D(8,8));
 	auto* AccountSlot=Details->AddChildToVerticalBox(AccountList); AccountSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); AccountSlot->SetPadding(FMargin(0,0,0,12));

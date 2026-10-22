@@ -3,6 +3,7 @@
 #include "Mods/ACEPluginPresentation.h"
 #include "Mods/ACEPluginCastMotion.h"
 #include "ACEPluginVM.h"
+#include "ACEProfiling.h"
 #include "ACEVTProfile.h"
 #include "Mods/ACEUCMProfiles.h"
 #include "ACEClientSubsystem.h"
@@ -279,7 +280,7 @@ void UACEPluginSubsystem::Deinitialize()
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnAppraisalObserved.RemoveDynamic(this,&UACEPluginSubsystem::ObserveAppraisal);
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnChatMessage.RemoveDynamic(this,&UACEPluginSubsystem::ObservePluginChat);
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnVitalsUpdated.RemoveDynamic(this,&UACEPluginSubsystem::ObserveLedgerVitals);
-    if(auto S=ObservedSession.Pin()){S->OnUseDone.Remove(UseDoneHandle);S->OnPlayerTell.Remove(TellHandle);S->OnChatMessage.Remove(MetaChatHandle);S->OnCombatFeedback.Remove(CombatFeedbackHandle);}
+    if(auto S=ObservedSession.Pin()){S->OnUseDone.Remove(UseDoneHandle);S->OnSpellCastRequested.Remove(SpellCastHandle);S->OnPlayerTell.Remove(TellHandle);S->OnChatMessage.Remove(MetaChatHandle);S->OnCombatFeedback.Remove(CombatFeedbackHandle);}
     StopAll(TEXT("Client closing")); ReleaseLocalCosmetics(); FTSTicker::GetCoreTicker().RemoveTicker(Ticker);
     FlushUCMLog();
     FTSTicker::GetCoreTicker().RemoveTicker(DecisionWakeTicker);DecisionWakeTicker.Reset();
@@ -1120,6 +1121,7 @@ void UACEPluginSubsystem::AddBuff(const FString& Id, int32 SpellId)
 }
 TSharedPtr<FJsonObject> UACEPluginSubsystem::Snapshot()
 {
+    ACE_PROFILE_SCOPE(PluginSnapshot);
     TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginSnapshotCommon);
     if(CompanionReadBatch && CompanionReadBatch->Data)
         return MakeShared<FJsonObject>(*CompanionReadBatch->Data);
@@ -1370,6 +1372,7 @@ bool UACEPluginSubsystem::InventoryInteractionPending() const
 }
 bool UACEPluginSubsystem::Tick(float)
 {
+    ACE_PROFILE_SCOPE(Plugins);
     TickLocalServices();
     if(FPlatformTime::Seconds()>=NextUCMLogSave){NextUCMLogSave=FPlatformTime::Seconds()+10;FlushUCMLog();}
     UpdateWorldRendering();
@@ -1835,16 +1838,6 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         }
         if(FastCast&&P.Permissions.Contains(TEXT("navigation"))&&Dat->TryGetPluginSpellInfo(Spell,School,Power,Category,Flags,Duration)
             &&ACEPluginCastMotion::FastBuff(School,Power,Flags,Duration))FastCastOwner=P.Id;
-        if(Target&&Dat->TryGetPluginSpellInfo(Spell,School,Power,Category,Flags,Duration)
-            &&!(Flags&4)&&Duration>0&&Dat->TryGetSpellInfo(Spell,SpellName,Icon)&&C->GetWorldObject(Target,CastTargetObject))
-        {
-            auto Record=MakeShared<FJsonObject>();Record->SetNumberField(TEXT("target"),uint32(Target));Record->SetNumberField(TEXT("spell"),Spell);
-            Record->SetStringField(TEXT("confirmation"),TEXT("You cast ")+SpellName+TEXT(" on ")+CastTargetObject.Name);
-            Record->SetStringField(TEXT("resist"),CastTargetObject.Name+TEXT(" resists your spell"));
-            Record->SetNumberField(TEXT("category"),Category);Record->SetNumberField(TEXT("power"),Power);
-            Record->SetNumberField(TEXT("duration"),Duration);Record->SetNumberField(TEXT("sent"),Now);
-            PendingDebuffCasts.Add(MakeShared<FJsonValueObject>(Record));if(PendingDebuffCasts.Num()>8)PendingDebuffCasts.RemoveAt(0);
-        }
         C->GetSession()->SendCastSpell(Spell, Target); P.NextAction = Now + 3.5;
     }
     else if (Action == TEXT("attack"))

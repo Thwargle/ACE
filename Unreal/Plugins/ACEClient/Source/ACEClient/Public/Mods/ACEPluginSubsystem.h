@@ -103,6 +103,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     GENERATED_BODY()
     friend class FACEPluginHostTest;
     friend class FACEUIWorkloadTest;
+    friend class FACEUCMIdleWorkloadTest;
     friend class FACELedgerTest;
     friend class FACEPluginCompanionTest;
     friend class FACEThirdEyeTest;
@@ -270,6 +271,8 @@ public:
     uint64 WaypointLocationsRevision=0;
     void RecordRouteAction(const FString& Type, float Charge = .5f);
     void RefreshAutomationData();
+    /** Estimated remaining duration of our confirmed harmful cast on this target. */
+    bool GetTargetEffectTimer(int32 Target,int32 Spell,double& Remaining,double& Duration) const;
     bool InventoryInteractionPending() const;
     const TMap<int32, FACEAppraisalInfo>& GetPluginAppraisals() const { return Appraisals; }
     uint64 DataRevision = 0;
@@ -450,16 +453,24 @@ private:
     TMap<int32, FLootedCorpse> LootedCorpses;
     TMap<int32, double> AppraisalRequests;
     TArray<TSharedPtr<FJsonValue>> CachedInventory;
+    TMap<int32,int32> CachedInventoryIndices;
+    TSet<int32> DirtyInventoryAppraisals;
     uint64 InventoryRevision = MAX_uint64, InventoryAppraisalRevision = MAX_uint64;
     uint32 InventoryEligibility = 0;
     int32 DataPlayer = 0;
     FString DataServer;
     TWeakPtr<class FACESession> ObservedSession;
     FDelegateHandle UseDoneHandle;
+    FDelegateHandle SpellCastHandle;
+    int32 LastTargetEffectSpell=0,LastTargetEffectTarget=0;
+    void ObserveTargetSpellCast(int32 Spell,int32 Target);
+    void ForgetTargetEffects(int32 Target);
     FDelegateHandle TellHandle, MetaChatHandle, CombatFeedbackHandle;
     FDelegateHandle TargetHealthHandle, TargetMotionHandle, TargetDeletedHandle, TargetCreatedHandle, CombatVitalsHandle, FollowPositionHandle;
     int32 CombatTarget=0;
     TSet<int32> DefeatedTargets;
+    TSharedPtr<FJsonObject> LastCombatDeath;
+    void RecordCombatDeath(int32 Guid);
     FIntVector LastCombatVitals=FIntVector(-1,-1,-1);
     void ObserveTargetHealth(int32 Guid,float Fraction);
     void ObserveTargetMotion(int32 Guid,const FACEObjectMotionState& Motion);

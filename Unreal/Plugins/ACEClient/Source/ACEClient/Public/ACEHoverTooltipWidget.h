@@ -26,8 +26,14 @@ public:
 	void SetResources(UACEUIResourceResolver* InResources);
 	void SetTooltipText(const FString& Text, uint32 TemplateId = ObjectTemplate);
 	void SetTooltipScreenPosition(const FVector2D& CursorPixels);
+	/** Screen-pixel area occupied by the retail software cursor, including cursor scaling. */
+	static FSlateRect GetCursorExclusionRect(const FVector2D& CursorPixels);
+	static FVector2D CalculateTooltipPosition(const FVector2D& CursorPixels, const FVector2D& TipPixels,
+		const FVector2D& ViewportPixels, float Dpi);
 
 protected:
+	virtual void NativeConstruct() override;
+	void ProtectOwnerFromCursorOverlap();
 	void EnsureDefaultLayout();
 	void ApplyRetailStyle();
 

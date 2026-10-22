@@ -120,7 +120,7 @@ public:
 	UTexture2D* GetOrCreateSkyUTexture(uint32 SurfaceId, UObject* Outer, bool bScrolling);
 	/** Direct 0x06… texture DID → UTexture2D (retail UI art referenced by LayoutDescs). */
 	UTexture2D* GetOrCreateUiTexture(uint32 TextureId);
-	/** Inventory / spell / paperdoll icons: single mip, Clamp, no RGB dilate (retail cutouts). */
+	/** Inventory / spell / paperdoll icons: preserve alpha cutouts and avoid filtering fringes. */
 	UTexture2D* GetOrCreateUiIconTexture(uint32 TextureId);
 	/**
 	 * Color texture + separate alphaFile mask (LayoutDesc drawMode 3 buttons).
@@ -158,6 +158,9 @@ public:
         int32 MaxMipLevels = 0, TextureFilter Filter = TF_Trilinear, bool bApplyWorldSizeLimit = true);
 	/** Single-mip UI texture (bitmap fonts) — no dilate / mip soften. */
 	static UTexture2D* CreateTransientRgbaUi(int32 Width, int32 Height, const TArray<FColor>& Pixels);
+	/** Final icon upload: preserve coverage and visible artwork, extend edge RGB into alpha-zero texels.
+	 * Call after retail mask/effect composition, never before its exact-white replacement. */
+	static UTexture2D* CreateTransientRgbaUiIcon(int32 Width, int32 Height, const TArray<FColor>& Pixels);
 	/** Single-mip sky face texture (no mip fringe at cube edges). */
 	static UTexture2D* CreateTransientRgbaSky(
 		int32 Width, int32 Height, const TArray<FColor>& Pixels, bool bUsesAlpha,

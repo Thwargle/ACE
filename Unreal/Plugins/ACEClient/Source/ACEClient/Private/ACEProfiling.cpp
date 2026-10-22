@@ -8,6 +8,9 @@ DEFINE_STAT(STAT_ACEAnimation);
 DEFINE_STAT(STAT_ACEAppearance);
 DEFINE_STAT(STAT_ACEEffects);
 DEFINE_STAT(STAT_ACEHUD);
+DEFINE_STAT(STAT_ACEPlugins);
+DEFINE_STAT(STAT_ACEPluginSnapshot);
+DEFINE_STAT(STAT_ACEPluginLua);
 DEFINE_STAT(STAT_ACESky);
 DEFINE_STAT(STAT_ACESkyFog);
 DEFINE_STAT(STAT_ACESkyLighting);
@@ -29,8 +32,8 @@ FString DescribeLastFrame()
  const auto* Costs=IsInGameThread()?History.Completed(GFrameCounter):nullptr;
  if(!Costs)return {};
  auto Ms=[&](EScope S){return FPlatformTime::ToMilliseconds64(Costs->Cycles[uint8(S)]);};
- return FString::Printf(TEXT("client CPU (previous frame, inclusive): player=%.2f remote=%.2f network=%.2f world=%.2f terrain=%.2f visibility=%.2f animation=%.2f appearance=%.2f effects=%.2f HUD=%.2f sky=%.2f ms"),
+ return FString::Printf(TEXT("client CPU (previous frame, inclusive): player=%.2f remote=%.2f network=%.2f world=%.2f terrain=%.2f visibility=%.2f animation=%.2f appearance=%.2f effects=%.2f HUD=%.2f sky=%.2f plugins=%.2f snapshot=%.2f Lua=%.2f ms"),
   Ms(EScope::Player),Ms(EScope::Remote),Ms(EScope::Network),Ms(EScope::World),Ms(EScope::Terrain),Ms(EScope::Visibility),
-  Ms(EScope::Animation),Ms(EScope::Appearance),Ms(EScope::Effects),Ms(EScope::HUD),Ms(EScope::Sky));
+  Ms(EScope::Animation),Ms(EScope::Appearance),Ms(EScope::Effects),Ms(EScope::HUD),Ms(EScope::Sky),Ms(EScope::Plugins),Ms(EScope::PluginSnapshot),Ms(EScope::PluginLua));
 }
 }

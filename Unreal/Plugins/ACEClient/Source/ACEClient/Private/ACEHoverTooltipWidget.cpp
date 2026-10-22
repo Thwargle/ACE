@@ -1,5 +1,6 @@
 #include "ACEHoverTooltipWidget.h"
 #include "ACEDatSubsystem.h"
+#include "ACERuntimeOptions.h"
 #include "UI/ACERetailTextBlock.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUILayoutResolver.h"
@@ -12,6 +13,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/Texture2D.h"
+#include "Framework/Application/SlateApplication.h"
 
 void UACEHoverTooltipWidget::SetWidgetTooltip(UWidget* Widget, const FText& Text, uint32 TemplateId)
 {
@@ -31,6 +33,51 @@ void UACEHoverTooltipWidget::SetWidgetTooltip(UWidget* Widget, const FText& Text
 	// SetToolTipText replaces the cached Slate tooltip, even when UMG still
 	// remembers our custom widget. Reattach after every changed description.
 	Widget->SetToolTip(Tip);
+	Tip->ProtectOwnerFromCursorOverlap();
+}
+
+void UACEHoverTooltipWidget::NativeConstruct()
+{
+	Super::NativeConstruct();
+	// SetWidgetTooltip also runs before the owner's Slate widget exists.
+	// UMG constructs its tooltip during owner property synchronization.
+	ProtectOwnerFromCursorOverlap();
+}
+
+FSlateRect UACEHoverTooltipWidget::GetCursorExclusionRect(const FVector2D& CursorPixels)
+{
+	// Software cursor widgets are centered on the pointer, with the retail
+	// artwork offset inside them to preserve its hotspot. Reserve their complete
+	// bounds rather than just the OS pointer tip (Slate's default tooltip offset).
+	FVector2D Extent(32.f * ACERuntimeOptions::Get(TEXT("CursorScale")));
+	if (GEngine && GEngine->GameViewport && GEngine->GameViewport->GetIsUsingSoftwareCursorWidgets())
+	{
+		for (auto Cursor : {EMouseCursor::Default, EMouseCursor::CardinalCross, EMouseCursor::ResizeUpDown,
+			EMouseCursor::ResizeLeftRight, EMouseCursor::ResizeSouthEast, EMouseCursor::ResizeSouthWest})
+		{
+			if (auto Widget = GEngine->GameViewport->GetSoftwareCursorWidget(Cursor))
+			{
+				const FVector2D HalfSize = Widget->GetDesiredSize() * .5f;
+				Extent.X = FMath::Max(Extent.X, HalfSize.X);
+				Extent.Y = FMath::Max(Extent.Y, HalfSize.Y);
+			}
+		}
+	}
+	return FSlateRect(CursorPixels - Extent, CursorPixels + Extent);
+}
+
+void UACEHoverTooltipWidget::ProtectOwnerFromCursorOverlap()
+{
+	if (auto* Owner = Cast<UWidget>(GetOuter()))
+		if (auto SlateOwner = Owner->GetCachedWidget())
+		{
+			SlateOwner->EnableToolTipForceField(true);
+			SlateOwner->SetToolTipForceFieldExpansion(TAttribute<TOptional<FSlateRect>>::CreateLambda([]
+			{
+				if (!FSlateApplication::IsInitialized()) return TOptional<FSlateRect>();
+				return TOptional<FSlateRect>(GetCursorExclusionRect(FSlateApplication::Get().GetCursorPos()));
+			}));
+		}
 }
 
 TSharedRef<SWidget> UACEHoverTooltipWidget::RebuildWidget()
@@ -140,22 +187,32 @@ void UACEHoverTooltipWidget::SetTooltipText(const FString& Text, uint32 Template
 	if (Label && Label->GetText().ToString() != Text) Label->SetText(FText::FromString(Text));
 }
 
+FVector2D UACEHoverTooltipWidget::CalculateTooltipPosition(const FVector2D& CursorPixels,
+	const FVector2D& TipPx, const FVector2D& SizePx, float Dpi)
+{
+	// Retain retail's 32-pixel offset, but clear the scaled software cursor too.
+	const FSlateRect CursorRect = GetCursorExclusionRect(CursorPixels);
+	const float Gap = 4.f * Dpi;
+	FVector2D PosPx(FMath::Max(CursorPixels.X + 32.f * Dpi, CursorRect.Right + Gap),
+		FMath::Max(CursorPixels.Y + 32.f * Dpi, CursorRect.Bottom + Gap));
+	PosPx.X = FMath::Clamp(PosPx.X, 0.f, FMath::Max(0.f, SizePx.X - TipPx.X));
+	PosPx.Y = FMath::Clamp(PosPx.Y, 0.f, FMath::Max(0.f, SizePx.Y - TipPx.Y));
+	// Clamping near the lower/right edge must not push text under the cursor.
+	if (FSlateRect::DoRectanglesIntersect(CursorRect, FSlateRect(PosPx, PosPx + TipPx)))
+	{
+		if (CursorRect.Top - Gap >= TipPx.Y) PosPx.Y = CursorRect.Top - Gap - TipPx.Y;
+		else if (CursorRect.Left - Gap >= TipPx.X) PosPx.X = CursorRect.Left - Gap - TipPx.X;
+	}
+	return PosPx;
+}
+
 void UACEHoverTooltipWidget::SetTooltipScreenPosition(const FVector2D& CursorPixels)
 {
 	EnsureDefaultLayout();
 	const float Dpi = FMath::Max(0.01f, UWidgetLayoutLibrary::GetViewportScale(this));
-	// UIElementManager::StartTooltip places the tip 32 pixels from the cursor
-	// on both axes, then clamps the complete frame to the display bounds.
-	SetAlignmentInViewport(FVector2D(0.f, 0.f));
-	FVector2D PosPx = CursorPixels + FVector2D(32.f, 32.f) * Dpi;
-	if (GEngine && GEngine->GameViewport)
-	{
-		FVector2D SizePx;
-		GEngine->GameViewport->GetViewportSize(SizePx);
-		ForceLayoutPrepass();
-		const FVector2D TipPx = GetDesiredSize() * Dpi;
-		PosPx.X = FMath::Clamp(PosPx.X, 0.f, FMath::Max(0.f, SizePx.X - TipPx.X));
-		PosPx.Y = FMath::Clamp(PosPx.Y, 0.f, FMath::Max(0.f, SizePx.Y - TipPx.Y));
-	}
+	FVector2D SizePx = UWidgetLayoutLibrary::GetViewportSize(this);
+	ForceLayoutPrepass();
+	const FVector2D PosPx = CalculateTooltipPosition(CursorPixels, GetDesiredSize() * Dpi, SizePx, Dpi);
+	SetAlignmentInViewport(FVector2D::ZeroVector);
 	SetPositionInViewport(PosPx, true);
 }

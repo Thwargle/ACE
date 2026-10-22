@@ -5434,6 +5434,7 @@ void FACESession::SendCastSpell(int32 SpellId, int32 TargetGuid)
 		W.WriteUInt32(static_cast<uint32>(SpellId));
 		SendGameAction(ACEGameAction::CastUntargetedSpell, W.GetData(), ACEQueue::WeenieQueue);
 	}
+	OnSpellCastRequested.Broadcast(SpellId, TargetGuid);
 }
 
 const TArray<int32>& FACESession::GetSpellBar(int32 BarIndex) const

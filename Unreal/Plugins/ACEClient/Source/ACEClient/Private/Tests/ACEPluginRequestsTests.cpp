@@ -51,6 +51,22 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
     ON_SCOPE_EXIT { IFileManager::Get().DeleteDirectory(*ProfileRoot,false,true); };
     C->Session=MakeShared<FACESession>();auto& Session=*C->Session;
     Session.State=EACESessionState::InWorld;Session.PlayerGuid=0x50000001;
+    {
+        FACEWorldObject Door;Door.Guid=77;Door.Name=TEXT("Route door");Door.ItemUseable=32;
+        Door.ObjectDescriptionFlags=ACEObjectDescFlag::Door;Door.bHasPosition=true;
+        Session.WorldObjects.Add(Door.Guid,Door);
+        for(int32 Motion:{int32(ACEMotion::OnCommandU16),int32(ACEMotion::OffCommandU16)})
+        for(bool Passable:{false,true,false})
+        {
+            auto& Live=Session.WorldObjects[Door.Guid];Live.InitialMotionCommand=Motion;
+            Live.PhysicsState=Passable?ACEPhysicsState::Ethereal:0;
+            auto Snapshot=MakeShared<FJsonObject>();H->ExtendSnapshot(Snapshot);
+            const auto& Objects=Snapshot->GetArrayField(TEXT("route_objects"));
+            TestEqual(TEXT("Usable door is in route snapshot"),Objects.Num(),1);
+            if(Objects.Num()==1)TestEqual(TEXT("Door passage follows collision state even with stale animation"),Objects[0]->AsObject()->GetBoolField(TEXT("door_open")),Passable);
+        }
+        Session.WorldObjects.Remove(Door.Guid);
+    }
     auto ConfirmPut=[&](int32 Item,int32 Container)
     {
         FACEBinaryWriter W;W.WriteUInt32(Item);W.WriteUInt32(Container);W.WriteInt32(0);W.WriteInt32(0);
@@ -1204,13 +1220,13 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         FACEWorldObject Enemy;Enemy.Guid=970;Enemy.Name=TEXT("Target one");Enemy.ItemType=ACEItemType::Creature;
         Enemy.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;Enemy.bHasPosition=true;Enemy.Position=Session.PlayerPosition;Enemy.Position.Location.X+=2;
         FACEWorldObject NextEnemy=Enemy;NextEnemy.Guid=971;NextEnemy.Name=TEXT("Target two");NextEnemy.Position.Location.Y+=2;
-        ON_SCOPE_EXIT{Session.WorldObjects.Remove(970);Session.WorldObjects.Remove(971);H->CombatTarget=0;H->DefeatedTargets.Empty();H->PhysicalAttackTarget=0;H->PhysicalAttackOwner.Empty();Session.SelectedObject.Guid=0;};
+        ON_SCOPE_EXIT{Session.WorldObjects.Remove(970);Session.WorldObjects.Remove(971);H->CombatTarget=0;H->DefeatedTargets.Empty();H->LastCombatDeath.Reset();H->PhysicalAttackTarget=0;H->PhysicalAttackOwner.Empty();Session.SelectedObject.Guid=0;};
         auto AttackIntent=[&](int32 Target,int32 Mode)
         {auto I=MakeShared<FJsonObject>();I->SetStringField(TEXT("action"),TEXT("attack"));I->SetStringField(TEXT("activity"),TEXT("combat"));I->SetNumberField(TEXT("target"),Target);I->SetNumberField(TEXT("mode"),Mode);return I;};
         auto AttackCount=[&](){int32 Count=0;for(const auto& Packet:Session.CachedC2SPackets){FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.CanRead(4)){const uint32 Op=R.ReadUInt32();if(Op==ACEGameAction::TargetedMeleeAttack||Op==ACEGameAction::TargetedMissileAttack)++Count;}}return Count;};
         for(int32 Mode:{2,4})
         {
-            Session.WorldObjects.Add(970,Enemy);Session.WorldObjects.Add(971,NextEnemy);H->DefeatedTargets.Empty();H->PhysicalAttackOwner.Empty();
+            Session.WorldObjects.Add(970,Enemy);Session.WorldObjects.Add(971,NextEnemy);H->DefeatedTargets.Empty();H->LastCombatDeath.Reset();H->PhysicalAttackOwner.Empty();
             Session.PendingCombatMode=0;Session.ApplyServerCombatMode(Mode);Session.bServerAttackInProgress=false;Session.LastAttackError=0x20;P->NextAction=0;H->Execute(*P,AttackIntent(970,Mode));
             const int32 Before=AttackCount();TestTrue(TEXT("Physical attack establishes a tracked target"),H->CombatTarget==970&&H->PhysicalAttackTarget==970);
             auto Changed=Session.PlayerVitals;Changed.Health=40;H->LastCombatVitals=FIntVector(-1,-1,-1);
@@ -1221,18 +1237,29 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             TestEqual(TEXT("Identical vital updates do not continually wake policy"),P->NextAction,Throttle);
             FACEBinaryWriter Health;Health.WriteUInt32(970);Health.WriteFloat(0);FACEBinaryReader HR(Health.GetData());Session.HandleUpdateHealth(HR);
             TestTrue(TEXT("Zero-health network event bypasses remaining physical attack wait"),P->NextAction==0&&H->CombatTarget==0&&H->DefeatedTargets.Contains(970));
+            if(TestTrue(TEXT("Confirmed death retains a corpse-spawn handoff"),H->LastCombatDeath.IsValid()))
+            {
+                TestEqual(TEXT("Handoff identifies the defeated enemy"),H->LastCombatDeath->GetNumberField(TEXT("id")),970.);
+                const double DeathAt=H->LastCombatDeath->GetNumberField(TEXT("time"));
+                Session.OnObjectHealth.Broadcast(970,0);
+                TestEqual(TEXT("Repeated zero-health packets do not extend the wait"),H->LastCombatDeath->GetNumberField(TEXT("time")),DeathAt);
+            }
             H->Execute(*P,AttackIntent(971,Mode));TestEqual(TEXT("Next opponent attack is sent immediately after death"),AttackCount(),Before+1);
             auto State=H->Snapshot();bool DeadInSnapshot=false;for(const auto& V:State->GetArrayField(TEXT("targets")))DeadInSnapshot|=V->AsObject()->GetNumberField(TEXT("id"))==970;
+            TestTrue(TEXT("Policy snapshot includes confirmed death for post-combat loot"),State->HasTypedField<EJson::Object>(TEXT("combat_death")));
             TestFalse(TEXT("Dead opponent stays excluded after selection moves to next opponent"),DeadInSnapshot);
             Session.WorldObjects.Remove(971);Session.OnObjectDeleted.Broadcast(971);
             TestTrue(TEXT("Removal without health update also releases target throttle"),H->CombatTarget==0&&P->NextAction==0);
+            TestEqual(TEXT("Visibility deletion is not another confirmed kill"),H->LastCombatDeath->GetNumberField(TEXT("id")),970.);
         }
         Session.WorldObjects.Add(970,Enemy);Session.OnObjectCreated.Broadcast(Enemy);
         TestFalse(TEXT("Newly created object with reused GUID does not inherit dead filter"),H->DefeatedTargets.Contains(970));
+        TestFalse(TEXT("Reused GUID clears the old corpse-spawn handoff"),H->LastCombatDeath.IsValid());
         H->CombatTarget=970;H->PendingSpell=Focus;H->PendingSpellOwner=P->Id;H->PendingSpellAt=FPlatformTime::Seconds();P->NextAction=H->PendingSpellAt+3.5;
         const double CastingGate=P->NextAction;Session.WorldObjects[970].bDying=true;FACEObjectMotionState Death;Death.ForwardCommand=ACEMotion::Dead;
         Session.OnMotionUpdate.Broadcast(970,Death);
         TestTrue(TEXT("Death motion wakes targeting but preserves outstanding spell acknowledgment"),H->CombatTarget==0&&H->PendingSpell==Focus&&P->NextAction==CastingGate);
+        TestTrue(TEXT("Death motion also records a corpse-spawn handoff"),H->LastCombatDeath.IsValid());
         Ack(0);P->WaitAction=TEXT("equip");P->NextAction=FPlatformTime::Seconds()+2;H->PhysicalAttackOwner=P->Id;H->CombatTarget=970;
         const double EquipmentGate=P->NextAction;H->LastCombatVitals=FIntVector(-1,-1,-1);Session.OnVitalsUpdated.Broadcast(Session.PlayerVitals);
         TestEqual(TEXT("Recovery wake cannot bypass pending equipment"),P->NextAction,EquipmentGate);

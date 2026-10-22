@@ -53,6 +53,12 @@
 #include "Dat/ACECellTransit.h"
 #include "../UI/ACERadarVisuals.h"
 #include "UI/ACEUIResourceResolver.h"
+#include "UI/ACEUICanvasWidget.h"
+#include "UI/ACEUIGameplayBinder.h"
+#include "UI/ACEUIElementManager.h"
+#include "Components/EditableTextBox.h"
+#include "Components/ScrollBox.h"
+#include "Misc/ScopeExit.h"
 #include "Engine/Texture2D.h"
 #include "GameFramework/GameModeBase.h"
 #include "UObject/GarbageCollection.h"
@@ -745,6 +751,11 @@ bool FACELoadingTransitionTest::RunTest(const FString&)
         FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
     }
     TestTrue(TEXT("Bounded HUD warming eventually finishes"),PC->bGameplayUiAssetsReady);
+    PC->TickWorldTransition();
+    // Headless fixture has no viewport to own the Slate tree. Retain it explicitly.
+    const TSharedPtr<SWidget> Hud=PC->DatCanvasWidget ? PC->DatCanvasWidget->TakeWidget() : TSharedPtr<SWidget>();
+    TestTrue(TEXT("Initial entry exposes the gameplay interface before leaving the tunnel"),
+        PC->IsWorldTransitionActive() && PC->DatGameplayBinder && PC->DatCanvasWidget && PC->DatCanvasWidget->IsVisible());
     auto* Terrain=NewObject<UACETerrainPresenterComponent>(PC);PC->AddInstanceComponent(Terrain);Terrain->RegisterComponent();
     Terrain->Client=Client;Terrain->TerrainChunkSize=1;Terrain->LoadRadius=0;Terrain->UnloadRadius=0;
     Terrain->LandblockClass=AACELandblockActor::StaticClass();
@@ -767,6 +778,103 @@ bool FACELoadingTransitionTest::RunTest(const FString&)
     TestFalse(TEXT("Rejected/cancelled world entry releases loading state"),PC->bEnterWorldLoading || PC->bPendingEnterWorldTransition);
     TestFalse(TEXT("Returning to character selection releases movement input"),PC->IsMoveInputIgnored());
     TestFalse(TEXT("Returning to character selection leaves portal space"),Dat->IsInPortalSpace());
+    return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPortalInterfaceTest, "ACE.RetailParity.PortalInterface",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACEPortalInterfaceTest::RunTest(const FString&)
+{
+    const FString OriginalConfig=GGameUserSettingsIni;
+    GGameUserSettingsIni=FPaths::ProjectSavedDir()/TEXT("Automation/PortalInterface.ini");
+    FConfigFile EmptyConfig;GConfig->SetFile(GGameUserSettingsIni,&EmptyConfig);ACEInputBindings::Reload();
+    ON_SCOPE_EXIT {GGameUserSettingsIni=OriginalConfig;ACEInputBindings::Reload();};
+    FEntryWorld F;
+    auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
+    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+    Dat->EnsureLoaded();
+    auto* Client=F.GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
+    Session->State=EACESessionState::InWorld;Session->PlayerGuid=0x50000100;
+    auto* PC=F.World->SpawnActor<AACEPlayerController>();PC->Client=Client;
+    PC->SetPlayer(NewObject<ULocalPlayer>(GEngine));F.World->AddController(PC);
+    PC->PlayerInput=NewObject<UPlayerInput>(PC);PC->SetupInputComponent();
+    PC->ShowGameHUD();
+    auto* Canvas=PC->DatCanvasWidget.Get();auto* Binder=PC->DatGameplayBinder.Get();
+    const TSharedPtr<SWidget> Hud=Canvas ? Canvas->TakeWidget() : TSharedPtr<SWidget>();
+    if(!TestTrue(TEXT("Real DAT gameplay canvas and binder are present"),Canvas && Binder && Canvas->IsVisible()))return false;
+    auto* Manager=Client->GetUIElementManager();
+    auto Inventory=Manager->FindElementByName(TEXT("InventoryPanel_Field"));
+    if(Inventory && !Inventory->bVisible)Binder->ToggleGameplayPanel(TEXT("InventoryPanel_Field"));
+    if(!TestTrue(TEXT("Inventory view is open before entering"),Inventory && Inventory->bVisible))return false;
+    Binder->HandleChatMessage(TEXT("Before portal"),TEXT(""),0);
+    Binder->ChatEntry->SetText(FText::FromString(TEXT("Unsent chat draft")));
+    const int32 Lines=Binder->ChatLog->GetChildrenCount();
+    // Use an isolated loopback peer: verify protocol actions, never a live account.
+    auto* Sockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+    auto* Receiver=Sockets->CreateSocket(NAME_DGram,TEXT("Portal UI receiver"),false);
+    auto Address=Sockets->CreateInternetAddr();bool Valid=false;
+    Address->SetIp(TEXT("127.0.0.1"),Valid);Address->SetPort(0);
+    if(!TestTrue(TEXT("Loopback peer binds"),Receiver && Receiver->Bind(*Address)))return false;
+    ON_SCOPE_EXIT {Receiver->Close();Sockets->DestroySocket(Receiver);};
+    Receiver->GetAddress(*Address);
+    Session->SocketC2S=Sockets->CreateSocket(NAME_DGram,TEXT("Portal UI sender"),false);
+    Session->ServerC2SAddr=Address;Session->IssacClient=MakeUnique<FACEIsaac>(123u);
+    Binder->bCombatRepeatActive=Binder->bCombatAttackRequestPending=true;
+    PC->BeginWorldTransition(TEXT("portal-ui-test"));
+    TestTrue(TEXT("Portal keeps the existing HUD visible"),Canvas->IsVisible());
+    TestTrue(TEXT("Portal keeps the existing inventory window"),Inventory->bVisible && PC->DatGameplayBinder==Binder);
+    TestEqual(TEXT("Portal retains the chat draft"),Binder->ChatEntry->GetText().ToString(),FString(TEXT("Unsent chat draft")));
+    TestEqual(TEXT("Portal retains chat history"),Binder->ChatLog->GetChildrenCount(),Lines);
+    TestTrue(TEXT("Portal keeps the desktop cursor visible"),PC->bShowMouseCursor);
+    TestNotNull(TEXT("Retail busy cursor resolves from the DAT mapper"),PC->RetailCursorBusyTex.Get());
+    TestTrue(TEXT("Portal blocks movement and camera input"),PC->IsMoveInputIgnored() && PC->IsLookInputIgnored());
+    TestFalse(TEXT("Held and repeating attacks are cancelled on entry"),Binder->bCombatRepeatActive || Binder->bCombatAttackRequestPending);
+    Binder->HandleChatMessage(TEXT("During portal"),TEXT(""),0);
+    TestEqual(TEXT("Incoming chat is still displayed"),Binder->ChatLog->GetChildrenCount(),Lines+1);
+    const uint32 BeforeChat=Session->NextGameActionSequence;
+    Client->SendChatMessage(TEXT("Portal chat test"));
+    TestEqual(TEXT("Outgoing chat remains available"),Session->NextGameActionSequence,BeforeChat+1);
+    const int32 Mode=Binder->CombatMode;
+    const uint32 BeforeCombat=Session->NextGameActionSequence;
+    Binder->ApplyCombatModeInternal(int32(ACECombatMode::Magic),true);
+    TestEqual(TEXT("Rejected mode change cannot optimistically alter the UI"),Binder->CombatMode,Mode);
+    Client->SendTargetedMeleeAttack(0x70000001,ACEAttackHeight::Medium,.5f);
+    Client->SendTargetedMissileAttack(0x70000001,ACEAttackHeight::Medium,.5f);
+    TestFalse(TEXT("Portal rejects spell casting"),Client->SendCastSpell(1));
+    TestEqual(TEXT("Portal combat emits no game actions"),Session->NextGameActionSequence,BeforeCombat);
+    Binder->SyncCombatModeFromServer(int32(ACECombatMode::Melee));
+    TestEqual(TEXT("Server mode updates remain authoritative"),Binder->CombatMode,int32(ACECombatMode::Melee));
+    Binder->BeginCombatPowerCharge(ACEAttackHeight::High,true);Binder->TickCombatAutoAttack(.016f);
+    TestFalse(TEXT("Clicking attack in portal cannot queue an attack for arrival"),Binder->bCombatAttackRequestPending || Binder->bCombatRepeatActive);
+    PC->BeginUseApproach(0x70000001,.6f,false,true);
+    TestFalse(TEXT("World use cannot start an approach in portal space"),PC->IsUseApproachActive());
+    Binder->ChatEntry->SetText(FText::GetEmpty());FSlateApplication::Get().ClearKeyboardFocus(EFocusCause::Cleared);
+    // Retail's Options binding is F11 (the logical action key is EKeys::O).
+    PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::F11,IE_Pressed,1.f));
+    // PlayerTick itself processes the input stack; processing twice discards
+    // the edge-triggered key before the controller can poll it.
+    PC->PlayerTick(.016f);
+    auto Options=Manager->FindElementByName(TEXT("OptionsPanel_Field"));
+    TestTrue(TEXT("Options keyboard shortcut works during the actual portal tick"),Options && Options->bVisible);
+    PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::F11,IE_Released,0.f));
+    PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::Escape,IE_Pressed,1.f));PC->PlayerTick(.016f);
+    TestTrue(TEXT("Escape closes options while the portal view is active"),Options && !Options->bVisible);
+    PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::Escape,IE_Released,0.f));
+    PC->PlayerInput->ProcessInputStack({},.016f,false);
+    PC->SetDesktopInterfaceHidden(true);TestFalse(TEXT("Manual interface hide still works in portal space"),Canvas->IsVisible());
+    PC->SetDesktopInterfaceHidden(false);TestTrue(TEXT("Manual interface show still works in portal space"),Canvas->IsVisible());
+    PC->SetDesktopInterfaceHidden(true);PC->BeginWorldTransition(TEXT("hidden-ui-recall"));
+    TestFalse(TEXT("Another transition honors the user's hidden HUD preference"),Canvas->IsVisible());
+    // Destination placement/reveal is exercised by PortalDrops. Verify the UI
+    // action gate releases with the controller's transition lifecycle flags.
+    PC->bEnterWorldLoading=PC->bWorldRevealActive=false;PC->ShowGameHUD();
+    TestFalse(TEXT("Arrival does not override a manually hidden interface"),Canvas->IsVisible());
+    PC->SetDesktopInterfaceHidden(false);
+    const uint32 BeforeResume=Session->NextGameActionSequence;
+    Binder->ApplyCombatModeInternal(int32(ACECombatMode::Magic),true);
+    TestEqual(TEXT("Combat mode requests resume outside portal space"),Session->NextGameActionSequence,BeforeResume+1);
+    TestEqual(TEXT("Resumed combat updates the UI"),Binder->CombatMode,int32(ACECombatMode::Magic));
+    PC->DestroyGameHUD();
     return !HasAnyErrors();
 }
 

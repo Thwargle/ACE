@@ -39,16 +39,23 @@ bool FACEWalkingStepTest::RunTest(const FString&)
  auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();auto* Client=GI->GetSubsystem<UACEClientSubsystem>();
  auto Session=Client->GetSession();
  if(!TestTrue(TEXT("Retail DAT loads"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
- // Independent retail data: the start and stop clips total one 0.780484m step.
- double RetailStep=0;
+ // CSequence excludes High on forward exit and enters the next positive
+ // clip at Low. Reverse traversal subtracts every frame, including Low.
+ double RetailStep=0,ReverseStep=0,ExitFirst=0;
  for(uint32 Id:{0x03000006u,0x03000009u})
  {
   TArray<uint8> Blob;Dat->GetPortalDat()->ReadFile(Id,Blob);
   FACEDatCursor Cursor(Blob);FACEDatAnimation Anim;
   if(!ACEDatUnpack::UnpackAnimation(Cursor,Anim))return false;
-  for(const auto& Frame:Anim.PositionFrames)RetailStep+=Frame.GetTranslation().Y;
+  for(int I=0;I<Anim.PositionFrames.Num();++I)
+  {
+   ReverseStep+=Anim.PositionFrames[I].GetTranslation().Y;
+   if(I+1<Anim.PositionFrames.Num())RetailStep+=Anim.PositionFrames[I].GetTranslation().Y;
+  }
+  if(Id==0x03000009u){ExitFirst=Anim.PositionFrames[0].GetTranslation().Y;RetailStep+=ExitFirst;}
  }
- TestTrue(TEXT("Retail walk links cover one full step"),FMath::Abs(RetailStep-.780484)<.00001);
+ TestTrue(TEXT("Retail forward step matches ACE Sequence endpoint"),FMath::Abs(RetailStep-.758917)<.00001);
+ TestTrue(TEXT("Retail reverse step includes the boundary frame"),FMath::Abs(ReverseStep-.780484)<.00001);
  auto* PC=World->SpawnActor<AACEPlayerController>();PC->Client=Client;
  PC->SetPlayer(NewObject<ULocalPlayer>(GEngine));World->AddController(PC);
  auto* Pawn=World->SpawnActor<APawn>();auto* Capsule=NewObject<UCapsuleComponent>(Pawn);
@@ -95,7 +102,7 @@ bool FACEWalkingStepTest::RunTest(const FString&)
   for(int I=0;I<2/Dt;++I)Tick(Dt);
   const double Travel=(Pawn->GetActorLocation().X-StartFeet.X)/100.;
   const FString Label=FString::Printf(TEXT("%.0fHz %d-frame tap direction=%d travels %.6fm"),1/Dt,Hold,Direction,Travel);
-  AddInfo(Label);TestTrue(*Label,FMath::Abs(Travel-RetailStep*Direction)<.002);
+  AddInfo(Label);TestTrue(*Label,FMath::Abs(Travel-(Direction>0?RetailStep:-ReverseStep))<.002);
   TestFalse(TEXT("Completed step releases forced reporting"),Session->bForcePositionReporting);
   TestFalse(TEXT("Completed step has no pending animation"),App->HasWalkingTransition());
  }
@@ -103,7 +110,7 @@ bool FACEWalkingStepTest::RunTest(const FString&)
  Reset();Key(EKeys::LeftShift,true);Key(EKeys::W,true);
  for(int I=0;I<90;++I)Tick(1.f/90);
  Key(EKeys::W,false);for(int I=0;I<90;++I)Tick(1.f/90);
- TestTrue(TEXT("Held walking continues after the entry clip"),FMath::Abs((Pawn->GetActorLocation().X-StartFeet.X)/100.-(RetailStep+(1.-11./30)*3.12))<.003);
+ TestTrue(TEXT("Held walking continues after the entry clip"),FMath::Abs((Pawn->GetActorLocation().X-StartFeet.X)/100.-(RetailStep-ExitFirst+(1.-11./30)*3.12))<.003);
  Reset();Key(EKeys::LeftShift,true);Key(EKeys::C,true);Tick(1.f/90);Key(EKeys::C,false);Tick(1.f/90);
  const FVector StrafeEnd=Pawn->GetActorLocation();for(int I=0;I<90;++I)Tick(1.f/90);
  TestTrue(TEXT("Strafe still permits a micro-step and stops on release"),FVector::Dist2D(StartFeet,StrafeEnd)<10 && FVector::Dist2D(StrafeEnd,Pawn->GetActorLocation())<.01);

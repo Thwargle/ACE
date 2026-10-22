@@ -126,11 +126,13 @@ namespace
 void UACEUICanvasWidget::InitializeCanvas(UACEUIElementManager* InManager)
 {
 	Manager = InManager;
+	if (Manager) Manager->SetResourceResolver(ResourceResolver);
 }
 
 void UACEUICanvasWidget::SetResourceResolver(UACEUIResourceResolver* InResolver)
 {
 	ResourceResolver = InResolver;
+	if (Manager) Manager->SetResourceResolver(ResourceResolver);
 }
 
 void UACEUICanvasWidget::SetGameplayBinder(UACEUIGameplayBinder* InBinder)
@@ -778,6 +780,10 @@ void UACEUICanvasWidget::SyncElementRecursive(
 		DrawH = VisY1 - VisY0;
 
 		UsedIds.Add(Element->InstanceId);
+		// Chat controls overlap selectable text in retail. Keep their DAT art
+		// and hit surface above the generated log, within the owning window.
+		const bool bChatControl = Element->ElementName == TEXT("MaximizeButton")
+			|| Element->ElementName == TEXT("ChatLogNewNonVisibleTextIndicator");
 
 		UBorder* Border = ImageWidgets.FindRef(Element->InstanceId);
 		if (!Border)
@@ -785,7 +791,7 @@ void UACEUICanvasWidget::SyncElementRecursive(
 			Border = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
 			Border->SetPadding(FMargin(0.f));
 			UCanvasPanel* ClipPanel = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass());
-			ClipPanel->SetVisibility(ESlateVisibility::HitTestInvisible);
+			ClipPanel->SetVisibility(bChatControl ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::HitTestInvisible);
 			ClipPanel->SetClipping(EWidgetClipping::ClipToBoundsAlways);
 			ElementLayer->AddChild(ClipPanel);
 			ClipPanel->AddChild(Border);
@@ -803,7 +809,7 @@ void UACEUICanvasWidget::SyncElementRecursive(
 			for (auto Parent=Element->Parent.Pin(); Parent; Parent=Parent->Parent.Pin())
 				Tint.A *= Parent->ImageOpacity;
 		// Sibling ZLevel is already sorted; adding it again breaks parent/child paint order.
-		const int32 PaintZ = InOutZOrder;
+		const int32 PaintZ = bChatControl ? WindowPaintBase(RetailWindow(Element)) + WindowContentOffset + 100540 : InOutZOrder;
 
 		// UIRegion::SetImageByDID maps drawMode 1/2/3 to normal/3-alpha/4-alpha
 		// blending, not stretch modes. Graphic::Draw repeats native-size pixels
@@ -834,7 +840,7 @@ void UACEUICanvasWidget::SyncElementRecursive(
 			TileSize = FVector2D(TexW, TexH);
 		}
 		ApplyPaintState(Border, Element->InstanceId, Tex, Tint, DrawX, DrawY, DrawW, DrawH, PaintZ,
-			ESlateVisibility::HitTestInvisible,
+			bChatControl ? ESlateVisibility::Visible : ESlateVisibility::HitTestInvisible,
 			TileType, TileSize, FIntRect(ElX0, ElY0, ElX1, ElY1));
 
 		++InOutZOrder;
@@ -1094,7 +1100,7 @@ FReply UACEUICanvasWidget::NativeOnMouseButtonUp(const FGeometry& InGeometry, co
 	const FVector2D ViewportSize = InGeometry.GetLocalSize();
 	if (Manager)
 	{
-		Manager->NotifyMouseUp(Local, ViewportSize, InMouseEvent.GetEffectingButton(), CharGenBinder != nullptr);
+		Manager->NotifyMouseUp(Local, ViewportSize, InMouseEvent.GetEffectingButton(), CharGenBinder != nullptr || CharSelectBinder != nullptr);
 		if (TakeWidget()->HasMouseCaptureByUser(InMouseEvent.GetUserIndex(), InMouseEvent.GetPointerIndex()))
 		{
 			return FReply::Handled().ReleaseMouseCapture();

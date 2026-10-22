@@ -78,9 +78,67 @@ bool FACEDatMotionPlayer::FindCycleAnims(uint32 Command, TArray<FACEDatAnimData>
 
 bool FACEDatMotionPlayer::GetCycleVelocity(uint32 Command, uint32 Style, FVector& Out) const
 {
+    if ((Command & 0x20000000u) != 0)
+    {
+        // Sidestep is additive MotionData physics while a forward cycle runs.
+        // Its optional stand-alone cycle is not the modifier's velocity.
+        if (!Style) Style = MotionTable->DefaultStyle;
+        const auto* Modifier = MotionTable->Modifiers.Find((Style<<16)|(Command&0xFFFFFFu));
+        if (!Modifier) Modifier = MotionTable->Modifiers.Find(Command&0xFFFFFFu);
+        if (!Modifier) return false;
+        Out = FVector(Modifier->Velocity);
+        return !Out.ContainsNaN();
+    }
     const auto* Cycle = FindCycle(Command, Style);
-    if (!Cycle || !Cycle->bHasVelocity) return false;
-    Out = FVector(Cycle->Velocity);
+    if (!Cycle) return false;
+    ACELandingMotion::FRootTrack Root;
+    Out = BuildCycleRootTrack(Command, Style, Root)
+        ? Root.Keys.Last().Transform.GetTranslation()/Root.Keys.Last().Time : FVector(Cycle->Velocity);
+    return !Out.ContainsNaN();
+}
+
+bool FACEDatMotionPlayer::BuildCycleRootTrack(uint32 Command, uint32 Style, ACELandingMotion::FRootTrack& Out, bool Reverse) const
+{
+    Out.Reset();
+    const auto* Cycle = FindCycle(Command, Style);
+    if (!Cycle) return false;
+    auto Clips = Cycle->Anims;
+    if (Reverse) for (auto& Clip : Clips) Clip.Framerate *= -1.f;
+    if (!BuildRootTrack(Clips, Out)) return false;
+    // advance_to_next_animation enters the first cyclic frame at the boundary.
+    auto& End = Out.Keys.Last().Transform;
+    End.SetTranslation(End.GetTranslation()+End.GetRotation().RotateVector(Out.Entry.GetTranslation()));
+    End.SetRotation((End.GetRotation()*Out.Entry.GetRotation()).GetNormalized());
+    // CSequence combines animation position frames with MotionData physics.
+    // Most creatures have position frames and no explicit Velocity field.
+    FTransform Pose = FTransform::Identity, Previous = FTransform::Identity;
+    for (int32 I=1; I<Out.Keys.Num(); ++I)
+    {
+        auto& Key = Out.Keys[I];
+        const FTransform Authored = Key.Transform;
+        FTransform Delta = Authored.GetRelativeTransform(Previous);
+        const float Dt = Key.Time-Out.Keys[I-1].Time;
+        Delta.AddToTranslation(FVector(Cycle->Velocity)*Dt*(Reverse ? -1.f : 1.f));
+        const FVector Omega(Cycle->Omega);
+        if (!Omega.IsNearlyZero()) Delta.SetRotation((Delta.GetRotation()*FQuat(Omega.GetSafeNormal(),Omega.Size()*Dt*(Reverse ? -1.f : 1.f))).GetNormalized());
+        Pose.SetTranslation(Pose.GetTranslation()+Pose.GetRotation().RotateVector(Delta.GetTranslation()));
+        Pose.SetRotation((Pose.GetRotation()*Delta.GetRotation()).GetNormalized());
+        Key.Transform = Pose;
+        Previous = Authored;
+    }
+    return true;
+}
+
+bool FACEDatMotionPlayer::GetModifierOmega(uint32 Command, uint32 Style, FVector& Out) const
+{
+    // CMotionTable::GetObjectSequence first checks the current style, then
+    // the unqualified modifier. A zero-animation modifier is still valid.
+    if (!Style) Style = MotionTable->DefaultStyle;
+    const uint32 Motion = Command & 0xFFFFFFu;
+    const auto* Data = MotionTable->Modifiers.Find((Style << 16) | Motion);
+    if (!Data) Data = MotionTable->Modifiers.Find(Motion);
+    if (!Data) return false;
+    Out = FVector(Data->Omega);
     return !Out.ContainsNaN();
 }
 
@@ -364,15 +422,32 @@ bool FACEDatMotionPlayer::BuildTransitionRootTrack(uint32 From, uint32 To, uint3
 	Out.Reset();
 	TArray<FACEDatAnimData> Clips;
 	if (!FindTransitionAnims(From, To, Clips, Style)) return false;
-	return BuildRootTrack(Clips, Out);
+	if (!BuildRootTrack(Clips, Out)) return false;
+	// A complete transition enters its destination cycle. CSequence adds
+	// that first position frame only for a positive-rate cycle; Dead is a
+	// zero-rate held pose and contributes no extra displacement.
+	const auto* Cycle = FindCycle(To, Style);
+	if (Cycle && !Cycle->Anims.IsEmpty() && Cycle->Anims[0].Framerate > 0.f)
+	{
+		const auto& First = Cycle->Anims[0];
+		const auto* Anim = LoadAnimation(First.AnimId);
+		if (Anim && Anim->PositionFrames.IsValidIndex(First.LowFrame))
+		{
+			const FTransform Entry(Anim->PositionFrames[First.LowFrame]);
+			auto& End = Out.Keys.Last().Transform;
+			End.SetTranslation(End.GetTranslation()+End.GetRotation().RotateVector(Entry.GetTranslation()));
+			End.SetRotation((End.GetRotation()*Entry.GetRotation()).GetNormalized());
+		}
+	}
+	return true;
 }
 
 bool FACEDatMotionPlayer::BuildWalkingLink(int8 From, int8 To, uint32 Style, ACEWalkingMotion::FLink& Out) const
 {
 	Out = {};
 	if (Style == 0) Style = MotionTable->DefaultStyle;
-	constexpr uint32 Ready = 0x41000003u, Walk = 0x45000005u;
-	uint32 Source = From ? Walk : Ready, Target = To ? Walk : Ready;
+	constexpr uint32 Ready = 0x41000003u, Walk = 0x45000005u, Run = 0x44000007u;
+	uint32 Source = From == 2 ? Run : From ? Walk : Ready, Target = To == 2 ? Run : To ? Walk : Ready;
 	// CMotionTable::get_link reverses the lookup for negative movement. Entry
 	// uses WalkBackwards' -0.65 rate; returning to Ready uses -1.
 	const bool Reverse = From < 0 || To < 0;
@@ -408,11 +483,24 @@ bool FACEDatMotionPlayer::BuildRootTrack(const TArray<FACEDatAnimData>& Clips, A
 		if (!Anim || Anim->NumFrames <= 0 || Rate <= SMALL_NUMBER) { Out.Reset(); return false; }
 		const int32 High = Clip.HighFrame < 0 ? int32(Anim->NumFrames)-1 : FMath::Min(Clip.HighFrame,int32(Anim->NumFrames)-1);
 		const int32 Low = FMath::Clamp(Clip.LowFrame,0,High);
+		const FTransform Entry = Clip.Framerate > 0.f && Anim->PositionFrames.IsValidIndex(Low)
+			? FTransform(Anim->PositionFrames[Low]) : FTransform::Identity;
+		if (Time == 0.f) Out.Entry = Entry;
+		else
+		{
+			Pose.SetTranslation(Pose.GetTranslation()+Pose.GetRotation().RotateVector(Entry.GetTranslation()));
+			Pose.SetRotation((Pose.GetRotation()*Entry.GetRotation()).GetNormalized());
+			Out.Keys.Last().Transform = Pose;
+		}
 		for (int32 I=0; I<=High-Low; ++I)
 		{
 			const int32 Frame = Clip.Framerate < 0.f ? High-I : Low+I;
 			FTransform Delta = Anim->PositionFrames.IsValidIndex(Frame)
 				? FTransform(Anim->PositionFrames[Frame]) : FTransform::Identity;
+			// CSequence clamps to High when leaving a positive clip. Its last
+			// frame is a held pose, not another root step. Reverse traversal
+			// subtracts Low on exit; the next positive node adds its first frame.
+			if (Clip.Framerate > 0.f && Frame == High) Delta = FTransform::Identity;
 			// CSequence::update_internal combines forward frames, subtracts reverse frames.
 			if (Clip.Framerate < 0.f) Delta = Delta.Inverse();
 			Pose.SetTranslation(Pose.GetTranslation()+Pose.GetRotation().RotateVector(Delta.GetTranslation()));

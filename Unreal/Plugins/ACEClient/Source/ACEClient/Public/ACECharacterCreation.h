@@ -91,6 +91,7 @@ private:
     friend class FACEAppearancePlacementTest;
     friend class FACETailoringLayersTest;
     friend class FACECustomWorldPresentationTest;
+    friend class FACEDesktopHighlightTest;
     friend class FACERetailWorldEntryTest;
     void ResetSkills();
     void ConstrainAppearance(const int32 (&ColorIndices)[4]);

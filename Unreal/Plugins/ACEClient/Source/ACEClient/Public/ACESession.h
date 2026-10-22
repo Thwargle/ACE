@@ -47,6 +47,7 @@ DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnApproachVendor, int32 /*VendorGuid*/);
 DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnTradeEvent, int32 /*EventType*/);
 DECLARE_MULTICAST_DELEGATE(FACEOnCharacterTitlesChanged);
 DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnUseDone, uint32 /*WeenieError*/);
+DECLARE_MULTICAST_DELEGATE_TwoParams(FACEOnSpellCastRequested, int32 /*SpellId*/, int32 /*TargetGuid*/);
 DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnMoveToFailed, uint32 /*WeenieError*/);
 DECLARE_MULTICAST_DELEGATE(FACEOnFellowshipChanged);
 DECLARE_MULTICAST_DELEGATE(FACEOnAllegianceChanged);
@@ -111,6 +112,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEUIInteractionParityTest;
 	friend class FACEPanelResizeSocialTest;
 	friend class FACEMovementReviewTest;
+	friend class FACERemoteMovementReplayTest;
 	friend class FACEAvatarMotionTest;
 	friend class FACEEmoteTest;
 	friend class FACEVRInteriorTest;
@@ -141,6 +143,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEPortalDropTest;
 	friend class FACEPortalMotionTest;
 	friend class FACELoadingTransitionTest;
+	friend class FACEPortalInterfaceTest;
 	friend class FACELedgeStairsTest;
 	friend class FACELedgeSafetyTest;
 	friend class FACESlopeContactTest;
@@ -155,12 +158,14 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACECameraEdgeTest;
 	friend class FACERetailParticleTimingTest;
 	friend class FACERetailStatsTest;
+	friend class FACERetailAugmentationStatsTest;
 	friend class FACEAugmentationTest;
 	friend class FACERetailInventoryOrderTest;
 	friend class FACEClosedContainerLifetimeTest;
 	friend class FACEEquippedLookupTest;
 	friend class FACEInventoryUICostTest;
 	friend class FACEUIWorkloadTest;
+	friend class FACEUCMIdleWorkloadTest;
 
 public:
 	FACESession();
@@ -208,6 +213,7 @@ public:
 	FACEOnTradeEvent OnTradeEvent;
 	FACEOnCharacterTitlesChanged OnCharacterTitlesChanged;
 	FACEOnUseDone OnUseDone;
+	FACEOnSpellCastRequested OnSpellCastRequested;
 	FACEOnMoveToFailed OnMoveToFailed;
 	/** Shared local/server approach failure path: cancel movement and show the retail error. */
 	void ReportMoveToFailure(uint32 Error);

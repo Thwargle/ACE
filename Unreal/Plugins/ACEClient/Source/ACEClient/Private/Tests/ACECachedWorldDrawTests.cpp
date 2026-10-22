@@ -24,6 +24,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "ImageUtils.h"
+#include "Scalability.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECachedWorldDrawTest, "ACE.Rendering.CachedWorldDraws",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -193,6 +194,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEMobileShadowTest, "ACE.Rendering.MobileShad
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEMobileShadowTest::RunTest(const FString&)
 {
+    const auto PreviousQuality=Scalability::GetQualityLevels();
+    auto Quality=PreviousQuality; Quality.ShadowQuality=3; Scalability::SetQualityLevels(Quality);
+    IConsoleManager::Get().CallAllConsoleVariableSinks();
+    ON_SCOPE_EXIT { Scalability::SetQualityLevels(PreviousQuality); IConsoleManager::Get().CallAllConsoleVariableSinks(); };
     const auto Values = UWorld::InitializationValues().AllowAudioPlayback(false)
         .RequiresHitProxies(false).CreatePhysicsScene(false).CreateNavigation(false).CreateAISystem(false);
     auto* World = UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);
@@ -293,6 +298,21 @@ bool FACEMobileShadowTest::RunTest(const FString&)
     for (int32 I=0;I<With.Num();++I) Darkened+=int32(Without[I].R)-With[I].R>12;
     AddInfo(FString::Printf(TEXT("Feature level %d: human shadow darkens %d receiver pixels"),int32(World->GetFeatureLevel()),Darkened));
     TestTrue(TEXT("Runtime cascades cast a human shadow at AC world coordinates"),Darkened>80);
+    Player->Appearance->SetPartsCastShadow(true,false);
+    Quality.ShadowQuality=0; Scalability::SetQualityLevels(Quality);
+    IConsoleManager::Get().CallAllConsoleVariableSinks(); Sky->UpdateWorldLighting(Key,Key,0,.5f);
+    const auto SettingsOff=Render(TEXT("Shadow-Settings-Off.png"));
+    int32 RemainingShadow=0;
+    for(int32 I=0;I<Without.Num();++I) RemainingShadow+=int32(Without[I].R)-SettingsOff[I].R>12;
+    TestTrue(TEXT("Video Shadows Off removes rendered shadows while preserving the scene"),RemainingShadow<10);
+    Quality.ShadowQuality=3; Scalability::SetQualityLevels(Quality);
+    // ApplyNonResolutionSettings runs these sinks in gameplay. They rebuild
+    // cached mesh passes that were created while shadow quality was zero.
+    IConsoleManager::Get().CallAllConsoleVariableSinks(); Sky->UpdateWorldLighting(Key,Key,0,.5f);
+    const auto SettingsRestored=Render(TEXT("Shadow-Settings-Restored.png"));
+    int32 RestoredShadow=0;
+    for(int32 I=0;I<Without.Num();++I) RestoredShadow+=int32(Without[I].R)-SettingsRestored[I].R>12;
+    TestTrue(TEXT("Video shadow quality restores real shadows without reloading the world"),RestoredShadow>80);
     // The first-person player hides body parts from the owner, but their actual
     // geometry must still cast shadows. HiddenInGame exercises the same hidden
     // shadow path without making this off-screen capture a player view.

@@ -374,6 +374,14 @@ bool FACELedgerTest::RunTest(const FString&)
         auto Add=FindTagged(SupplyWindow,TEXT("LedgerEdit"));
         if(!TestTrue(TEXT("Empty pinned ledger exposes add"),Add.IsValid()))return false;
         const auto AddBounds=Add->GetCachedGeometry(),EmptyBounds=SupplyWindow->GetCachedGeometry();
+        const auto AddCaption=StaticCastSharedPtr<SButton>(Add)->GetContent();
+        const auto CaptionBounds=AddCaption->GetCachedGeometry();
+        const auto CaptionInset=AddBounds.AbsoluteToLocal(CaptionBounds.GetAbsolutePosition());
+        TestTrue(TEXT("Supply add button reserves a readable interior inside the retail bevel"),
+            AddBounds.GetLocalSize().X>=28&&AddBounds.GetLocalSize().Y>=28&&CaptionInset.X>=5.9&&CaptionInset.Y>=5.9);
+        TestTrue(TEXT("Supply add symbol is fully allocated and centered"),
+            CaptionBounds.GetLocalSize().X>=AddCaption->GetDesiredSize().X&&CaptionBounds.GetLocalSize().Y>=AddCaption->GetDesiredSize().Y&&
+            AddBounds.AbsoluteToLocal(CaptionBounds.LocalToAbsolute(CaptionBounds.GetLocalSize()*.5)).Equals(AddBounds.GetLocalSize()*.5,.1f));
         TestTrue(TEXT("Add control fits the minimum-size pinned ledger"),AddBounds.GetAbsolutePosition().Y>=EmptyBounds.GetAbsolutePosition().Y&&
             AddBounds.GetAbsolutePosition().Y+AddBounds.GetAbsoluteSize().Y<=EmptyBounds.GetAbsolutePosition().Y+EmptyBounds.GetAbsoluteSize().Y);
         PNG.Reset();FImageUtils::PNGCompressImageArray(Target->SizeX,Target->SizeY,[&]{TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);return Pixels;}(),PNG);

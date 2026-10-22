@@ -8,6 +8,7 @@
 #include "ACEUIElementManager.generated.h"
 
 DECLARE_MULTICAST_DELEGATE_OneParam(FACEUIElementHit, TSharedPtr<FACEUIElement>);
+class UACEUIResourceResolver;
 
 /**
  * Retail UIElementManager singleton analogue.
@@ -22,6 +23,7 @@ class ACECLIENT_API UACEUIElementManager : public UObject
 public:
 	void Initialize();
 	void Shutdown();
+	void SetResourceResolver(UACEUIResourceResolver* InResolver);
 
 	int32 GetCanvasWidth() const { return ACEUI::ReferenceWidth; }
 	int32 GetCanvasHeight() const { return ACEUI::ReferenceHeight; }
@@ -121,6 +123,7 @@ public:
 	FACEUIElementHit OnElementActivated;
 
 private:
+	UPROPERTY(Transient) TObjectPtr<UACEUIResourceResolver> ResourceResolver;
     void ConstrainWindow(const TSharedPtr<FACEUIElement>& Window, FIntPoint ViewSize);
 	mutable TMap<FString, TArray<TSharedPtr<FACEUIElement>>> NameLookupIndex;
 	mutable bool bNameLookupIndexValid = false;

@@ -1342,6 +1342,20 @@ UTexture2D* FACEDatTextureResolver::GetOrCreateUiTexture(uint32 TextureId)
 	return Tex;
 }
 
+UTexture2D* FACEDatTextureResolver::CreateTransientRgbaUiIcon(int32 Width, int32 Height, const TArray<FColor>& Pixels)
+{
+	if (Width <= 0 || Height <= 0 || Pixels.Num() != int64(Width) * Height) return nullptr;
+	TArray<FColor> IconPixels = Pixels;
+	// Retail composites at native resolution; Slate can scale these cutouts. DAT's
+	// invisible white RGB must not bleed into visible edges during bilinear sampling.
+	// Only alpha-zero RGB changes: all coverage, translucent art and mask/effect
+	// colors remain intact. Do this after composing overlays and replacing white.
+	for (FColor& C : IconPixels)
+		if (C.A == 0) C.R = C.G = C.B = 0;
+	DilateRgbIntoTransparent(IconPixels, Width, Height, /*Passes*/ 2);
+	return CreateTransientRgbaUi(Width, Height, IconPixels);
+}
+
 UTexture2D* FACEDatTextureResolver::GetOrCreateUiIconTexture(uint32 TextureId)
 {
 	if (auto* Retained = TakeRetainedTexture(TextureId, RetainedIconTextures))
@@ -1375,28 +1389,11 @@ UTexture2D* FACEDatTextureResolver::GetOrCreateUiIconTexture(uint32 TextureId)
 		return nullptr;
 	}
 
-	TArray<FColor> IconPixels = Decoded.Pixels;
-	IconPixels.SetNum(Decoded.Width * Decoded.Height, EAllowShrinking::No);
-	// Transparent texels keep white RGB in DAT. Knock that out, then flood opaque RGB into
-	// the holes so bilinear stretch cannot pick a white 1px frame around the cutout.
-	for (FColor& C : IconPixels)
-	{
-		if (C.A == 0)
-		{
-			C.R = 0;
-			C.G = 0;
-			C.B = 0;
-		}
-	}
-	DilateRgbIntoTransparent(IconPixels, Decoded.Width, Decoded.Height, /*Passes*/ 2);
-
-	UTexture2D* Tex = CreateTransientRgbaUi(Decoded.Width, Decoded.Height, IconPixels);
+	UTexture2D* Tex = CreateTransientRgbaUiIcon(Decoded.Width, Decoded.Height, Decoded.Pixels);
 	if (!Tex)
 	{
 		return nullptr;
 	}
-	Tex->Filter = TF_Bilinear;
-	Tex->UpdateResource();
 	BindRuntimeTexture(Tex);
 	IconTextureObjects.Add(TextureId, Tex);
 	IconLastUsed.Add(TextureId, FPlatformTime::Seconds());

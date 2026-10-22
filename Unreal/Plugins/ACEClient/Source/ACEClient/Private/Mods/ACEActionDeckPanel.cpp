@@ -19,12 +19,13 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/Input/SInputKeySelector.h"
+#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Text/STextBlock.h"
 
 namespace
 {
-    TSharedRef<SWidget> Label(const FString& Text,int32 Size=12)
-    {return SNew(SACEPluginText).Text(FText::FromString(Text)).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size));}
+    TSharedRef<SWidget> DeckLabel(const FString& Text,int32 Size=12)
+    {return SNew(SACEPluginText).Text(FText::FromString(Text)).Font(FACEPluginStyle::NativeFont("Regular",Size));}
 
     void PaintIcon(const FACEDeckSlot& Slot,FACEPluginStyle& Theme,const FGeometry& G,
         FSlateWindowElementList& Out,int32 Layer,bool Ready)
@@ -45,7 +46,7 @@ namespace
             const TArray<FVector2D> Points={{5,Y},{26,Y},{21,Y-4},{26,Y},{21,Y+4}};
             FSlateDrawElement::MakeLines(Out,Layer+1,G.ToPaintGeometry(),Points,Effect,FLinearColor(.9f,.72f,.3f)*Tint,true,2);
             FSlateDrawElement::MakeText(Out,Layer+1,G.ToPaintGeometry(),
-                Slot.Action==EACEDeckAction::Melee?TEXT("M"):TEXT("R"),FCoreStyle::GetDefaultFontStyle("Bold",12),Effect,Tint);
+                Slot.Action==EACEDeckAction::Melee?TEXT("M"):TEXT("R"),FACEPluginStyle::NativeFont("Bold",12),Effect,Tint);
         }
     }
 
@@ -95,7 +96,7 @@ namespace
             Deck=A._Deck;Configure=A._Configure;Selected=A._Selected;SetCanTick(false);
             Host=Deck->GetGameInstance()->GetSubsystem<UACEPluginSubsystem>();
             Theme=FACEPluginStyle::Use(Host.Get(),TEXT("actiondeck"));
-            SetToolTipText(TAttribute<FText>::CreateLambda([this]{return FText::FromString(Tooltip);}));
+            SetToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([this]{return FText::FromString(Tooltip);})));
         }
         virtual ~SDeckGrid() override {EndDrag();}
         virtual FVector2D ComputeDesiredSize(float) const override {return FVector2D(504,126);}
@@ -131,9 +132,29 @@ namespace
                 FSlateDrawElement::MakeBox(Out,Layer,CG.ToPaintGeometry(),CellBrush,ESlateDrawEffect::None,CellBrush->GetTint(Style));
                 const auto IconG=CG.MakeChild(CG.GetLocalSize()-FVector2D(6,6),FSlateLayoutTransform(FVector2D(3,3)));
                 if(!Dragging||I!=From)PaintIcon(S,*Theme,IconG,Out,Layer+1,A.Ready);
+                const auto Timer=Deck->EffectTimer(I);
+                if(Timer.Remaining>0&&(!Dragging||I!=From))
+                {
+                    // Remaining effect time is information, not a casting lockout.
+                    // Shade the full button, draining from top to bottom.
+                    const float Height=CG.GetLocalSize().Y*Timer.Fraction();
+                    const auto Progress=CG.MakeChild(FVector2D(CG.GetLocalSize().X,Height),
+                        FSlateLayoutTransform(FVector2D(0,CG.GetLocalSize().Y-Height)));
+                    FSlateDrawElement::MakeBox(Out,Layer+3,Progress.ToPaintGeometry(),
+                        FCoreStyle::Get().GetBrush("WhiteBrush"),ESlateDrawEffect::None,FLinearColor(.12f,.2f,.3f,.55f));
+                    const auto TimerFont=FACEPluginStyle::NativeFont("Bold",12);
+                    const FString Label=Timer.Label();
+                    const FVector2D Size=FSlateApplication::Get().GetRenderer()->GetFontMeasureService()->Measure(Label,TimerFont);
+                    const float Scale=FMath::Min(1.f,float((CG.GetLocalSize().X-4)/FMath::Max(1.,Size.X)));
+                    const FVector2D At((CG.GetLocalSize().X-Size.X*Scale)*.5,FMath::Max(13.,(CG.GetLocalSize().Y-Size.Y*Scale)*.5));
+                    FSlateDrawElement::MakeText(Out,Layer+4,CG.MakeChild(Size,FSlateLayoutTransform(Scale,At+FVector2D(1,1))).ToPaintGeometry(),
+                        Label,TimerFont,ESlateDrawEffect::None,FLinearColor::Black);
+                    FSlateDrawElement::MakeText(Out,Layer+5,CG.MakeChild(Size,FSlateLayoutTransform(Scale,At)).ToPaintGeometry(),
+                        Label,TimerFont,ESlateDrawEffect::None,FLinearColor::White);
+                }
                 // High-contrast key labels are independent of the disabled item art.
                 const FString Key=Deck->KeyLabel(I);
-                const auto Font=FCoreStyle::GetDefaultFontStyle("Bold",9);
+                const auto Font=FACEPluginStyle::NativeFont("Bold",9);
                 const FVector2D TextSize=FSlateApplication::Get().GetRenderer()->GetFontMeasureService()->Measure(Key,Font);
                 const float Scale=FMath::Min(1.f,float((CG.GetLocalSize().X-4)/FMath::Max(1.,TextSize.X)));
                 const float Width=float(TextSize.X*Scale+4);
@@ -146,10 +167,10 @@ namespace
                 {
                     const auto CountG=CG.MakeChild(FVector2D(37,12),FSlateLayoutTransform(FVector2D(3,CG.GetLocalSize().Y-13)));
                     FSlateDrawElement::MakeText(Out,Layer+4,CountG.ToPaintGeometry(),FString::Printf(TEXT("%lld"),A.Count),
-                        FCoreStyle::GetDefaultFontStyle("Bold",9),ESlateDrawEffect::None,A.Count?FLinearColor::White:FLinearColor(.65f,.65f,.65f));
+                        FACEPluginStyle::NativeFont("Bold",9),ESlateDrawEffect::None,A.Count?FLinearColor::White:FLinearColor(.65f,.65f,.65f));
                 }
             }
-            return Layer+4;
+            return Layer+5;
         }
         virtual FReply OnMouseButtonDown(const FGeometry&,const FPointerEvent& E) override
         {
@@ -255,19 +276,22 @@ public:
             Modifiers.Add(MakeShared<FString>(Name));
         }
         auto Toolbar=SNew(SHorizontalBox);
-        Toolbar->AddSlot().AutoWidth()[SNew(SACEPluginTab).Tag(TEXT("ActionDeck.Override")).ContentPadding(FMargin(8,3)).FontSize(12)
+        Toolbar->AddSlot().AutoWidth()[SNew(SACEPluginTab).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).Tag(TEXT("ActionDeck.Override")).FontSize(12)
+            .Visibility_Lambda([this]{return Host->IsPluginWindowChromeHidden(TEXT("actiondeck"))?EVisibility::Collapsed:EVisibility::Visible;})
             .Selected_Lambda([this]{return Deck->Override;})
             .Text_Lambda([this]{return FText::FromString(Deck->Override?TEXT("Override: On"):TEXT("Override: Off"));})
-            .ToolTipText(FText::FromString(TEXT("Reserve deck keys while this window is open. Empty and disabled slots also block native hotbars. Typing always takes priority.")))
+            .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Reserve deck keys while this window is open. Empty and disabled slots also block native hotbars. Typing always takes priority."))))
             .OnClicked_Lambda([this]{Deck->Override=!Deck->Override;Deck->Save();return FReply::Handled();})];
-        Toolbar->AddSlot().AutoWidth().Padding(4,0)[SNew(SACEPluginTab).Tag(TEXT("ActionDeck.Lock")).ContentPadding(FMargin(8,3)).FontSize(12)
+        Toolbar->AddSlot().AutoWidth().Padding(4,0)[SNew(SACEPluginTab).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).Tag(TEXT("ActionDeck.Lock")).FontSize(12)
+            .Visibility_Lambda([this]{return Host->IsPluginWindowChromeHidden(TEXT("actiondeck"))?EVisibility::Collapsed:EVisibility::Visible;})
             .Selected_Lambda([this]{return Host->IsPluginWindowPinned(TEXT("actiondeck"));})
             .Text_Lambda([this]{return FText::FromString(Host->IsPluginWindowPinned(TEXT("actiondeck"))?TEXT("Locked"):TEXT("Lock"));})
-            .ToolTipText(FText::FromString(TEXT("Lock this window's position and hide its frame. Slots remain usable.")))
+            .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Lock this window's position and hide its frame. Slots remain usable."))))
             .OnClicked_Lambda([this]{Host->SetPluginWindowPinned(TEXT("actiondeck"),!Host->IsPluginWindowPinned(TEXT("actiondeck")));return FReply::Handled();})];
         Toolbar->AddSlot().FillWidth(1);
-        Toolbar->AddSlot().AutoWidth()[SNew(SButton).Tag(TEXT("ActionDeck.Settings")).ButtonStyle(&Theme->DockButton).IsFocusable(false)
-            .ContentPadding(2).ToolTipText(FText::FromString(TEXT("Configure row modifiers, individual keys and attack shortcuts")))
+        Toolbar->AddSlot().AutoWidth()[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::IconButtonPadding)).Tag(TEXT("ActionDeck.Settings")).ButtonStyle(&Theme->DockButton).IsFocusable(false)
+            .Visibility_Lambda([this]{return Host->IsPluginWindowChromeHidden(TEXT("actiondeck"))?EVisibility::Collapsed:EVisibility::Visible;})
+            .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Configure hotbars, target timers, keys and attack shortcuts"))))
             .OnClicked_Lambda([this]
             {
                 Deck->ConfigOpen=!Deck->ConfigOpen;Deck->CapturingKey=false;
@@ -291,9 +315,9 @@ public:
                     .Configure([this](int32 I){Selected=I;Deck->ConfigOpen=true;BuildSettings();})
                     .Selected_Lambda([this]{return Deck->ConfigOpen?Selected:INDEX_NONE;})]]]
             +SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(16)
-                [SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",10)).ColorAndOpacity(FLinearColor(.9f,.85f,.65f))
+                [SNew(STextBlock).Font(FACEPluginStyle::NativeFont("Regular",10)).ColorAndOpacity(FLinearColor(.9f,.85f,.65f))
                     .Text_Lambda([this]{return FText::FromString(Deck->Notice);})
-                    .ToolTipText_Lambda([this]{return FText::FromString(Deck->Notice);})
+                    .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([this]{return FText::FromString(Deck->Notice);})))
                     .Clipping(EWidgetClipping::ClipToBounds)]]
             +SVerticalBox::Slot().FillHeight(1)
                 [SAssignNew(Settings,SVerticalBox).Visibility_Lambda([this]{return Deck->ConfigOpen?EVisibility::Visible:EVisibility::Collapsed;})]];
@@ -319,8 +343,8 @@ private:
     int32 Selected=24;
     TSharedRef<SWidget> Button(const FString& Title,TFunction<void()> Action)
     {
-        return SNew(SButton).ButtonStyle(&Theme->DockButton).IsFocusable(false).ContentPadding(FMargin(7,4))
-            .OnClicked_Lambda([Action]{Action();return FReply::Handled();})[Label(Title)];
+        return SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).ButtonStyle(&Theme->DockButton).IsFocusable(false)
+            .OnClicked_Lambda([Action]{Action();return FReply::Handled();})[DeckLabel(Title)];
     }
     void BuildSettings()
     {
@@ -328,27 +352,43 @@ private:
         Deck->CapturingKey=false;
         Settings->ClearChildren();
         auto Body=SNew(SVerticalBox);
-        Body->AddSlot().AutoHeight().Padding(0,3)[Label(TEXT("Row modifiers · custom slot keys keep their own modifiers"))];
+        auto Option=[&](const TCHAR* WidgetTag,const TCHAR* Label,bool UACEActionDeckSubsystem::* Field)
+        {
+            Body->AddSlot().AutoHeight().Padding(0,3)[SNew(SCheckBox).Tag(FName(WidgetTag)).Style(&Theme->Check)
+                .IsChecked_Lambda([this,Field]{return Deck.Get()->*Field?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+                .OnCheckStateChanged_Lambda([this,Field](ECheckBoxState Value){Deck.Get()->*Field=Value==ECheckBoxState::Checked;Deck->Save();})
+                [DeckLabel(Label)]];
+        };
+        Option(TEXT("ActionDeck.HideSpellBar"),TEXT("Hide native spell bar"),&UACEActionDeckSubsystem::HideSpellBar);
+        Option(TEXT("ActionDeck.HideCombatBar"),TEXT("Hide native melee / missile bar"),&UACEActionDeckSubsystem::HideCombatBar);
+        Body->AddSlot().AutoHeight()[DeckLabel(TEXT("Native bars return when Action Deck is closed or disabled."),11)];
+        Option(TEXT("ActionDeck.TargetTimers"),TEXT("Show target debuff and damage-over-time timers"),&UACEActionDeckSubsystem::ShowTargetTimers);
+        Body->AddSlot().AutoHeight()[SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",11)).AutoWrapText(true)
+            .Text(FText::FromString(TEXT("Estimated time remaining from your confirmed casts on the selected target. Other players' effects and early dispels are not reported by the server. You can still recast.")))];
+        Body->AddSlot().AutoHeight().Padding(0,3)[SNew(SBox)
+            .Visibility_Lambda([this]{return Host->IsPluginWindowPinned(TEXT("actiondeck"))?EVisibility::Visible:EVisibility::Collapsed;})
+            [Button(TEXT("Unlock window"),[this]{Host->SetPluginWindowPinned(TEXT("actiondeck"),false);})]];
+        Body->AddSlot().AutoHeight().Padding(0,3)[DeckLabel(TEXT("Row modifiers · custom slot keys keep their own modifiers"))];
         auto Rows=SNew(SHorizontalBox);
         for(int32 R=0;R<3;++R)
         {
             Rows->AddSlot().FillWidth(1).Padding(2)[SNew(SVerticalBox)
-                +SVerticalBox::Slot().AutoHeight()[Label(R==0?TEXT("Top"):R==1?TEXT("Middle"):TEXT("Bottom"))]
-                +SVerticalBox::Slot().AutoHeight()[SNew(SComboBox<TSharedPtr<FString>>)
-                    .ComboBoxStyle(&FCoreStyle::Get().GetWidgetStyle<FComboBoxStyle>("ComboBox"))
-                    .ButtonStyle(&Theme->DockButton).OptionsSource(&Modifiers).InitiallySelectedItem(Modifiers[Deck->RowModifiers[R]])
-                    .OnGenerateWidget_Lambda([](TSharedPtr<FString> V){return Label(*V);})
+                +SVerticalBox::Slot().AutoHeight()[DeckLabel(R==0?TEXT("Top"):R==1?TEXT("Middle"):TEXT("Bottom"))]
+                +SVerticalBox::Slot().AutoHeight()[SNew(SComboBox<TSharedPtr<FString>>).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding))
+                    .ComboBoxStyle(&Theme->ComboBox).ItemStyle(&Theme->ComboRow)
+                    .OptionsSource(&Modifiers).InitiallySelectedItem(Modifiers[Deck->RowModifiers[R]])
+                    .OnGenerateWidget_Lambda([](TSharedPtr<FString> V){return DeckLabel(*V);})
                     .OnSelectionChanged_Lambda([this,R](TSharedPtr<FString> V,ESelectInfo::Type How)
                     {if(V&&How!=ESelectInfo::Direct)Deck->SetRowModifier(R,uint8(Modifiers.IndexOfByKey(V)));})
-                    [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
+                    [SNew(SACEPluginText).Justification(ETextJustify::Center).Font(FACEPluginStyle::NativeFont("Regular",12))
                         .Text_Lambda([this,R]{return FText::FromString(*Modifiers[Deck->RowModifiers[R]]);})]]];
         }
         Body->AddSlot().AutoHeight()[Rows];
-        Body->AddSlot().AutoHeight().Padding(0,6)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",13))
+        Body->AddSlot().AutoHeight().Padding(0,6)[SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",13))
             .Text_Lambda([this]{return FText::FromString(FString::Printf(TEXT("Row %d · Slot %d: %s"),Selected/12+1,Selected%12+1,*Deck->SlotName(Selected)));})
             .AutoWrapText(true)];
         auto Binding=SNew(SHorizontalBox);
-        Binding->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,8,0)[Label(TEXT("Key"))];
+        Binding->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,8,0)[DeckLabel(TEXT("Key"))];
         Binding->AddSlot().FillWidth(1)[SAssignNew(KeySelector,SInputKeySelector).Tag(TEXT("ActionDeck.Key")).AllowModifierKeys(true).AllowGamepadKeys(false)
             .SelectedKey_Lambda([this]{return Deck->EffectiveKey(Selected);})
             .OnIsSelectingKeyChanged_Lambda([this]{Deck->CapturingKey=KeySelector&&KeySelector->GetIsSelectingKey();})
@@ -361,7 +401,7 @@ private:
         })];
         Binding->AddSlot().AutoWidth()[Button(TEXT("Clear slot"),[this]{Deck->ClearSlot(Selected);})];
         Body->AddSlot().AutoHeight()[Binding];
-        Body->AddSlot().AutoHeight().Padding(0,6)[Label(TEXT("Assign an attack to the selected slot"))];
+        Body->AddSlot().AutoHeight().Padding(0,6)[DeckLabel(TEXT("Assign an attack to the selected slot"))];
         for(bool Missile:{false,true})
         {
             auto Attacks=SNew(SHorizontalBox);
@@ -370,7 +410,7 @@ private:
                     [this,Missile,H]{Deck->BindAttack(Selected,Missile,H);})];
             Body->AddSlot().AutoHeight()[Attacks];
         }
-        Body->AddSlot().AutoHeight().Padding(0,4)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
+        Body->AddSlot().AutoHeight().Padding(0,4)[SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",12))
             .AutoWrapText(true).Text(FText::FromString(TEXT("Click a slot above to edit it. Drag items from inventory and spells from the spellbook or spell bar. Drag between deck slots to swap. Settings pause deck actions; Override still blocks native hotbars.")))];
         Body->AddSlot().AutoHeight()[Button(TEXT("Restore default keys"),[this]
         {

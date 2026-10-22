@@ -544,6 +544,11 @@ void UACEClientSubsystem::SendUseItem(int32 ObjectGuid)
 
 void UACEClientSubsystem::SendChangeCombatMode(int32 CombatMode)
 {
+	if (IsInPortalSpace())
+	{
+		ReceiveChatMessage(TEXT("You can't enter combat mode while in portal space"), TEXT(""), ACEChatMessageType::ChatError);
+		return;
+	}
 	if (Session)
 	{
 		Session->SendChangeCombatMode(static_cast<uint32>(CombatMode));
@@ -552,6 +557,7 @@ void UACEClientSubsystem::SendChangeCombatMode(int32 CombatMode)
 
 void UACEClientSubsystem::SendTargetedMeleeAttack(int32 TargetGuid, int32 AttackHeight, float PowerLevel)
 {
+	if (IsInPortalSpace()) return;
 	if (Session)
 	{
 		Session->SendTargetedMeleeAttack(TargetGuid, static_cast<uint32>(AttackHeight), PowerLevel);
@@ -560,6 +566,7 @@ void UACEClientSubsystem::SendTargetedMeleeAttack(int32 TargetGuid, int32 Attack
 
 void UACEClientSubsystem::SendTargetedMissileAttack(int32 TargetGuid, int32 AttackHeight, float AccuracyLevel)
 {
+	if (IsInPortalSpace()) return;
 	if (Session)
 	{
 		Session->SendTargetedMissileAttack(TargetGuid, static_cast<uint32>(AttackHeight), AccuracyLevel);
@@ -876,6 +883,12 @@ int32 UACEClientSubsystem::GetDisplayTitleId() const
 bool UACEClientSubsystem::IsUseBusy() const
 {
 	return Session && Session->IsUseBusy();
+}
+
+bool UACEClientSubsystem::IsInPortalSpace() const
+{
+	const auto* PC = GetWorld() ? Cast<AACEPlayerController>(GetWorld()->GetFirstPlayerController()) : nullptr;
+	return PC && PC->IsWorldTransitionActive();
 }
 
 void UACEClientSubsystem::SendGetAndWieldItem(int32 ItemGuid, int64 WieldLocation)
@@ -1289,7 +1302,7 @@ bool UACEClientSubsystem::ResolveSpellCastTarget(int32 SpellId, int32 SelectedGu
 
 bool UACEClientSubsystem::SendCastSpell(int32 SpellId, int32 CasterItemGuid)
 {
-	if (!Session || !SpellId) return false;
+	if (!Session || !SpellId || IsInPortalSpace()) return false;
 	if (auto* VRController = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
 		if (APawn* Pawn = VRController->GetPawn())
 			if (auto* VR = Pawn->FindComponentByClass<UACEVRComponent>(); VR && VR->IsActive())

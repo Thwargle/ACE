@@ -1,5 +1,86 @@
 # Retail parity regression tests
 
+## Character-selection button masks (2026-10-21)
+
+Run `ACE.RetailParity.CharacterButtonMasks`, `ACE.RetailParity.CharacterManagement`,
+`ACE.RetailParity.CharacterScreenRendering`, `ACE.RetailParity.UIScreens` and
+`ACE.RetailParity.UIInteractions` with rendering enabled. The mask test compares
+every pixel of the real DAT Enter/Create/Delete/Restore/Credits/Exit interaction
+masks against retail's `UIRegion::PointIsOverRegion` / `SurfaceWindow::PointTestOverlay`
+rule. It exercises Canvas pointer routing at multiple window sizes and DPI scales,
+disabled buttons, image-only states, masked children, and cancelling a click by
+releasing outside the mask. Masks are decoded once on the CPU, without GPU readback.
+
+## Low-end video settings (2026-10-21)
+
+Run `ACE.Rendering.LowEndVideoSettings`, `ACE.Rendering.MobileShadowReceiver`,
+`ACE.Rendering.CrowdEffectLighting` and `ACE.Rendering.DisplaySettings` with
+rendering enabled. Coverage includes saved Off/Low/Full dynamic lighting,
+shadow quality and distance, actual effect-light allocation, loaded and newly
+streamed doorway lights, and restoring lighting without reloading. The real
+DAT character shadow fixture renders Shadows Off and restored shadows into
+`Saved/PerformanceShadowTests/Shadow-Settings-*.png`. This verifies reduced
+rendering work, not an FPS guarantee for a specific laptop.
+
+## Plugin button layout (2026-10-21)
+
+Run `ACE.Plugins.LiveUI` and `ACE.Plugins.HostAndPanel` with rendering enabled.
+They check content centering and border clearance across native plugin panels,
+retained Lua controls, compact buttons, multiline and fallback-font captions,
+and normal/hover/pressed/disabled states. Single-symbol actions reserve a usable
+interior beyond the retail bevel even when zero padding is requested. Run
+`ACE.Plugins.Ledgers` for the actual Supply Ledger add control at minimum window
+size, including clicking it while pinned. Captures are written to
+`Saved/PluginButtons.png`, `Saved/PluginButtons-ucm.png` and
+`Saved/PluginButtons-itemtools.png`. `ACE.Plugins.AutoCraft.Production` also
+checks that the shared dropdown retains its open searchable menu on refresh.
+
+## Plugin hover text (2026-10-21)
+
+Plugin controls, icons, window chrome and API-provided hover text use the same
+DAT object tooltip as inventory slots. `ACE.Plugins.Tooltips` compares rendered
+short and multiline plugin tooltips pixel-for-pixel with inventory tooltips,
+including font, frame, background, padding and wrapping. It also checks empty
+and changing bound text; `ACE.Plugins.LiveUI` covers live API snapshot updates.
+Run alongside `ACE.RetailParity.TooltipWidget`. Comparison captures are saved as
+`Saved/PluginTooltip.png` and `Saved/InventoryTooltip-reference.png`.
+
+## Action Deck display options and target timers (2026-10-21)
+
+Run `ACE.Plugins.ActionDeck` with rendering enabled. It covers pinned toolbar
+visibility, settings persistence and character isolation, independent native
+spell/combat bar suppression and restoration, and real DAT debuff/DoT durations
+through session cast and chat confirmation events with UCM disabled. It checks
+resists, fizzles, refreshes, target changes, death, expiry, object deletion and
+character changes. Render captures include `Saved/ActionDeck-Pinned.png` and
+`Saved/ActionDeck-TargetTimers.png`. Existing tests still cover keyboard priority,
+inventory availability, native icon composition and foreground dragging.
+
+## Apostate resonator hand-in (2026-10-20)
+
+Run `ACE.Input.DesktopHighlights` and `ACE.RetailParity.CustomWorldPresentation`
+with the editor renderer enabled. The former checks eight elevated/circling
+screen-space drops in the real deposit room and writes the GiveObjectRequest
+action to `Unreal/Saved/Automation/ApostateGiveObject.bin`. The latter covers
+the gateway's reported ledge viewpoint, deferred appearance and cell visibility.
+
+Replay the generated action through ACE's real hand-in and NPC reward paths:
+
+```powershell
+$env:ACE_TEST_CONFIG = 'C:/path/to/local/test/Config.js'
+$env:ACE_TEST_DAT = "C:/Turbine/Asheron's Call"
+$env:ACE_TEST_APOSTATE_PACKET = "$PWD/Unreal/Saved/Automation/ApostateGiveObject.bin"
+dotnet test Source/ACE.Server.Tests/ACE.Server.Tests.csproj -p:Platform=x64 --filter 'FullyQualifiedName~ApostateQuestIntegrationTests'
+```
+
+Requires standard world templates/quests in the configured database. Reads
+templates; captures all inventory persistence in an inert queue without running
+a shard or writing character data. Tests begin with the quest accepted and a
+resonator in inventory. They verify reach at 0/2/12 metres of elevation, waiting
+for approach, item consumption, quest stamping, Ned's XP/luminance/title reward
+and duplicate-reward prevention. Simulated approach arrival does not test route
+finding or a full live dungeon traversal. Missing inputs report inconclusive.
+
 ## Carried weapon illumination (2026-10-19)
 
 `ACE.Rendering.DualWieldLighting` uses actual DAT Flaming, Frost and Lightning
@@ -853,3 +934,101 @@ distances. Tests also cover the reference bias/offset formula and exact boundary
 semantics. No armor-name, clothing-family, or item-ID rendering exceptions are
 used. Existing placement, tailoring, appearance cache, and dual-wield lighting
 regressions should run alongside this test when changing the shared renderer.
+
+## Weapon appraisal properties and colors
+
+Weapon appraisal checks: `ACE.RetailParity.AppraisalPresentation` verifies that
+gear ratings keep their server value, end with retail punctuation, and start a
+separate paragraph after workmanship. It checks neutral, increased and decreased
+caster damage colors across the heading, PvM and PvP rows. `ACE.RetailParity.UIScreens`
+exercises every DAT creature enum as a slayer, including casters without weapon
+profiles, partial appraisal, unknown types and the retail human-slayer title.
+It also checks the rendered text widget's colors and captures
+`Saved/Automation/RetailParity/GameplaySlayerSceptreInspection.png`.
+References: `ItemExamineUI::Appraisal_ShowSpecialProperties`,
+`Appraisal_ShowRatings`, `Appraisal_ShowCasterData`,
+`AppraisalSystem::InqCreatureDisplayName`, and `AppraisalProfile::InqFloatEnchantmentMod`.
+
+## Idle UCM appraisal workload and self selection
+
+`ACE.Performance.UCMIdleWorkload` runs the stock Lua policy with combat disabled,
+512 carried items, 2,048 retail spells and eight nearby creatures. It reports
+snapshot/Lua averages and total p95/peak decision time over 64 samples, with and
+without background appraisal replies. Timing is diagnostic rather than a flaky
+hardware-dependent assertion. Assertions check immediate appraisal updates,
+unchanged row reuse, immutable previous snapshots, equipment and inventory
+changes, wield requirements, resource consumption and disconnect invalidation.
+
+Run it with `ACE.Plugins`, `ACE.Performance.UIAndLuaWorkload`,
+`ACE.Input.DesktopHighlights` and `ACE.RetailParity.SelectionToolbar` after
+changing snapshot caches. DesktopHighlights checks that self remains selected
+for actions without a world frame or direction arrow. Selecting self applies the
+normal object glow to the possessed pawn in desktop and VR; changing selection,
+disabling glow, portal/session transitions and unpossessing clear it. Other
+creatures retain their selection frame/highlight. `/acueperf` now includes plugin tick,
+snapshot and Lua CPU scopes (inclusive, so do not add them together).
+
+## Gameplay interface in portal space
+
+`ACE.Input.DesktopHighlights` also checks usable attackable creatures using the
+stock cow model (WCID 14). A single click selects; a double click emits one Use
+request with the correct GUID and preserves the server use radius. Busy clicks
+do not duplicate requests. Interact shares the same dispatch; changing the name
+and template ID does not change behavior. Non-usable and target-only monsters
+remain select-only, and NeverWalk creatures send Use without a local approach.
+The stock TippedRight server emote is replayed through the world actor/DAT
+animator and checked for visible mesh motion without death state.
+
+`ACE.RetailParity.PortalInterface` uses the real DAT gameplay layout and a local
+UDP peer to check that a portal retains the HUD, inventory window, chat history
+and draft. It checks incoming/outgoing chat, panel shortcuts through the portal
+controller tick, the retail busy cursor, manual interface hiding, rejection of
+combat requests without optimistic stance changes, cancellation of held attacks,
+and resumption after the transition flags clear. Server stance updates remain
+authoritative. It does not connect to a live server.
+
+Run with `ACE.RetailParity.LoadingTransition` (initial login HUD prefetch),
+`ACE.RetailParity.PortalDrops` (destination placement and transition completion),
+`ACE.RetailParity.ChatInputAndCommands`, `ACE.RetailParity.KeyboardBindings`,
+and `ACE.RetailParity.UIInteractions`. The retail references are
+`gmSmartBoxUI::UseTime`, `CPlayerSystem::SetTeleportInProgress`,
+`ClientUISystem::UpdateCursorState`, and `ClientCombatSystem::SetCombatMode`.
+
+### Windowed pointer release and Windows shutdown
+
+`ACE.Input.DesktopPointerConfinement` exercises login, camera turning and return
+from camera capture with the actual Unreal input modes. Windowed and borderless
+release the visible pointer; exclusive fullscreen retains confinement. Temporary
+mouse-down capture remains available for item dragging. The Linux SDL companion
+fixture verifies mode transitions and native grab release as well.
+
+`Build/VR/Tests/Test-WindowsExit.ps1` builds an isolated native fixture using the
+same Windows guard as the packaged game. It checks normal/active execution,
+blocked teardown, repeated exit signals, and another healthy client surviving a
+neighbor's shutdown timeout. The packaged Windows guard starts its 15-second
+grace period only on an explicit exit/error notification; it never uses frame
+rate, window visibility or focus as a reason to terminate. It uses the current
+process handle and avoids Unreal logging/graphics locks in the timeout path.
+This bounds leftover-process shutdown but does not identify the underlying
+intermittent driver/engine stall.
+
+For a normal Quit smoke test, launch an isolated development client with
+`-game -unattended -nohmd -ACEQuitProcessTest -ExecCmds="ace.TestQuitButton"`.
+The test broadcasts the live login Quit button after five seconds. Require the
+`ACE quit process test: pressing the lobby Quit button` log entry, normal engine
+shutdown and process exit, not just a closed window. Do not run this command in
+an interactive session; it intentionally closes its test process.
+
+### Inventory icon cutouts and scaled edges
+
+`ACE.RetailParity.IconRendering` checks the stock torch (0x06001072) against
+retail `IconData::RenderIcons` and `SurfaceWindow::ReplaceColor`, including every
+authored effect-map entry. Native alpha coverage and visible colors must match;
+only invisible RGB is extended at final texture upload to prevent white DAT
+texels bleeding into scaled edges. All 256 alpha levels, including visible white
+art, are preserved. A rendered cutout regression at 32, 40, 48 and 64 pixels
+detects the original white halo and requires it to be absent after preparation.
+`Saved/Automation/ItemIcons/TorchScaling.png` shows the old torch above the fixed
+torch at those sizes. Run with `ACE.RetailParity.ItemPresentation` (structure
+meters and inventory invalidation) and `ACE.Plugins.ActionDeck` (shared item and
+spell composition). These checks use local retail DAT artwork, not a live server.

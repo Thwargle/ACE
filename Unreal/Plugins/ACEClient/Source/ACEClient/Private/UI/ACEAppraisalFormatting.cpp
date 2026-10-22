@@ -1,6 +1,18 @@
 #include "ACEAppraisalFormatting.h"
 #include "UI/ACEUIResourceResolver.h"
 
+FString ACEAppraisalFormatting::SlayerProperty(UACEDatSubsystem* Dat, uint32 CreatureType)
+{
+    // ItemExamineUI::Appraisal_ShowSpecialProperties uses SlayerCreatureType
+    // (int 166) and the retail creature enum, independently of weapon profiles
+    // and SlayerDamageBonus. This includes casters and partial appraisals.
+    if (!Dat) return {};
+    FString Name=Dat->GetUiResources()->ResolveEnumString(0x10000005,CreatureType);
+    if (Name.IsEmpty()) return {};
+    Name.ReplaceInline(TEXT("_"),TEXT(" "));
+    return CreatureType==31 ? FString(TEXT("Bael'Zharon's Hate")) : Name+TEXT(" slayer");
+}
+
 FString ACEAppraisalFormatting::ItemLevelDetails(const FACEAppraisalInfo& Info)
 {
     FString Text;

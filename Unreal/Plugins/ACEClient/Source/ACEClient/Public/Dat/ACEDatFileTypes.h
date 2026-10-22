@@ -461,6 +461,7 @@ struct FACEDatMotionTable
 	uint32 DefaultStyle = 0;
 	TMap<uint32, uint32> StyleDefaults;
 	TMap<uint32, FACEDatMotionData> Cycles;
+	TMap<uint32, FACEDatMotionData> Modifiers;
 	/** Outer key = stance hash; inner key = motion command → transition anim data. */
 	TMap<uint32, TMap<uint32, FACEDatMotionData>> Links;
 };

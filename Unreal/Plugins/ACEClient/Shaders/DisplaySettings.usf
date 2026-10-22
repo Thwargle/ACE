@@ -1,0 +1,16 @@
+#include "/Engine/Private/Common.ush"
+Texture2D SceneTexture;
+SamplerState LinearSampler;
+float4 SceneUV;
+float4 OutputRect;
+float Brightness;
+float Contrast;
+
+void MainPS(float4 ScreenUV : TEXCOORD0, float4 Position : SV_POSITION, out float4 OutColor : SV_Target0)
+{
+    float2 UV = (Position.xy - OutputRect.xy) * OutputRect.zw;
+    float4 Scene = SceneTexture.SampleLevel(LinearSampler, UV * SceneUV.xy + SceneUV.zw, 0);
+    // Adjust the complete displayed world, including additive particles. Apply
+    // gain after contrast so minimum brightness also dims white highlights.
+    OutColor = float4(saturate(saturate((Scene.rgb - 0.5) * Contrast + 0.5) * Brightness), Scene.a);
+}

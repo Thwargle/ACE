@@ -34,6 +34,7 @@ class ACECLIENT_API AACESkyDomeActor : public AActor
 	friend class FACERetailRuntimeRegressionTest;
 	friend class FACERetailNetworkWeatherTest;
 	friend class FACEMobileShadowTest;
+	friend class FACELowEndVideoSettingsTest;
 
 public:
 	AACESkyDomeActor();
@@ -203,6 +204,7 @@ protected:
 	/** Shadow cascade/distance applied once — rewriting them every lighting tick rebuilds maps. */
 	bool bDirShadowSettingsApplied = false;
 	int32 AppliedShadowSettingsRev = -1;
+	int32 AppliedShadowQuality = -1;
 	/** -1 unset; 0 outdoor (dir shadows on); 1 indoor (dir shadows off). */
 	int8 LastDirShadowIndoor = -1;
 	bool bHaveAppliedSunRotation = false;

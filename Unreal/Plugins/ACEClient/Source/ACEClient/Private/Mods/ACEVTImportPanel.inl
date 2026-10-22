@@ -81,10 +81,10 @@ void ImportPanel()
 {
     Heading(TEXT("Virindi profile import"),TEXT("Read .utl loot rules, .nav routes, .met metas and .usd settings. Originals are never changed. Unsupported data is retained in an import report. Reimporting selects the existing named profiles and keeps your edits."));
     Add(Text(TEXT("File path (or copy files to Saved/ClientPlugins/ImportInbox)"),15,Muted));
-    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).Text(FText::FromString(LegacyPath)).OnTextChanged_Lambda([this](const FText& V){LegacyPath=V.ToString();LegacyDocument.Reset();}));
+    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).Text(FText::FromString(LegacyPath)).OnTextChanged_Lambda([this](const FText& V){LegacyPath=V.ToString();LegacyDocument.Reset();}));
     Add(Button(TEXT("Preview file"),[this](){PreviewLegacy(LegacyPath);}));
     Add(Text(TEXT("Folder to browse"),15,Muted));
-    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).Text(FText::FromString(LegacyFolder)).HintText(FText::FromString(TEXT("Folder containing VT profiles"))).OnTextChanged_Lambda([this](const FText& V){LegacyFolder=V.ToString();}));
+    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).Text(FText::FromString(LegacyFolder)).HintText(FText::FromString(TEXT("Folder containing VT profiles"))).OnTextChanged_Lambda([this](const FText& V){LegacyFolder=V.ToString();}));
     Add(Button(TEXT("Refresh files"),[this](){Rebuild();}));
     Add(Button(TEXT("Create a new UTL loot profile"),[this](){LegacyDocument=MakeShared<FJsonObject>();LegacyDocument->SetStringField(TEXT("format"),TEXT("utl"));LegacyDocument->SetArrayField(TEXT("rules"),{});LegacyDocument->SetArrayField(TEXT("extras"),{});LegacyRule.Reset();Page=TEXT("Legacy loot");Rebuild();}));
     const FString Folder=LegacyFolder.IsEmpty()?Host->UserDirectory()/TEXT("ImportInbox"):LegacyFolder;
@@ -98,7 +98,7 @@ void ImportPanel()
     Add(Text(FString::Printf(TEXT("Compatibility issues: %d"),LegacyIssues.Num()),17,LegacyIssues.IsEmpty()?Accent:FLinearColor(1,.6f,.25f)));
     for(int32 I=0;I<FMath::Min(100,LegacyIssues.Num());++I)Add(Text(LegacyIssues[I],14,Muted));
     if(LegacyIssues.Num()>100)Add(Text(TEXT("The complete issue list is included in the saved report."),14,Muted));
-    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).Text(FText::FromString(LegacyName)).HintText(FText::FromString(TEXT("Import name"))).OnTextChanged_Lambda([this](const FText& V){LegacyName=V.ToString();}));
+    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).Text(FText::FromString(LegacyName)).HintText(FText::FromString(TEXT("Import name"))).OnTextChanged_Lambda([this](const FText& V){LegacyName=V.ToString();}));
     const FString PreviewPath=LegacyPath;
     Add(Button(LegacyIssues.IsEmpty()?TEXT("Import supported profile"):TEXT("Save compatibility report"),[this,PreviewPath](){Host->ImportLegacyProfile(PreviewPath,LegacyName);}));
 }

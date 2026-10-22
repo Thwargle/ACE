@@ -553,6 +553,7 @@ void UACEUIGameplayBinder::Shutdown()
 	KeymapReportScroll=nullptr; KeymapReportText=nullptr; bKeymapReport=false;
 	SelectionFlashUntil=0;
 	TickSelectionFlash();
+	bActionDeckCombatBarHidden=false;
 	ACEInputBindings::Cancel();
 	for (UWidget* Row:KeyboardRows) if (Row) Row->RemoveFromParent();
 	for (UTextBlock* Label:KeyboardLabels) if (Label) Label->RemoveFromParent();
@@ -705,6 +706,7 @@ void UACEUIGameplayBinder::TickRefresh(bool bRefreshDesktopHUD)
 	}
 	TickTransientInfo();
 	TickSelectionFlash();
+	RefreshNativeCombatBarVisibility();
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshSelectionOverlay); RefreshSelectionOverlay(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshExaminationOverlay); RefreshExaminationOverlay(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshInventoryOverlays); RefreshInventoryOverlays(); }
@@ -1577,7 +1579,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 	}
 	if (Name == TEXT("MaximizeButton"))
 	{
-		ToggleFloaty(TEXT("RootGameplay_FloatyMainChat_Field"));
+		ToggleMainChatExpanded();
 		return true;
 	}
 	if (Name == TEXT("Paperdoll_Slots_Checkbox"))
@@ -1604,7 +1606,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 			{
 				if (!Client->SendCastSpell(BuiltInSpellId, BuiltInCasterGuid))
 				{
-					PostInventorySystemMessage(TEXT("You must select a target for that spell."));
+					PostInventorySystemMessage(Client->IsInPortalSpace() ? TEXT("You're too busy!") : TEXT("You must select a target for that spell."));
 				}
 				LastSpellClickSlot = INDEX_NONE;
 				LastSpellClickId = 0;
@@ -1911,6 +1913,12 @@ void UACEUIGameplayBinder::SetFloatyVisible(const FString& ElementName, bool bVi
 	{
 		return;
 	}
+	if (ElementName == TEXT("RootGameplay_FloatyCombatPanel_Field"))
+	{
+		auto* Deck = Client ? Client->GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>() : nullptr;
+		bActionDeckCombatBarHidden = Deck && Deck->HidesNativeBar(CombatMode);
+		bVisible &= !bActionDeckCombatBarHidden;
+	}
 	Manager->SetElementVisibleByName(ElementName, bVisible);
 	if (bVisible)
 	{
@@ -1919,6 +1927,15 @@ void UACEUIGameplayBinder::SetFloatyVisible(const FString& ElementName, bool bVi
 			Manager->BringFloatyToFront(El);
 		}
 	}
+}
+
+void UACEUIGameplayBinder::RefreshNativeCombatBarVisibility()
+{
+	if (!Client || !Manager) return;
+	auto* Deck = Client->GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>();
+	const bool Hidden = Deck && Deck->HidesNativeBar(CombatMode);
+	if (Hidden != bActionDeckCombatBarHidden)
+		SetFloatyVisible(TEXT("RootGameplay_FloatyCombatPanel_Field"), CombatMode != int32(ACECombatMode::NonCombat));
 }
 
 void UACEUIGameplayBinder::ToggleFloaty(const FString& ElementName)
@@ -2613,6 +2630,13 @@ void UACEUIGameplayBinder::ApplyCombatMode(int32 Mode)
 
 void UACEUIGameplayBinder::ApplyCombatModeInternal(int32 Mode, bool bSendToServer)
 {
+	// ClientCombatSystem::SetCombatMode rejects player requests in portal space.
+	// Server stance updates must still be applied, without optimistic UI changes.
+	if (bSendToServer && Client && Client->IsInPortalSpace())
+	{
+		Client->SendChangeCombatMode(Mode); // retail feedback, no packet
+		return;
+	}
 	if (Mode != CombatMode) CancelCombatAttack();
 	CombatMode = Mode;
 	if (bSendToServer)
@@ -2877,6 +2901,12 @@ void UACEUIGameplayBinder::RefreshCombatPanelOverlays()
 
 void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 {
+	if (Client && Client->IsInPortalSpace())
+	{
+		PendingAutoTargetLoss = 0;
+		CancelCombatAttack();
+		return;
+	}
 	if (Client && (CombatMode == int32(ACECombatMode::Melee) || CombatMode == int32(ACECombatMode::Missile)))
 	{
 		if (PendingAutoTargetLoss)
@@ -3013,6 +3043,7 @@ float UACEUIGameplayBinder::GetCombatPowerChargeDuration() const
 
 void UACEUIGameplayBinder::BeginCombatPowerCharge(uint32 AttackHeight, bool bHeld)
 {
+	if (Client && Client->IsInPortalSpace()) return;
 	if (PlayerController && PlayerController->IsVRActive()) return;
 	if (CombatMode != static_cast<int32>(ACECombatMode::Melee)
 		&& CombatMode != static_cast<int32>(ACECombatMode::Missile))
@@ -3145,6 +3176,7 @@ void UACEUIGameplayBinder::TryAutoTargetOnCombatEnter(int32 ExcludeGuid)
 }
 bool UACEUIGameplayBinder::IsCombatPoseReady() const
 {
+	if (Client && Client->IsInPortalSpace()) return false;
 	if (CombatMode != int32(ACECombatMode::Missile)) return true;
 	const auto Session = Client ? Client->GetSession() : nullptr;
 	if (!Session) return false;
@@ -3363,7 +3395,7 @@ bool UACEUIGameplayBinder::TryBeginSpellDrag(FVector2D CanvasLocalPos)
 		{
 			if (!Client->SendCastSpell(SpellId))
 			{
-				PostInventorySystemMessage(TEXT("You must select a target for that spell."));
+				PostInventorySystemMessage(Client->IsInPortalSpace() ? TEXT("You're too busy!") : TEXT("You must select a target for that spell."));
 			}
 			LastSpellClickSlot = INDEX_NONE;
 			LastSpellClickId = 0;
@@ -3746,7 +3778,7 @@ void UACEUIGameplayBinder::ActivateHotbarSlot(int32 SlotIndex)
 			RefreshSpellHotbarOverlays();
 			if (!Client->SendCastSpell(SpellId))
 			{
-				PostInventorySystemMessage(TEXT("You must select a target for that spell."));
+				PostInventorySystemMessage(Client->IsInPortalSpace() ? TEXT("You're too busy!") : TEXT("You must select a target for that spell."));
 			}
 		}
 		return;
@@ -6189,7 +6221,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 						SelectCombatSpellSlot(i + SpellHotbarScrollOffset);
 						if (!Client->SendCastSpell(SpellId))
 						{
-							PostInventorySystemMessage(TEXT("You must select a target for that spell."));
+							PostInventorySystemMessage(Client->IsInPortalSpace() ? TEXT("You're too busy!") : TEXT("You must select a target for that spell."));
 						}
 						LastSpellClickSlot = INDEX_NONE;
 						LastSpellClickId = 0;
@@ -6224,7 +6256,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 				{
 					if (!Client->SendCastSpell(BuiltInSpellId, BuiltInCasterGuid))
 					{
-						PostInventorySystemMessage(TEXT("You must select a target for that spell."));
+						PostInventorySystemMessage(Client->IsInPortalSpace() ? TEXT("You're too busy!") : TEXT("You must select a target for that spell."));
 					}
 					LastSpellClickSlot = INDEX_NONE;
 					LastSpellClickId = 0;
@@ -7079,7 +7111,8 @@ void UACEUIGameplayBinder::SyncChatJumpIndicator(int32 Window)
 	}
 	const float MaxOffset = FMath::Max(0.f, Log->GetScrollOffsetOfEnd());
 	const bool Stick=Window==0 ? bChatStickToBottom : bFloatyChatStickToBottom[Window-1];
-	const bool bShow = !Stick && MaxOffset > KINDA_SMALL_NUMBER;
+	if (Stick) bChatUnread[Window] = false;
+	const bool bShow = bChatUnread[Window] && !Stick && MaxOffset > KINDA_SMALL_NUMBER;
 	// ChatInterface selects state 1 explicitly; this field has no default
 	// image, so visibility alone leaves a blank but clickable rectangle.
 	Indicator->bUseExplicitState = true;
@@ -7089,7 +7122,7 @@ void UACEUIGameplayBinder::SyncChatJumpIndicator(int32 Window)
 	{
 		return;
 	}
-	// Left gutter of ChatLog (UMG text is inset by 16px). Negative X is orphan-culled.
+	// The unread arrow overlays the log; it does not reserve a permanent text gutter.
 	TSharedPtr<FACEUIElement> ChatLogEl = Manager->FindElementUnder(Root, TEXT("ChatLog"));
 	if (ChatLogEl.IsValid())
 	{
@@ -8044,7 +8077,7 @@ void UACEUIGameplayBinder::CastSelectedHotbarSpell()
 	const int32 CasterGuid = (SelectedCombatSpellSlot < 0) ? BuiltInCasterGuid : 0;
 	if (!Client->SendCastSpell(ToCast, CasterGuid))
 	{
-		PostInventorySystemMessage(TEXT("You must select a target for that spell."));
+		PostInventorySystemMessage(Client->IsInPortalSpace() ? TEXT("You're too busy!") : TEXT("You must select a target for that spell."));
 	}
 }
 
@@ -8056,6 +8089,13 @@ void UACEUIGameplayBinder::RefreshChatChromeOverlays()
 		return;
 	}
 	EnsureOverlays();
+	if (const auto Maximize = Manager->FindElementUnder(TEXT("RootGameplay_FloatyMainChat_Field"), TEXT("MaximizeButton")))
+	{
+		// Retail changes this button's explicit maximized/minimized state. Normal
+		// button rollover states have no artwork and otherwise hide the control.
+		Maximize->bUseExplicitState = true;
+		Maximize->DefaultState = bMainChatExpanded ? 0x10000047 : 0x10000048;
+	}
 	if (!ChatTargetLabel)
 	{
 		ChatTargetLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
@@ -8527,20 +8567,15 @@ void UACEUIGameplayBinder::RefreshAttributeOverlays()
 			ValueColor = Current > Base ? FLinearColor::Green : Current < Base ? FLinearColor::Red : TextWhite;
 			if (Val) UACEHoverTooltipWidget::SetWidgetTooltip(Val, FText::FromString(FString::Printf(TEXT("Base: %d\nCurrent: %d"), Base, Current)));
 		}
-		else if (Rows[i + AttributeScrollOffset].VitalId == 1)
-		{
-			Value = FString::Printf(TEXT("%d/%d"), LastVitals.Health, LastVitals.MaxHealth);
-			ValueColor = FLinearColor::Green;
-		}
-		else if (Rows[i + AttributeScrollOffset].VitalId == 3)
-		{
-			Value = FString::Printf(TEXT("%d/%d"), LastVitals.Stamina, LastVitals.MaxStamina);
-			ValueColor = FLinearColor::Green;
-		}
 		else
 		{
-			Value = FString::Printf(TEXT("%d/%d"), LastVitals.Mana, LastVitals.MaxMana);
-			ValueColor = FLinearColor::Green;
+			const int32 Id = Rows[i + AttributeScrollOffset].VitalId;
+			const int32 Current = Id == 1 ? LastVitals.Health : Id == 3 ? LastVitals.Stamina : LastVitals.Mana;
+			const int32 Maximum = Id == 1 ? LastVitals.MaxHealth : Id == 3 ? LastVitals.MaxStamina : LastVitals.MaxMana;
+			const int32 Base = LastVitals.GetVitalBase(Id);
+			Value = FString::Printf(TEXT("%d/%d"), Current, Maximum);
+			ValueColor = Maximum > Base ? FLinearColor::Green : Maximum < Base ? FLinearColor::Red : TextWhite;
+			if (Val) UACEHoverTooltipWidget::SetWidgetTooltip(Val, FText::FromString(FString::Printf(TEXT("Base maximum: %d\nCurrent maximum: %d"), Base, Maximum)));
 		}
 		const float Y = static_cast<float>(Origin.Y + i * RowH);
 		const float ListW = static_cast<float>(ListEl->Width - 18);
@@ -8654,11 +8689,11 @@ void UACEUIGameplayBinder::RefreshAttributeOverlays()
 		const int32 Current = Sel.AttrId ? LastVitals.GetAttributeCurrent(Sel.AttrId)
 			: Sel.VitalId == 1 ? LastVitals.MaxHealth : Sel.VitalId == 3 ? LastVitals.MaxStamina : LastVitals.MaxMana;
 		const int32 Base = Sel.AttrId ? LastVitals.GetAttributeBase(Sel.AttrId)
-			: Sel.VitalId == 1 ? LastVitals.HealthStart + LastVitals.HealthRanks + FMath::RoundToInt(LastVitals.Endurance / 2.f)
-			: Sel.VitalId == 3 ? LastVitals.StaminaStart + LastVitals.StaminaRanks + LastVitals.Endurance
-			: LastVitals.ManaStart + LastVitals.ManaRanks + LastVitals.Self;
+			: LastVitals.GetVitalBase(Sel.VitalId);
 		Bonus = Current - Base;
-		StatTitle = FString::Printf(TEXT("%s: %d"), Sel.Name, Current);
+		StatTitle = Sel.AttrId ? FString::Printf(TEXT("%s: %d"), Sel.Name, Current)
+			: FString::Printf(TEXT("%s: %d/%d"), Sel.Name,
+				Sel.VitalId == 1 ? LastVitals.Health : Sel.VitalId == 3 ? LastVitals.Stamina : LastVitals.Mana, Current);
 	}
 	const int32 ModifierBegin = StatTitle.Len();
 	if (Bonus) StatTitle += FString::Printf(TEXT(" (%+d)"), Bonus);
@@ -11088,7 +11123,8 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 	RefreshStackAmountEntry(bShowStack);
 
 	EnsureSelectionMarkers();
-	if (SelectionMarkerCorners.Num() < 4 || !LastSelection.bValid || LastSelection.Guid == 0 || !PlayerController || !Canvas)
+	if (SelectionMarkerCorners.Num() < 4 || !LastSelection.bValid || LastSelection.Guid == 0 || !PlayerController || !Canvas
+		|| (Client && LastSelection.Guid == Client->GetPlayerGuid()))
 	{
 		HideSelectionMarkers();
 		return;
@@ -11102,10 +11138,6 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 	}
 
 	AActor* Target = FindSelectionActor(World, LastSelection.Guid);
-	if (!Target && Client && LastSelection.Guid == Client->GetPlayerGuid())
-	{
-		Target = PlayerController->GetPawn();
-	}
 
 	// SmartBox::GetObjectBoundingBox uses the setup selection sphere, rotated by
 	// the object's frame. Animated limbs, weapons and collision proxies do not
@@ -13283,8 +13315,8 @@ void UACEUIGameplayBinder::RefreshInventoryOverlays()
 		if (bChatOn && LogEl.IsValid())
 		{
 			ChatLog->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-			// Left 16px gutter for ChatLogNewNonVisibleTextIndicator (jump-to-bottom).
-			Canvas->PlaceWidgetAtElement(ChatLog, LogEl, 530, FMargin(16.f, 2.f, 2.f, 2.f));
+			// DAT already reserves space for the numbered window controls.
+			Canvas->PlaceWidgetAtElement(ChatLog, LogEl, 530, LogEl->TextMargins);
 			RefreshChatRowLayout(0);
 		}
 		else if (ChatLog)
@@ -13294,7 +13326,7 @@ void UACEUIGameplayBinder::RefreshInventoryOverlays()
 		if (bChatOn && EntryEl.IsValid())
 		{
 			ChatEntry->SetVisibility(ESlateVisibility::Visible);
-			Canvas->PlaceWidgetAtElement(ChatEntry, EntryEl, 531, FMargin(1.f, 0.f));
+			Canvas->PlaceWidgetAtElement(ChatEntry, EntryEl, 531);
 		}
 		else if (ChatEntry)
 		{

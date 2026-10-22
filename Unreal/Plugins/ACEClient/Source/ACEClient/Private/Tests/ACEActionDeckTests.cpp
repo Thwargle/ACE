@@ -29,6 +29,7 @@
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACEUIElementManager.h"
+#include "UI/ACEUILayoutResolver.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "Components/Border.h"
 #include "Components/CanvasPanel.h"
@@ -192,8 +193,10 @@ bool FACEActionDeckTest::RunTest(const FString&)
     TestEqual(TEXT("Swapping actions keeps physical slot keys"),Deck->EffectiveKey(24),Key);
     TestEqual(TEXT("Swapping moves item bindings"),Deck->Slot(35).Guid,Kit.Guid);
     Deck->SwapSlots(24,35);Deck->Override=true;
+    Deck->HideSpellBar=Deck->HideCombatBar=Deck->ShowTargetTimers=true;
     const auto Persisted=Deck->ExportState();Deck->Reset();Deck->Deserialize(Persisted);
     TestTrue(TEXT("Override survives save/load"),Deck->Override);
+    TestTrue(TEXT("Hotbar and target timer options survive save/load"),Deck->HideSpellBar&&Deck->HideCombatBar&&Deck->ShowTargetTimers);
     TestEqual(TEXT("Item survives save/load"),Deck->Slot(24).Item.Name,Kit.Name);
     TestEqual(TEXT("Custom key survives save/load"),Deck->EffectiveKey(0),FInputChord(EKeys::F8,true,true,false,false));
     TestEqual(TEXT("Row modifiers survive save/load"),Deck->RowModifiers[0],uint8(4));
@@ -202,8 +205,10 @@ bool FACEActionDeckTest::RunTest(const FString&)
     S.PlayerGuid=1235;Deck->EnsureCharacter();
     TestTrue(TEXT("Another character starts with empty slots"),Deck->Slot(24).Action==EACEDeckAction::Empty);
     TestFalse(TEXT("Override does not leak between characters"),Deck->Override);
+    TestFalse(TEXT("Display options do not leak between characters"),Deck->HideSpellBar||Deck->HideCombatBar||Deck->ShowTargetTimers);
     S.PlayerGuid=Self.Guid;Deck->EnsureCharacter();
     TestEqual(TEXT("Returning to the character restores its deck"),Deck->Slot(24).Item.Name,Kit.Name);
+    Deck->HideSpellBar=Deck->HideCombatBar=Deck->ShowTargetTimers=false;
 
     for(const auto& P:Host->Plugins)P->Enabled=P->Id==TEXT("actiondeck");
     Host->DesktopDock=SNew(SACEPluginDesktop).Host(Host);
@@ -628,6 +633,103 @@ bool FACEActionDeckTest::RunTest(const FString&)
     Dock->Resize(TEXT("actiondeck"),FVector2D(100,100),true);Frame();Frame();
     TestTrue(TEXT("Locked deck cannot move or resize"),Point(35).Equals(LockedPoint,.1f));
     TestTrue(TEXT("Locked deck still accepts item assignments"),Deck->DropAt(Point(35),Spare.Guid));
+    TestTrue(TEXT("Pinned deck hides override and lock controls"),Find(Content,TEXT("ActionDeck.Override"))->GetVisibility()==EVisibility::Collapsed
+        &&Find(Content,TEXT("ActionDeck.Lock"))->GetVisibility()==EVisibility::Collapsed);
+    TestTrue(TEXT("Pinned deck hides its settings gear"),Gear->GetVisibility()==EVisibility::Collapsed);
+    Screenshot(TEXT("ActionDeck-Pinned.png"));
+    C->GetUIElementManager()->SetQuickShowUi(true);Frame();Frame();
+    TestTrue(TEXT("Quick-show reveals all three pinned deck controls"),Gear->GetVisibility().IsVisible()
+        &&Find(Content,TEXT("ActionDeck.Override"))->GetVisibility().IsVisible()
+        &&Find(Content,TEXT("ActionDeck.Lock"))->GetVisibility().IsVisible());
+    TestTrue(TEXT("Quick-show does not unpin the deck"),Host->IsPluginWindowPinned(TEXT("actiondeck")));
+    Gear->SimulateClick();Frame();Frame();
+    TestTrue(TEXT("Revealed settings gear opens configuration while pinned"),Deck->IsConfigOpen());
+    Gear->SimulateClick();Frame();Frame();
+    C->GetUIElementManager()->SetQuickShowUi(false);Frame();Frame();
+    TestTrue(TEXT("Releasing quick-show hides all pinned deck controls again"),Gear->GetVisibility()==EVisibility::Collapsed
+        &&Find(Content,TEXT("ActionDeck.Override"))->GetVisibility()==EVisibility::Collapsed
+        &&Find(Content,TEXT("ActionDeck.Lock"))->GetVisibility()==EVisibility::Collapsed);
+    Host->SetPluginWindowPinned(TEXT("actiondeck"),false);Frame();Frame();
+    TestTrue(TEXT("Unpin restores the settings gear"),Gear->GetVisibility().IsVisible());
+    TestTrue(TEXT("Unpin restores override and lock controls"),Find(Content,TEXT("ActionDeck.Override"))->GetVisibility().IsVisible()
+        &&Find(Content,TEXT("ActionDeck.Lock"))->GetVisibility().IsVisible());
+
+    // Real DAT layout and binder visibility, including live changes and restore.
+    auto* Layout=NewObject<UACEUILayoutResolver>();Layout->Initialize(Dat,Binder->Manager);
+    if(!TestTrue(TEXT("Native combat layout loads"),Layout->LoadLayout(0x21000005)))return false;
+    const auto CombatRoot=Binder->Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field"));
+    if(!TestTrue(TEXT("Native combat bar exists"),CombatRoot.IsValid()))return false;
+    Binder->CombatMode=int32(ACECombatMode::Magic);Binder->SetFloatyVisible(TEXT("RootGameplay_FloatyCombatPanel_Field"),true);
+    Deck->HideSpellBar=true;Binder->RefreshNativeCombatBarVisibility();
+    TestFalse(TEXT("Spell bar hides immediately"),bool(CombatRoot->bVisible));
+    Binder->SetFloatyVisible(TEXT("RootGameplay_FloatyCombatPanel_Field"),true);
+    TestFalse(TEXT("Stance updates cannot reopen the hidden bar"),bool(CombatRoot->bVisible));
+    Binder->CombatMode=int32(ACECombatMode::Melee);Binder->RefreshNativeCombatBarVisibility();
+    TestTrue(TEXT("Spell option leaves melee visible"),bool(CombatRoot->bVisible));
+    Deck->HideCombatBar=true;Binder->RefreshNativeCombatBarVisibility();
+    TestFalse(TEXT("Combat option hides melee"),bool(CombatRoot->bVisible));
+    Binder->CombatMode=int32(ACECombatMode::Missile);Binder->SetFloatyVisible(TEXT("RootGameplay_FloatyCombatPanel_Field"),true);
+    TestFalse(TEXT("Combat option also hides missile"),bool(CombatRoot->bVisible));
+    (*Plugin)->Enabled=false;Binder->RefreshNativeCombatBarVisibility();
+    TestTrue(TEXT("Disabling Action Deck restores native combat bar"),bool(CombatRoot->bVisible));
+    (*Plugin)->Enabled=true;Binder->RefreshNativeCombatBarVisibility();
+    Host->DesktopDock->Toggle(TEXT("actiondeck"));Binder->RefreshNativeCombatBarVisibility();
+    TestTrue(TEXT("Closing Action Deck restores native combat bar"),bool(CombatRoot->bVisible));
+    Host->DesktopDock->Toggle(TEXT("actiondeck"));
+    Binder->ApplyCombatModeInternal(int32(ACECombatMode::NonCombat),false);Binder->RefreshNativeCombatBarVisibility();
+    TestFalse(TEXT("Peace never reveals a native combat bar"),bool(CombatRoot->bVisible));
+    Deck->HideSpellBar=Deck->HideCombatBar=false;
+    Binder->Manager->ClearRoots(); // Keep the remaining render fixture plugin-only.
+
+    // Use real spell metadata and the session send/confirmation events. UCM is off.
+    int32 Debuff=0,Dot=0,Stronger=0;
+    for(uint32 Id=1;Id<6200;++Id)
+    {
+        FString Name;uint32 Icon=0;
+        if(!Dat->TryGetSpellInfo(Id,Name,Icon))continue;
+        if(Name==TEXT("Imperil Other I"))Debuff=Id;
+        if(Name==TEXT("Imperil Other II"))Stronger=Id;
+        if(Name==TEXT("Corruption I"))Dot=Id;
+    }
+    if(!TestTrue(TEXT("Retail debuff and damage-over-time metadata available"),Debuff&&Dot&&Stronger))return false;
+    S.WorldObjects[Monster.Guid].Name=TEXT("Deck target");S.WorldObjects[Monster.Guid].bDying=false;
+    S.SelectedObject.Guid=Monster.Guid;S.SelectedObject.bValid=true;
+    S.KnownSpells.AddUnique(Debuff);S.KnownSpells.AddUnique(Dot);S.KnownSpells.AddUnique(Stronger);
+    Deck->BindSpell(0,Debuff);Deck->BindSpell(1,Dot);Deck->BindSpell(2,Stronger);Deck->ShowTargetTimers=true;
+    Host->RefreshAutomationData();
+    auto Confirm=[&](int32 Spell,const FString& Suffix=FString())
+    {FString Name;uint32 Icon=0;Dat->TryGetSpellInfo(Spell,Name,Icon);
+        S.OnChatMessage.Broadcast(TEXT("You cast ")+Name+TEXT(" on Deck target")+Suffix,TEXT(""),ACEChatMessageType::Magic);};
+    S.SendCastSpell(Debuff,Monster.Guid);S.OnUseDone.Broadcast(0);
+    TestEqual(TEXT("A request and UseDone do not invent a timer"),Deck->EffectTimer(0).Remaining,0.);
+    S.OnChatMessage.Broadcast(TEXT("Deck target resists your spell."),TEXT(""),ACEChatMessageType::Magic);
+    Confirm(Debuff);TestEqual(TEXT("Resisted cast cannot create a timer"),Deck->EffectTimer(0).Remaining,0.);
+    S.SendCastSpell(Debuff,Monster.Guid);S.OnChatMessage.Broadcast(TEXT("Your spell fizzled."),TEXT(""),ACEChatMessageType::Magic);
+    Confirm(Debuff);TestEqual(TEXT("Fizzled cast cannot create a timer"),Deck->EffectTimer(0).Remaining,0.);
+    S.SendCastSpell(Debuff,Monster.Guid);Confirm(Debuff);
+    TestTrue(TEXT("Manual confirmed debuff starts a full timer without UCM"),Deck->EffectTimer(0).Fraction()>.99f);
+    TestEqual(TEXT("Lower-tier effect does not claim stronger-tier coverage"),Deck->EffectTimer(2).Remaining,0.);
+    S.SendCastSpell(Dot,Monster.Guid);Confirm(Dot);
+    TestTrue(TEXT("Confirmed DoT uses its effect duration"),Deck->EffectTimer(1).Remaining>30&&Deck->EffectTimer(1).Remaining<=31);
+    for(auto& E:Host->Debuffs)E->AsObject()->SetNumberField(TEXT("expires"),FPlatformTime::Seconds()+E->AsObject()->GetNumberField(TEXT("duration"))*.5);
+    TestTrue(TEXT("Timer progress drains across half the full slot"),FMath::IsNearlyEqual(Deck->EffectTimer(1).Fraction(),.5f,.01f));
+    Deck->Refresh(true);const auto BeforeTimer=Deck->Availability(0).Ready;
+    Host->SetPluginWindowPinned(TEXT("actiondeck"),true);Deck->Refresh(true);Frame();Frame();Screenshot(TEXT("ActionDeck-TargetTimers.png"));
+    TestEqual(TEXT("Target duration never locks an otherwise ready action"),Deck->Availability(0).Ready,BeforeTimer);
+    S.SelectedObject.Guid=Friend.Guid;TestEqual(TEXT("Switching target removes the previous target timer"),Deck->EffectTimer(0).Remaining,0.);
+    S.SelectedObject.Guid=Monster.Guid;TestTrue(TEXT("Switching back preserves that target timer"),Deck->EffectTimer(0).Remaining>0);
+    S.SendCastSpell(Debuff,Monster.Guid);Confirm(Debuff,TEXT(", refreshing Imperil Other I"));
+    TestTrue(TEXT("Confirmed refresh restarts the duration"),Deck->EffectTimer(0).Fraction()>.99f);
+    Deck->ShowTargetTimers=false;TestEqual(TEXT("Timer option off hides existing effects"),Deck->EffectTimer(0).Remaining,0.);Deck->ShowTargetTimers=true;
+    S.WorldObjects[Monster.Guid].bDying=true;TestEqual(TEXT("Dead target has no timer"),Deck->EffectTimer(0).Remaining,0.);S.WorldObjects[Monster.Guid].bDying=false;
+    for(auto& E:Host->Debuffs)E->AsObject()->SetNumberField(TEXT("expires"),FPlatformTime::Seconds()-1);
+    TestEqual(TEXT("Expired effects disappear"),Deck->EffectTimer(0).Remaining,0.);
+    S.SendCastSpell(Debuff,Monster.Guid);Confirm(Debuff);S.OnObjectDeleted.Broadcast(Monster.Guid);
+    TestEqual(TEXT("Leaving awareness clears effects before an ID is reused"),Deck->EffectTimer(0).Remaining,0.);
+    S.SendCastSpell(Debuff,Monster.Guid);Confirm(Debuff);S.PlayerGuid=1235;
+    TestEqual(TEXT("Effects cannot leak to another character before maintenance"),Deck->EffectTimer(0).Remaining,0.);S.PlayerGuid=Self.Guid;
+    FACEDeckEffectTimer Format;Format.Remaining=65;TestEqual(TEXT("Long timer reads minutes and seconds"),Format.Label(),FString(TEXT("1:05")));
+    Format.Remaining=.1;TestEqual(TEXT("Last fraction reads one second until expiry"),Format.Label(),FString(TEXT("1")));
     return true;
 }
 #endif

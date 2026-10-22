@@ -1383,4 +1383,58 @@ bool FACEUCMVoidCombatTest::RunTest(const FString&)
     }
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMStackCombiningTest,"ACE.Plugins.StackCombining",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMStackCombiningTest::RunTest(const FString&)
+{
+    FString Source,Error;
+    FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    auto Snapshot=[](){return ParseUCM(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"container":0,"spells":[],"enchantments":[],"targets":[],"inventory":[]})"));};
+    auto Profile=[](){return ParseUCM(TEXT(R"({"combat":"off","buffing":false,"recovery":false,"looting":false,"navigation":false,"autostack":true,"idle_peace":false})"));};
+    auto Item=[](int32 Id,int32 Count,int32 Class=100){auto I=ParseUCM(TEXT(R"({"name":"Arrow","max_stack":100,"resource_available":true,"container":10})"));
+        I->SetNumberField(TEXT("id"),Id);I->SetNumberField(TEXT("wcid"),Class);I->SetNumberField(TEXT("count"),Count);return I;};
+    auto Step=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
+    auto Action=[](auto I){FString A;I->TryGetStringField(TEXT("action"),A);return A;};
+    {
+        FACEPluginVM VM;TestTrue(TEXT("Stacking policy loads"),VM.Load(Source,Error));auto S=Snapshot(),P=Profile();
+        auto A=Item(10,30),Full=Item(11,100),B=Item(12,20);B->SetNumberField(TEXT("container"),20);
+        S->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(A),MakeShared<FJsonValueObject>(Full),MakeShared<FJsonValueObject>(B)});
+        auto I=Step(VM,S,P);TestEqual(TEXT("Partial stacks combine across packs"),Action(I),FString(TEXT("merge")));
+        TestEqual(TEXT("Full stack between partial stacks is skipped"),I->GetNumberField(TEXT("item")),12.);
+        TestEqual(TEXT("Destination is the earlier partial stack"),I->GetNumberField(TEXT("target")),10.);
+        S->SetNumberField(TEXT("time"),101);TestTrue(TEXT("Lag does not repeat the merge"),Action(Step(VM,S,P)).IsEmpty());
+        A->SetNumberField(TEXT("count"),50);S->SetNumberField(TEXT("time"),102);
+        TestTrue(TEXT("Target update alone does not release the pending merge"),Action(Step(VM,S,P)).IsEmpty());
+        S->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(A),MakeShared<FJsonValueObject>(Full)});
+        S->SetNumberField(TEXT("time"),103);
+        TestTrue(TEXT("One full and one partial stack are already compact; no ping-pong"),Action(Step(VM,S,P)).IsEmpty());
+    }
+    for(const TCHAR* Flag:{TEXT("equipped"),TEXT("retained"),TEXT("resource_available")})
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto A=Item(10,20),B=Item(11,30);
+        B->SetBoolField(Flag,FString(Flag)!=TEXT("resource_available"));
+        S->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(A),MakeShared<FJsonValueObject>(B)});
+        TestTrue(*FString::Printf(TEXT("Protected stack is skipped: %s"),Flag),Action(Step(VM,S,P)).IsEmpty());
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto A=Item(10,20),B=Item(11,30,101);
+        S->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(A),MakeShared<FJsonValueObject>(B)});
+        TestTrue(TEXT("Matching names with different templates never merge"),Action(Step(VM,S,P)).IsEmpty());
+        B->SetNumberField(TEXT("wcid"),100);S->SetNumberField(TEXT("time"),101);S->SetNumberField(TEXT("container"),300);
+        TestTrue(TEXT("Open loot container defers inventory stacking"),Action(Step(VM,S,P)).IsEmpty());
+        S->SetNumberField(TEXT("container"),0);P->SetBoolField(TEXT("autostack"),false);
+        TestTrue(TEXT("Stacking is opt-in"),Action(Step(VM,S,P)).IsEmpty());
+        P->SetBoolField(TEXT("autostack"),true);
+        TestEqual(TEXT("Enabling the option begins stacking"),Action(Step(VM,S,P)),FString(TEXT("merge")));
+        S->SetNumberField(TEXT("time"),117);
+        auto Failure=Step(VM,S,P);
+        TestEqual(TEXT("Missing confirmation produces a bounded activity failure"),Action(Failure),FString(TEXT("activity_failed")));
+        TestEqual(TEXT("Only inventory management is paused"),Failure->GetStringField(TEXT("activity")),FString(TEXT("inventory")));
+        S->SetNumberField(TEXT("time"),118);
+        TestTrue(TEXT("Timeout does not immediately resend an ambiguous merge"),Action(Step(VM,S,P)).IsEmpty());
+        S->SetNumberField(TEXT("time"),148);
+        TestEqual(TEXT("Inventory resumes after its bounded cooldown"),Action(Step(VM,S,P)),FString(TEXT("merge")));
+    }
+    return true;
+}
 #endif

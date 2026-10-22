@@ -43,8 +43,24 @@ The gear opens row-modifier and per-slot key settings. Individual key overrides
 keep their modifiers when a row changes. Duplicate chords are rejected.
 Settings can also assign low, medium or high melee/missile attacks, clear a slot,
 or restore default keys. **Lock** pins the position and hides the window frame;
-click **Locked** to unlock it. Window placement follows the normal plugin
-layout, while actions, keys and Override save separately per character/server.
+the Override and Lock controls disappear while pinned. The gear remains visible;
+use **Unlock window** in settings to restore the frame and controls. Window
+placement follows the normal plugin layout, while actions, keys, Override and
+display options save separately per character/server.
+
+Settings can hide the native spell bar and melee/missile bar independently while
+Action Deck is open and enabled. Closing or disabling it restores the appropriate
+native bar. Hiding bars does not change stance or enable hotkey Override.
+
+**Show target debuff and damage-over-time timers** displays estimated remaining
+effect time over spell slots for the current selection. A translucent fill drains
+over the whole button; the timer shows seconds or minutes:seconds. Timers start
+only after matching server confirmation of your cast, including manual and UCM
+casts. Resists and fizzles do not start them. Changing targets shows that target's
+effects; death, leaving awareness, and expiry clear them. A confirmed stronger
+spell in the same family covers lower-tier slots. Timers never prevent recasting.
+Duration comes from known spell metadata; other players' casts, early dispels and
+server-specific duration adjustments cannot be inferred from these confirmations.
 
 Item slots search all owned packs, prefer the originally bound item, then use a
 replacement with the same item class, name and type. Depleted or missing items
@@ -152,6 +168,10 @@ artwork, dark backgrounds, gold borders and red buttons. Text entry retains Slat
 native caret, selection and IME behavior. Standalone windows use their title bar
 for the plugin name, including UCM, Loot Profile Editor, Item Tools and Waypoint;
 the content begins with status, controls or help instead of a repeated heading.
+Action buttons and tabs center their captions horizontally and vertically, with
+equal insets on all four sides. Compact and title-bar controls use smaller equal
+insets; pressing a button keeps its caption in place. Dropdowns retain their
+green artwork and use the same spacing rules for their selected captions.
 
 UCM's main activity section starts expanded in Buffs, Buff others, Combat and
 Recovery; secondary sections start collapsed and keep your expansion choices while
@@ -383,8 +403,11 @@ window widens by 30 seconds for 30 seconds to group nearby expirations, as in
 vTank. Short-duration buffs and consumables cap the window at half their duration
 so a fresh buff does not immediately become due again. **Refresh buffs while idle**
 is a separate, optional earlier top-off and is disabled by default.
-Character buffs use server enchantments, including those received at login;
-confirmed item-only buffs retain character/server-scoped timers across relogs.
+Character buffs use timed server enchantments, including those received at login;
+permanent equipment enchantments do not satisfy the rebuff plan. This lets UCM
+finish casting before replacing its buff wand with combat equipment, instead of
+repeatedly switching when the wand's enchantments disappear on unequip.
+Confirmed item-only buffs retain character/server-scoped timers across relogs.
 Force Buff explicitly ignores remaining times. A new buff-other request casts
 the requested set once; duplicate queued requests do not restart it. Other-player
 casts use the buff skill buffer and family/protection/bane exclusions, and need
@@ -424,6 +447,14 @@ added to an equipment pool; an empty pool permits all eligible inventory weapons
 Ammunition is matched to the launcher and assessed damage. Equipping uses ordinary
 server actions and waits for the equipped state. Private/custom requirements that
 are unavailable to the client are not guessed.
+
+A monster's explicit damage type is a requirement for its attack loadout.
+UCM chooses a matching melee weapon, spell, or launcher ammunition from the
+eligible equipment. An incompatible saved weapon or global spell preference
+cannot override that element. Incompatible melee offhands are replaced or
+removed; if no matching loadout is available, UCM reports the failure instead
+of attacking with the wrong element. Door navigation uses the server's current
+collision state, including doors that automatically close after being used.
 
 Known attack spells and equipment are scored against resistances **when the
 server sends them**. This is a heuristic, not an exact DPS simulation: it does not
@@ -519,6 +550,13 @@ before resuming combat or navigation. Navigation priority does not suppress
 nearby looting, and obstructed corpses are skipped until the route reaches them.
 Enable Loot corpses and load or create matching rules; empty rules intentionally
 take nothing.
+
+After a confirmed combat kill, UCM holds ordinary route movement while the
+server finishes the death animation and creates the corpse (up to eight seconds).
+New nearby corpses are handled immediately through the normal loot rules, then
+UCM resumes its existing return path. Recovery and combat remain available during
+this wait. **Prioritize navigation** bypasses the spawn wait; disabled looting,
+full inventory, out-of-range deaths and teleports do not hold the route.
 
 Loot rules are configured in **Loot → New rule**. Give the rule a name, choose
 **Keep** or **Skip**, then set any combination of:
@@ -852,6 +890,10 @@ Snapshots additionally expose `player`, `jumping`, `action_serial`, `action_erro
 `trained_skills`, `usable_skills`, `teleport_sequence`, `last_spell`, `last_spell_confirmed`, `inventory`, `targets`, `corpses`, `container`,
 `contents`, `route_objects` and confirmed `item_buffs`. GUIDs use unsigned JSON
 numbers. Inventory snapshots cache until inventory/appraisal/eligibility changes.
+`combat_death`, when present, describes the most recent confirmed death of the
+policy's combat target: `id`, monotonic `time`, `cell`, `x`, `y`, `z`, and
+`teleport_sequence`. It survives object deletion until replaced or the session
+changes. Consumers must bound its age; losing visibility alone does not set it.
 Inventory records expose `auto_wield_left` from the live object description.
 `last_spell_confirmed` distinguishes a matching spell result from a successful
 UseDone alone (which can follow a fizzle). `buff_request.started` is false until
@@ -1016,6 +1058,14 @@ protect items. An Ust and successful appraisal are required. Equipped, retained,
 traded, tinkered and inscribed items, packs, tools and salvage bags are excluded.
 The same tinkering/inscription checks protect newly looted salvage. Pending jobs
 are revalidated before sending the normal server salvage request.
+
+**Loot → Looting settings → Auto-combine stackable items** merges partial stacks
+of components, ammunition, pyreals and other matching item templates across all
+owned packs. This uses the existing `autostack` profile option (off by default),
+works independently of corpse looting, and needs no Ust. Full stacks, equipped,
+retained and traded items are skipped. UCM waits for both inventory updates
+before another merge; a missing confirmation pauses inventory management for
+30 seconds without blocking combat or recovery.
 
 **Salvage combination** edits per-material groups and value targets. Materials
 never mix; full, retained and traded bags are excluded. Classic assigns gaps to

@@ -326,6 +326,7 @@ void UACEUIGameplayBinder::ToggleChatEntryFocus()
 
 void UACEUIGameplayBinder::ClearChatLog(int32 Window)
 {
+	if (Window >= 0 && Window <= NumFloatyChats) bChatUnread[Window] = false;
 	if (Window >= 0 && Window < 5) { ChatDisplayLines[Window].Reset(); ++ChatDisplayRevision; }
 	if (UScrollBox* Log = GetChatLogWidget(Window))
 	{
@@ -342,6 +343,9 @@ void UACEUIGameplayBinder::ClearChatLog(int32 Window)
 	else if (FloatyChatLineCounts.IsValidIndex(Window - 1))
 	{
 		FloatyChatLineCounts[Window - 1] = 0;
+		bFloatyChatStickToBottom[Window - 1] = true;
+		SyncChatScrollbar(Window);
+		SyncChatJumpIndicator(Window);
 	}
 	ChatRowSenders.RemoveAll([Window](const FChatRowSender& E)
 	{
@@ -592,6 +596,44 @@ FString UACEUIGameplayBinder::ChatTypeNames()
 	return Out;
 }
 
+void UACEUIGameplayBinder::ToggleMainChatExpanded()
+{
+	if (!Manager) return;
+	const auto Root = Manager->FindElementByName(TEXT("RootGameplay_FloatyMainChat_Field"));
+	const auto Parent = Root ? Root->Parent.Pin() : nullptr;
+	if (!Root || !Parent || Parent->Height <= 0) return;
+	// gmMainChatUI::HandleMaximizeButton adds half the screen height. Upper
+	// windows grow down; bottom windows grow up. Restore the prior height/Y,
+	// keeping any width changes made while expanded and respecting the screen.
+	const int32 ScreenHeight = Parent->Height;
+	const int32 OldY = Root->GetDrawY();
+	int32 Y, Height;
+	if (bMainChatExpanded)
+	{
+		Height = FMath::Clamp(MainChatRestoreHeight, Root->MinHeight, Root->MaxHeight);
+		Height = FMath::Min(Height, ScreenHeight);
+		Y = FMath::Clamp(MainChatRestoreY, 0, FMath::Max(0, ScreenHeight - Height));
+	}
+	else
+	{
+		MainChatRestoreY = OldY;
+		MainChatRestoreHeight = Root->Height;
+		const int32 HalfScreen = ScreenHeight / 2;
+		Y = OldY < HalfScreen && OldY + Root->Height < ScreenHeight ? OldY : OldY - HalfScreen;
+		Y = FMath::Clamp(Y, 0, FMath::Max(0, ScreenHeight - Root->MinHeight));
+		Height = FMath::Min(FMath::Clamp(Root->Height + HalfScreen, Root->MinHeight, Root->MaxHeight), ScreenHeight - Y);
+	}
+	if (Root->AuthoredHeight < 0) Root->AuthoredHeight = Root->Height;
+	Root->UserResizeH = Height - Root->AuthoredHeight;
+	Root->UserDragY += Y - OldY;
+	Root->RecomputeLayoutOffset();
+	UACEUIElementManager::ApplyFloatyResizeLayout(Root);
+	bMainChatExpanded = !bMainChatExpanded;
+	RefreshChatChromeOverlays();
+	RefreshInventoryOverlays(); // Reposition the log and entry on their resized DAT regions.
+	Manager->SaveFloatyLayout();
+}
+
 void UACEUIGameplayBinder::RefreshChatRowLayout(int32 Window)
 {
 	if (!Canvas || !Manager || Window < 0 || Window > NumFloatyChats) return;
@@ -600,7 +642,7 @@ void UACEUIGameplayBinder::RefreshChatRowLayout(int32 Window)
 		: TEXT("RootGameplay_FloatyMainChat_Field");
 	const auto LogEl = Manager->FindElementUnder(Root, TEXT("ChatLog"));
 	if (!Log || !LogEl) return;
-	const float Width = FMath::Max(1.f, float(LogEl->Width) - 18.f);
+	const float Width = FMath::Max(1.f, float(LogEl->Width) - LogEl->TextMargins.Left - LogEl->TextMargins.Right);
 	const FVector2D Scale = Canvas->GetLastScale2D();
 	const uint32 FontId = ACERuntimeOptions::ChatFontId();
 	if (ChatRowWidths[Window] == Width && ChatRowScales[Window] == Scale && ChatRowFontIds[Window] == FontId) return;
@@ -693,6 +735,7 @@ void UACEUIGameplayBinder::AppendChatLineToLog(int32 Window, const FString& Line
 	// Preserve the reader's visible line instead of preserving a pixel offset
 	// into a different set of messages. This applies to all five chat windows.
 	const bool Stick = Window == 0 ? bChatStickToBottom : bFloatyChatStickToBottom[Window-1];
+	bChatUnread[Window] |= !Stick;
 	float ReadingOffset = Log->GetScrollOffset();
 	bool Trimmed = false;
 	if (Window <= 0)
@@ -765,7 +808,7 @@ void UACEUIGameplayBinder::PlaceFloatyChatOverlays()
 			if (bOn && LogEl.IsValid())
 			{
 				Log->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-				Canvas->PlaceWidgetAtElement(Log, LogEl, 100530, FMargin(16.f, 2.f, 2.f, 2.f));
+				Canvas->PlaceWidgetAtElement(Log, LogEl, 100530, LogEl->TextMargins);
 				RefreshChatRowLayout(W);
 				if (bFloatyChatStickToBottom[W-1])
 				{
@@ -785,7 +828,7 @@ void UACEUIGameplayBinder::PlaceFloatyChatOverlays()
 			if (bOn && EntryEl.IsValid())
 			{
 				Entry->SetVisibility(ESlateVisibility::Visible);
-				Canvas->PlaceWidgetAtElement(Entry, EntryEl, 100531, FMargin(1.f, 0.f));
+				Canvas->PlaceWidgetAtElement(Entry, EntryEl, 100531);
 			}
 			else
 			{

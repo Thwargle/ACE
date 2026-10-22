@@ -22,10 +22,10 @@ namespace
         EKeys::Seven,EKeys::Eight,EKeys::Nine,EKeys::Zero,EKeys::Hyphen,EKeys::Equals};
     uint8 ModifierBits(const FInputChord& K){return (K.bShift?1:0)|(K.bCtrl?2:0)|(K.bAlt?4:0)|(K.bCmd?8:0);}
     FInputChord Chord(FKey Key,uint8 Bits){return FInputChord(Key,(Bits&1)!=0,(Bits&2)!=0,(Bits&4)!=0,(Bits&8)!=0);}
-    double Number(const TSharedPtr<FJsonObject>& J,const TCHAR* K,double Default=0)
+    double DeckNumber(const TSharedPtr<FJsonObject>& J,const TCHAR* K,double Default=0)
     {double V=Default;if(J)J->TryGetNumberField(K,V);return FMath::IsFinite(V)?V:Default;}
     int32 Integer(const TSharedPtr<FJsonObject>& J,const TCHAR* K,int32 Default=0)
-    {const double V=Number(J,K,Default);return V>=MIN_int32&&V<=MAX_int32&&V==FMath::TruncToDouble(V)?int32(V):Default;}
+    {const double V=DeckNumber(J,K,Default);return V>=MIN_int32&&V<=MAX_int32&&V==FMath::TruncToDouble(V)?int32(V):Default;}
     FString Text(const TSharedPtr<FJsonObject>& J,const TCHAR* K){FString V;if(J)J->TryGetStringField(K,V);return V;}
 }
 
@@ -69,6 +69,7 @@ void UACEActionDeckSubsystem::Reset()
     for(auto& S:Slots)S=FACEDeckSlot();
     RowModifiers[0]=1;RowModifiers[1]=2;RowModifiers[2]=0;
     Override=false;ConfigOpen=false;CapturingKey=false;NextRefresh=0;Notice.Empty();
+    HideSpellBar=HideCombatBar=ShowTargetTimers=false;
 }
 void UACEActionDeckSubsystem::EnsureCharacter()
 {
@@ -96,6 +97,9 @@ bool UACEActionDeckSubsystem::Save()
 TSharedRef<FJsonObject> UACEActionDeckSubsystem::ExportState() const
 {
     auto J=MakeShared<FJsonObject>();J->SetNumberField(TEXT("version"),1);J->SetBoolField(TEXT("override"),Override);
+    J->SetBoolField(TEXT("hide_spell_bar"),HideSpellBar);
+    J->SetBoolField(TEXT("hide_combat_bar"),HideCombatBar);
+    J->SetBoolField(TEXT("target_effect_timers"),ShowTargetTimers);
     TArray<TSharedPtr<FJsonValue>> Mods,Entries;
     for(auto M:RowModifiers)Mods.Add(MakeShared<FJsonValueNumber>(M));
     J->SetArrayField(TEXT("rows"),Mods);
@@ -118,6 +122,9 @@ void UACEActionDeckSubsystem::Deserialize(const TSharedPtr<FJsonObject>& J)
 {
     if(!J||Integer(J,TEXT("version"))!=1)return;
     J->TryGetBoolField(TEXT("override"),Override);
+    J->TryGetBoolField(TEXT("hide_spell_bar"),HideSpellBar);
+    J->TryGetBoolField(TEXT("hide_combat_bar"),HideCombatBar);
+    J->TryGetBoolField(TEXT("target_effect_timers"),ShowTargetTimers);
     const TArray<TSharedPtr<FJsonValue>>* Array=nullptr;
     if(J->TryGetArrayField(TEXT("rows"),Array)&&Array->Num()==Rows)
         for(int32 R=0;R<Rows;++R){double V=0;if((*Array)[R]->TryGetNumber(V)&&V>=0&&V<16&&V==FMath::TruncToDouble(V))RowModifiers[R]=uint8(V);}
@@ -212,6 +219,30 @@ bool UACEActionDeckSubsystem::IsOverrideActive() const
 {
     const auto* H=GetGameInstance()->GetSubsystem<UACEPluginSubsystem>();
     return Override&&IsEnabled()&&H->IsPluginWindowOpen(TEXT("actiondeck"));
+}
+bool UACEActionDeckSubsystem::HidesNativeBar(int32 Mode)
+{
+    EnsureCharacter();
+    const auto* H=GetGameInstance()->GetSubsystem<UACEPluginSubsystem>();
+    const auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
+    if(!Client||Client->GetSessionState()!=EACESessionState::InWorld||!IsEnabled()
+        ||!H->IsPluginWindowOpen(TEXT("actiondeck"))||(PC&&PC->IsVRActive()))return false;
+    return Mode==int32(ACECombatMode::Magic)?HideSpellBar:
+        (Mode==int32(ACECombatMode::Melee)||Mode==int32(ACECombatMode::Missile))&&HideCombatBar;
+}
+FString FACEDeckEffectTimer::Label() const
+{
+    if(Remaining<=0)return FString();
+    const int32 Seconds=FMath::CeilToInt(Remaining);
+    return Seconds>=60?FString::Printf(TEXT("%d:%02d"),Seconds/60,Seconds%60):FString::Printf(TEXT("%d"),Seconds);
+}
+FACEDeckEffectTimer UACEActionDeckSubsystem::EffectTimer(int32 Index) const
+{
+    FACEDeckEffectTimer Timer;
+    if(!ShowTargetTimers||!Slots.IsValidIndex(Index)||Slots[Index].Action!=EACEDeckAction::Spell||!Client)return Timer;
+    if(auto* Host=GetGameInstance()->GetSubsystem<UACEPluginSubsystem>())
+        Host->GetTargetEffectTimer(Client->GetSelectedObject().Guid,Slots[Index].Spell,Timer.Remaining,Timer.Duration);
+    return Timer;
 }
 UACEUIGameplayBinder* UACEActionDeckSubsystem::Binder() const
 {

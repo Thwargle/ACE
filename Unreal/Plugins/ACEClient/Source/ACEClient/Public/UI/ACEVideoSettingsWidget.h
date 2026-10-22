@@ -27,6 +27,8 @@ public:
  UFUNCTION() void ApplyVideo();
  void ApplyInterfaceOptions();
  void ApplyRuntimeOptions();
+ /** Apply rendering preferences without changing display resolution or window mode. */
+ void ApplyRenderingOptions();
  UFUNCTION() void ResetVideo();
  void RefreshFrameRateOption();
  UFUNCTION() void DefaultsVideo();
@@ -37,6 +39,8 @@ public:
  UFUNCTION() void ChangeMouseTurnSpeed(float Value);
  UFUNCTION() void ResetMouseTurnSpeed();
  UFUNCTION() void ChangeCursorScale(float Value);
+ UFUNCTION() void ChangeScreenBrightness(float Value);
+ UFUNCTION() void ChangeScreenContrast(float Value);
  float GetScrollOffset() const;
  float GetScrollEnd() const;
  void SetScrollOffset(float Offset);
@@ -53,6 +57,7 @@ private:
  UPROPERTY() TObjectPtr<UComboBoxString> Resolution;
  UPROPERTY() TObjectPtr<UComboBoxString> WindowMode;
  UPROPERTY() TObjectPtr<UComboBoxString> Quality;
+ UPROPERTY() TObjectPtr<UComboBoxString> DynamicLighting;
  UPROPERTY() TObjectPtr<UComboBoxString> FrameLimit;
  UPROPERTY() TObjectPtr<UCheckBox> VSync;
  UPROPERTY() TObjectPtr<UCheckBox> ShowFrameRate;
@@ -66,6 +71,8 @@ private:
  UPROPERTY() TObjectPtr<USlider> CursorScale;
  UPROPERTY() TObjectPtr<UTextBlock> CursorScaleLabel;
  UPROPERTY() TObjectPtr<UTextBlock> FieldOfViewLabel;
+ UPROPERTY() TObjectPtr<UTextBlock> ScreenBrightnessLabel;
+ UPROPERTY() TObjectPtr<UTextBlock> ScreenContrastLabel;
  UPROPERTY() TObjectPtr<UComboBoxString> ChatFontFace;
  UPROPERTY() TObjectPtr<UComboBoxString> ChatFontSize;
  UPROPERTY() TObjectPtr<UEditableTextBox> ScreenshotDirectory;

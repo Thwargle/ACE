@@ -452,7 +452,9 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
   }
   const double Travel=FVector::Dist2D(StartFeet,Pawn->GetActorLocation())/100.;
   if(Blocked)TestTrue(TEXT("Authored landing motion stops against walls instead of bypassing collision"),Travel<.4);
-  else TestTrue(TEXT("Controller applies full size-scaled landing displacement"),FMath::Abs(Travel-.760*Size)<.003);
+  // CSequence consumes four .152m landing steps, then the run cycle's
+  // .133333m entry frame. The held fifth landing frame is not movement.
+  else TestTrue(TEXT("Controller applies full size-scaled landing displacement"),FMath::Abs(Travel-.741333*Size)<.003);
   TestTrue(TEXT("Reported position follows the resolved landing feet"),FVector::Dist2D(Client->GetPlayerPosition().ToUnrealLocation(100),Pawn->GetActorLocation())<.01);
   TestFalse(TEXT("Authored landing motion stays grounded"),PC->bJumpAirborne);
   TestFalse(TEXT("Landing track finishes instead of repeating its last frame"),PC->LandingRootTrack.IsActive());

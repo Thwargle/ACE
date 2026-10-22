@@ -5,6 +5,7 @@
 #include "Dat/ACEStreamingBudget.h"
 #include "ACELoginSettings.h"
 #include "ACERetailParticleView.h"
+#include "ACEDisplayView.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "VR/ACEVRWidgetComponent.h"
 #include "VR/ACEVRPointerVisuals.h"
@@ -1102,6 +1103,7 @@ bool UACEDatSubsystem::PrepareRuntimeMaterials()
 void UACEDatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
+	DisplayView = CreateACEDisplayView(GetGameInstance());
 	PrepareRuntimeMaterials();
 #if PLATFORM_ANDROID || PLATFORM_LINUX
     // DAT files are supplied separately in the app's writable saved-data folder.
@@ -1119,6 +1121,7 @@ void UACEDatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void UACEDatSubsystem::Deinitialize()
 {
+	DisplayView.Reset();
 	RetailParticleView.Reset();
 	if (RuntimeMaterialPreload) RuntimeMaterialPreload->CancelHandle();
 	RuntimeMaterialPreload.Reset();
@@ -1322,6 +1325,14 @@ void UACEDatSubsystem::ClearLoadedState()
 bool UACEDatSubsystem::LoadDatDirectory(const FString& Directory)
 {
 	// Prefer BeginBackgroundLoad — this sync path is kept for tools/tests only.
+	// Supersede both portal and cell workers before replacing their resources.
+	// Texture uploads can pump game-thread tasks; an older completion must not
+	// delete the resolver out from under a UI texture/font upload in progress.
+	++BackgroundLoadGeneration;
+	bBackgroundLoadInProgress = false;
+	bCellBackgroundLoadInProgress = false;
+	DatLoadError.Reset();
+	FailedDatDirectory.Reset();
 	DatDirectory = Directory;
 	ClearLoadedState();
 
@@ -8100,6 +8111,23 @@ bool UACEDatSubsystem::GetMotionVelocity(uint32 Table, uint32 Command, uint32 St
 {
     return bPortalLoaded && MotionPlayer && MotionPlayer->SetMotionTable(Table)
         && MotionPlayer->GetCycleVelocity(Command, Style, Out);
+}
+
+bool UACEDatSubsystem::BuildCycleRootTrack(uint32 Table, uint32 Command, uint32 Style, ACELandingMotion::FRootTrack& Out, bool Reverse) const
+{
+    return bPortalLoaded && MotionPlayer && MotionPlayer->SetMotionTable(Table)
+        && MotionPlayer->BuildCycleRootTrack(Command, Style, Out, Reverse);
+}
+
+bool UACEDatSubsystem::GetMotionTurnRate(uint32 Table, uint32 Style, float& OutRadiansPerSecond) const
+{
+    FVector Omega;
+    if (!bPortalLoaded || !MotionPlayer || !MotionPlayer->SetMotionTable(Table)
+        || !MotionPlayer->GetModifierOmega(ACEMotion::TurnRight, Style, Omega)) return false;
+    // Preserve the sign: AC's TurnRight omega is negative. The actor flips
+    // that axis when converting to Unreal, just as it does packet quaternions.
+    OutRadiansPerSecond = Omega.Z;
+    return true;
 }
 
 bool UACEDatSubsystem::EvaluateMotionCommand(uint32 MotionTableId, uint32 MotionCommand, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount,

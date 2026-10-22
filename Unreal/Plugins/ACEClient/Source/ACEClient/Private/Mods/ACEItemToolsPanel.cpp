@@ -1,4 +1,5 @@
 #include "Mods/ACEPluginStyle.h"
+#include "Framework/Application/SlateApplication.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEItemTools.h"
 #include "ACESession.h"
@@ -22,12 +23,15 @@
 namespace ACEItemToolsPanel
 {
 using namespace ACEItemTools;
-const FLinearColor Background(.025f,.016f,.008f),Card(.012f,.009f,.004f),Ink(.94f,.9f,.8f),Muted(.65f,.59f,.45f),Accent(1,.76f,.25f);
+const FLinearColor Background(.025f,.016f,.008f),Card(.012f,.009f,.004f),Ink(1.f,.98f,.92f),Muted(.86f,.83f,.75f),Accent(1,.76f,.25f);
 const FButtonStyle& ButtonStyle() {return FACEPluginStyle::Current()->Button;}
 TSharedRef<STextBlock> Text(const FString& Value,int32 Size=14,FLinearColor Color=Ink)
-{return SNew(SACEPluginText).Text(FText::FromString(Value)).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size)).ColorAndOpacity(Color).AutoWrapText(true);}
+{return SNew(SACEPluginText).Text(FText::FromString(Value)).Font(FACEPluginStyle::NativeFont("Regular",Size)).ColorAndOpacity(Color).AutoWrapText(true);}
 TSharedRef<SWidget> Button(const FString& Label,TFunction<void()> Action)
-{return SNew(SButton).ButtonStyle(&ButtonStyle()).IsFocusable(false).ContentPadding(FMargin(12,8)).OnClicked_Lambda([Action](){Action();return FReply::Handled();})[Text(Label)];}
+{return SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&ButtonStyle()).IsFocusable(false).OnClicked_Lambda([Action](){Action();return FReply::Handled();})[Text(Label)];}
+TSharedRef<SWidget> ItemMenuButton(const FString& Label,TFunction<void()> Action)
+{return SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&FACEPluginStyle::Current()->MenuItem).IsFocusable(false)
+    .OnClicked_Lambda([Action](){Action();FSlateApplication::Get().DismissAllMenus();return FReply::Handled();})[Text(Label)];}
 
 class SItemToolsPanel : public SCompoundWidget
 {
@@ -40,7 +44,7 @@ public:
         if(!Plugin)return;
         auto Tabs=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
         for(const TCHAR* Name:{TEXT("Give"),TEXT("Buy / Sell"),TEXT("Profiles"),TEXT("Chests"),TEXT("Restock")})
-            Tabs->AddSlot()[SNew(SACEPluginTab).Tag(TEXT("ItemToolsTab")).ContentPadding(FMargin(12,9)).Text(FText::FromString(Name))
+            Tabs->AddSlot()[SNew(SACEPluginTab).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).Tag(TEXT("ItemToolsTab")).Text(FText::FromString(Name))
                 .Selected_Lambda([this,Name](){return Page==Name;})
                 .OnClicked_Lambda([this,Name](){Page=Name;Rebuild();Scroll->ScrollToStart();return FReply::Handled();})];
         ChildSlot[SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->Background).Padding(16)
@@ -52,7 +56,7 @@ public:
                 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).IsEnabled_Lambda([this](){return Plugin->Running;})
                     [Button(TEXT("Stop"),[this](){Host->Stop(Plugin->Id,TEXT("Stopped by player"));})]]]
             +SVerticalBox::Slot().AutoHeight().Padding(0,8)[SNew(SACEPluginText).AutoWrapText(true).ColorAndOpacity(Accent)
-                .Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).Text_Lambda([this](){
+                .Font(FACEPluginStyle::NativeFont("Regular",14)).Text_Lambda([this](){
                     FString Progress;
                     if(Plugin->Running&&Host->ItemToolsProgress)
                     {
@@ -71,7 +75,7 @@ public:
                 [SAssignNew(Body,SVerticalBox).IsEnabled_Lambda([this](){return !Plugin->Running;})]]
             +SVerticalBox::Slot().AutoHeight().Padding(0,10,0,0)[SNew(SACEPluginText).AutoWrapText(true).ColorAndOpacity(Muted)
                 .Visibility_Lambda([this](){return Host.IsValid()&&!Host->Notice.IsEmpty()?EVisibility::Visible:EVisibility::Collapsed;})
-                .Font(FCoreStyle::GetDefaultFontStyle("Regular",12)).Text_Lambda([this](){return FText::FromString(Host.IsValid()?Host->Notice:FString());})]]];
+                .Font(FACEPluginStyle::NativeFont("Regular",12)).Text_Lambda([this](){return FText::FromString(Host.IsValid()?Host->Notice:FString());})]]];
         Rebuild();
     }
 private:
@@ -92,7 +96,7 @@ private:
     {
         auto Row=SNew(SVerticalBox);
         Row->AddSlot().AutoHeight()[Text(Label,14,Muted)];
-        Row->AddSlot().AutoHeight().Padding(0,5)[SNew(SACEPluginText).AutoWrapText(true).Font(FCoreStyle::GetDefaultFontStyle("Regular",17))
+        Row->AddSlot().AutoHeight().Padding(0,5)[SNew(SACEPluginText).AutoWrapText(true).Font(FACEPluginStyle::NativeFont("Regular",17))
             .Text_Lambda([this,Key](){FString Name=String(P(),*(Key+TEXT("_name")));if(Name.IsEmpty())Name=TEXT("Nothing selected");
                 else if((Key==TEXT("target")||Key==TEXT("chest")||Key.StartsWith(TEXT("mule")))&&!Guid(P(),*(Key+TEXT("_id"))))Name+=TEXT(" - select again this login");return FText::FromString(Name);})];
         auto Buttons=SNew(SHorizontalBox);
@@ -103,7 +107,7 @@ private:
     void Quantity(const FString& Key,const FString& Caption,int32 Default=0,int32 Max=100000)
     {
         Add(Tile(SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[Text(Caption)]
-            +SHorizontalBox::Slot().AutoWidth().Padding(10,0)[SNew(SBox).WidthOverride(112)[SNew(SSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).MinValue(0).MaxValue(Max).MinDesiredWidth(104).Font(FCoreStyle::GetDefaultFontStyle("Regular",14))
+            +SHorizontalBox::Slot().AutoWidth().Padding(10,0)[SNew(SBox).WidthOverride(112)[SNew(SSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).MinValue(0).MaxValue(Max).MinDesiredWidth(104).Font(FACEPluginStyle::NativeFont("Regular",14))
                 .Value_Lambda([this,Key,Default](){return int32(Number(P(),*Key,Default));})
                 .OnValueChanged_Lambda([this,Key](int32 Value){P()->SetNumberField(*Key,Value);})
                 .OnEndSliderMovement_Lambda([this](int32){Save();})
@@ -112,7 +116,7 @@ private:
     void Toggle(const FString& Key,const FString& Label,bool Default=false)
     {
         Add(SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).IsChecked_Lambda([this,Key,Default](){bool V=Default;P()->TryGetBoolField(Key,V);return V?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
-            .OnCheckStateChanged_Lambda([this,Key](ECheckBoxState S){P()->SetBoolField(Key,S==ECheckBoxState::Checked);Save();})[SNew(SACEPluginText).Text(FText::FromString(Label)).Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).ColorAndOpacity(Ink).WrapTextAt_Lambda([this](){return FMath::Max(180.f,GetCachedGeometry().GetLocalSize().X-65.f);})]);
+            .OnCheckStateChanged_Lambda([this,Key](ECheckBoxState S){P()->SetBoolField(Key,S==ECheckBoxState::Checked);Save();})[SNew(SACEPluginText).Text(FText::FromString(Label)).Font(FACEPluginStyle::NativeFont("Regular",14)).ColorAndOpacity(Ink).WrapTextAt_Lambda([this](){return FMath::Max(180.f,GetCachedGeometry().GetLocalSize().X-65.f);})]);
     }
     void Start(const FString& Mode,const FString& Label)
     {
@@ -125,12 +129,12 @@ private:
     {
         auto Content=SNew(SVerticalBox);
         Content->AddSlot().AutoHeight()[Text(Label,14,Muted)];
-        Content->AddSlot().AutoHeight().Padding(0,6)[SNew(SComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonStyle(&ButtonStyle())
+        Content->AddSlot().AutoHeight().Padding(0,6)[SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo)
             .OnGetMenuContent_Lambda([this,Key]()->TSharedRef<SWidget>{auto List=SNew(SVerticalBox);
-                List->AddSlot().AutoHeight()[Button(TEXT("None"),[this,Key](){Host->LoadItemToolsRules(Key,FString());})];
-                for(const auto& File:Host->GetProfileFiles(TEXT("utl")))List->AddSlot().AutoHeight()[Button(File,[this,Key,File](){Host->LoadItemToolsRules(Key,File);})];
+                List->AddSlot().AutoHeight()[ItemMenuButton(TEXT("None"),[this,Key](){Host->LoadItemToolsRules(Key,FString());})];
+                for(const auto& File:Host->GetProfileFiles(TEXT("utl")))List->AddSlot().AutoHeight()[ItemMenuButton(File,[this,Key,File](){Host->LoadItemToolsRules(Key,File);})];
                 return SNew(SBox).MaxDesiredHeight(300).MinDesiredWidth(240)[SNew(SScrollBox)+SScrollBox::Slot()[List]];})
-            .ButtonContent()[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).AutoWrapText(true).Text_Lambda([this,Key](){const TArray<TSharedPtr<FJsonValue>>* Values=nullptr;
+            .ButtonContent()[SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",14)).AutoWrapText(true).Text_Lambda([this,Key](){const TArray<TSharedPtr<FJsonValue>>* Values=nullptr;
                 const int32 N=P()->TryGetArrayField(Key+TEXT("_rules"),Values)?Values->Num():0;FString Name=String(P(),*(Key+TEXT("_file")));
                 return FText::FromString(N?FString::Printf(TEXT("%s  (%d rules)"),*Name,N):TEXT("None - choose loot profile"));})]];
         Content->AddSlot().AutoHeight()[Button(TEXT("Copy UCM's active rules"),[this,Key](){for(const auto& U:Host->Plugins)if(U->Id==TEXT("ucm"))
@@ -162,7 +166,7 @@ private:
             Box->AddSlot().AutoHeight().Padding(0,5)[SNew(SACEPluginText).ColorAndOpacity(Muted).Text_Lambda([this,R](){const uint32 Wcid=uint32(Number(R,TEXT("wcid")));
                 return FText::FromString(FString::Printf(TEXT("Owned: %d  |  %s"),Owned.FindRef(Wcid),Client()->GetOpenVendorGuid()?(Stocked.Contains(Wcid)?TEXT("Available at vendor"):TEXT("Not sold here")):TEXT("Open a vendor to check stock")));})];
             Box->AddSlot().AutoHeight()[SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[Text(TEXT("Keep this many"))]
-                +SHorizontalBox::Slot().AutoWidth().Padding(6,0)[SNew(SSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).MinValue(0).MaxValue(100000).MinDesiredWidth(100).Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).Value_Lambda([this,Index](){return int32(Number(P()->GetArrayField(TEXT("restock"))[Index]->AsObject(),TEXT("quantity")));})
+                +SHorizontalBox::Slot().AutoWidth().Padding(6,0)[SNew(SSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).MinValue(0).MaxValue(100000).MinDesiredWidth(100).Font(FACEPluginStyle::NativeFont("Regular",14)).Value_Lambda([this,Index](){return int32(Number(P()->GetArrayField(TEXT("restock"))[Index]->AsObject(),TEXT("quantity")));})
                     .OnValueChanged_Lambda([this,Index](int32 N){P()->GetArrayField(TEXT("restock"))[Index]->AsObject()->SetNumberField(TEXT("quantity"),N);})
                     .OnEndSliderMovement_Lambda([this](int32){Save();})
                     .OnValueCommitted_Lambda([this,Index](int32 N,ETextCommit::Type){P()->GetArrayField(TEXT("restock"))[Index]->AsObject()->SetNumberField(TEXT("quantity"),N);Save();})]

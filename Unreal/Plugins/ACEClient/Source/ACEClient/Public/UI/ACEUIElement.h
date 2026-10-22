@@ -340,7 +340,8 @@ struct FACEUIElement : public TSharedFromThis<FACEUIElement>
 	}
 
 	/** Point is in this element's parent-local space (same space as DrawX/DrawY). Topmost-first. */
-	TSharedPtr<FACEUIElement> HitTestInParentSpace(int32 ParentLocalX, int32 ParentLocalY)
+	TSharedPtr<FACEUIElement> HitTestInParentSpace(int32 ParentLocalX, int32 ParentLocalY,
+		TFunctionRef<bool(const FACEUIElement&, FIntPoint)> HitTestMask)
 	{
 		if (!bVisible || Width <= 0 || Height <= 0)
 		{
@@ -355,9 +356,11 @@ struct FACEUIElement : public TSharedFromThis<FACEUIElement>
 		}
 		const int32 LocalX = ParentLocalX - DX;
 		const int32 LocalY = ParentLocalY - DY;
+		// Retail MouseHitTester gates the entire region, including its children, on its mask.
+		if (!HitTestMask(*this, FIntPoint(LocalX, LocalY))) return nullptr;
 		for (int32 i = Children.Num() - 1; i >= 0; --i)
 		{
-			if (TSharedPtr<FACEUIElement> Hit = Children[i]->HitTestInParentSpace(LocalX, LocalY))
+			if (TSharedPtr<FACEUIElement> Hit = Children[i]->HitTestInParentSpace(LocalX, LocalY, HitTestMask))
 			{
 				return Hit;
 			}

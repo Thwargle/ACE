@@ -1,4 +1,5 @@
 #include "ACEEffectLightSubsystem.h"
+#include "ACERuntimeOptions.h"
 #include "ACELandblockActor.h"
 #include "Camera/PlayerCameraManager.h"
 #include "CollisionQueryParams.h"
@@ -418,8 +419,10 @@ void UACEEffectLightSubsystem::RefreshLights(float DeltaSeconds)
 		if (State.Particles.IsEmpty() && !State.bScriptEnabled) { It.RemoveCurrent(); bSelectionDirty = true; }
 	}
 	const bool bMobile = GetWorld()->GetFeatureLevel() <= ERHIFeatureLevel::ES3_1;
+	const int32 LightingQuality = ACERuntimeOptions::DynamicLightingQuality();
+	const int32 BudgetLimit = LightingQuality == 0 ? 0 : LightingQuality == 1 ? 2 : 64;
 	const int32 Budget = FMath::Clamp(bMobile ? CVarEffectLightBudgetMobile.GetValueOnGameThread()
-		: CVarEffectLightBudget.GetValueOnGameThread(), 0, 64);
+		: CVarEffectLightBudget.GetValueOnGameThread(), 0, BudgetLimit);
 	// Runtime budget reductions must bound the pool itself as well as visible lights.
 	while (LightPool.Num() > Budget)
 	{
@@ -431,13 +434,17 @@ void UACEEffectLightSubsystem::RefreshLights(float DeltaSeconds)
 		bSelectionDirty = true;
 	}
 	const float ConfiguredDistance = CVarEffectLightMaxDistance.GetValueOnGameThread();
-	const float MaxDistance = FMath::IsFinite(ConfiguredDistance) ? FMath::Max(0.f, ConfiguredDistance) : 3500.f;
+	const float MaxDistance = FMath::Min(LightingQuality == 1 ? 1500.f : MAX_flt,
+		FMath::IsFinite(ConfiguredDistance) ? FMath::Max(0.f, ConfiguredDistance) : 3500.f);
 	if (Budget != LastBudget || MaxDistance != LastMaxDistance)
 	{
 		bSelectionDirty = true;
 		LastBudget = Budget;
 		LastMaxDistance = MaxDistance;
 	}
+	// Keep source lifetimes current so re-enabling works, but do not rank
+	// candidates or allocate renderer lights while illumination is disabled.
+	if (Budget == 0) return;
 	FVector ViewPosition;
 	const APlayerController* PC = GetWorld()->GetFirstPlayerController();
 	const FVector* View = nullptr;

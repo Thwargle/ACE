@@ -50,6 +50,7 @@ class ACECLIENT_API UACEUICanvasWidget : public UUserWidget
 {
 	GENERATED_BODY()
 	friend class FACERetailScreenTest;
+	friend struct FACEChatUIFixture;
 	friend class FACEUIInteractionParityTest;
 	friend class FACEHousingTest;
 

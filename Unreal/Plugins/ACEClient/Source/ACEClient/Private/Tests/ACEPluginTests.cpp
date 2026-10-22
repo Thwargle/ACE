@@ -805,9 +805,39 @@ bool FACEPluginHostTest::RunTest(const FString&)
                 auto* Children=W->GetChildren();for(int32 I=0;I<Children->Num();++I)Visit(Children->GetChildAt(I));
             };Visit(Root);return Labels;
         };
-        for(const TCHAR* Id:{TEXT("ucm"),TEXT("looteditor"),TEXT("itemtools"),TEXT("waypoint"),TEXT("waypoint.map"),TEXT("ucmmicro"),TEXT("ucm.log"),TEXT("supplyledger"),TEXT("huntledger")})
+        const FVector2D PanelSize(740,800);
+        auto* PanelTarget=FWidgetRenderer::CreateTargetFor(PanelSize,TF_Bilinear,true);
+        int32 CenteredButtons=0;
+        TFunction<void(TSharedRef<SWidget>)> CheckButtonLayout=[&](TSharedRef<SWidget> W)
         {
-            const auto Labels=VisibleText(H->MakePanel(Id));
+            if(!W->GetVisibility().IsVisible())return;
+            if(W->GetType()==TEXT("SACEPluginButton")||W->GetType()==TEXT("SACEPluginTab"))
+            {
+                auto Button=StaticCastSharedRef<SButton>(W);
+                const auto& G=Button->GetCachedGeometry();const auto& C=Button->GetContent()->GetCachedGeometry();
+                if(G.GetLocalSize().X>0&&G.GetLocalSize().Y>0)
+                {
+                    ++CenteredButtons;
+                    TestTrue(TEXT("Native plugin button content stays centered after layout"),
+                        G.AbsoluteToLocal(C.LocalToAbsolute(C.GetLocalSize()*.5)).Equals(G.GetLocalSize()*.5,.1f));
+                    const auto At=G.AbsoluteToLocal(C.GetAbsolutePosition());
+                    TestTrue(TEXT("Native button content fits within all four borders"),At.X>=-.1&&At.Y>=-.1);
+                }
+            }
+            auto* Children=W->GetChildren();for(int32 I=0;I<Children->Num();++I)CheckButtonLayout(Children->GetChildAt(I));
+        };
+        for(const TCHAR* Id:{TEXT("ucm"),TEXT("looteditor"),TEXT("itemtools"),TEXT("waypoint"),TEXT("waypoint.map"),TEXT("ucmmicro"),TEXT("ucm.log"),TEXT("supplyledger"),TEXT("huntledger"),TEXT("autocraft"),TEXT("actiondeck"),TEXT("thirdeye")})
+        {
+            auto NativePanel=H->MakePanel(Id);const auto Labels=VisibleText(NativePanel);
+            for(int32 Pass=0;Pass<3;++Pass){++GFrameCounter;Renderer.DrawWidget(PanelTarget,NativePanel,PanelSize,0);FlushRenderingCommands();}
+            CheckButtonLayout(NativePanel);
+            if(FString(Id)==TEXT("ucm")||FString(Id)==TEXT("itemtools"))
+            {
+                TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);
+                PanelTarget->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);TArray64<uint8> Png;
+                FImageUtils::PNGCompressImageArray(int32(PanelSize.X),int32(PanelSize.Y),Pixels,Png);
+                FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/FString::Printf(TEXT("PluginButtons-%s.png"),Id)));
+            }
             for(const TCHAR* Title:{TEXT("UCM"),TEXT("Loot Profile Editor"),TEXT("Item Tools"),TEXT("Waypoint"),TEXT("Explore Dereth"),TEXT("UCM Micro"),TEXT("UCM Log"),TEXT("Supply Ledger"),TEXT("Hunt Ledger")})
                 TestFalse(FString(Id)+TEXT(" has no duplicate content heading: ")+Title,Labels.Contains(Title));
             if(FString(Id)==TEXT("ucm"))TestTrue(TEXT("Compact UCM header keeps Start and current status"),
@@ -815,6 +845,8 @@ bool FACEPluginHostTest::RunTest(const FString&)
             if(FString(Id)==TEXT("looteditor"))TestTrue(TEXT("Loot editor keeps its tabs"),Labels.Contains(TEXT("Loot rules"))&&Labels.Contains(TEXT("Vendors")));
             if(FString(Id)==TEXT("itemtools"))TestTrue(TEXT("Item Tools keeps stop and task controls"),Labels.Contains(TEXT("Stop"))&&Labels.Contains(TEXT("Give")));
         }
+        PanelTarget->ReleaseResource();
+        TestTrue(TEXT("Layout regression covers native panels and their shared controls"),CenteredButtons>40);
         const auto ManagerLabels=VisibleText(Panel);
         TestEqual(TEXT("Manager has one title in its window header"),ManagerLabels.FilterByPredicate([](const FString& S){return S==TEXT("Plugin Manager");}).Num(),1);
         TestFalse(TEXT("Manager has no duplicate Plugins content heading"),ManagerLabels.Contains(TEXT("Plugins")));
@@ -825,7 +857,7 @@ bool FACEPluginHostTest::RunTest(const FString&)
         auto MapPanel=H->MakePanel(TEXT("waypoint.map"));TSharedPtr<SButton> Switch;
         TFunction<void(TSharedRef<SWidget>)> FindMapSwitch=[&](TSharedRef<SWidget> W)
         {
-            if(W->GetType()==TEXT("SButton")&&VisibleText(W).Contains(TEXT("Waypoint settings")))Switch=StaticCastSharedRef<SButton>(W);
+            if(W->GetType()==TEXT("SACEPluginButton")&&VisibleText(W).Contains(TEXT("Waypoint settings")))Switch=StaticCastSharedRef<SButton>(W);
             auto* Children=W->GetChildren();for(int32 I=0;I<Children->Num();++I)FindMapSwitch(Children->GetChildAt(I));
         };FindMapSwitch(MapPanel);
         if(TestTrue(TEXT("Map settings switch is available"),Switch.IsValid()))

@@ -18,16 +18,15 @@ bool LootNarrow=false,ShowLootFiles=false,LootHasSource=false;
 
 TSharedRef<SWidget> LootTool(const FString& Caption,TFunction<void()> Action)
 {
-    return SNew(SButton).ButtonStyle(&Style()).IsFocusable(false).ContentPadding(FMargin(8,5))
-        .OnClicked_Lambda([Action](){Action();return FReply::Handled();})[SNew(SACEPluginText).Text(FText::FromString(Caption)).Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).ColorAndOpacity(Ink)];
+    return SNew(SACEPluginButton).ButtonStyle(&Style()).IsFocusable(false).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding))
+        .OnClicked_Lambda([Action](){Action();return FReply::Handled();})[SNew(SACEPluginText).Text(FText::FromString(Caption)).Font(FACEPluginStyle::NativeFont("Regular",14)).ColorAndOpacity(Ink)];
 }
 TSharedRef<SWidget> LootSelectRow(const FString& Caption,const FString& Detail,TAttribute<bool> Selected,TFunction<void()> Action)
 {
-    return SNew(SButton).ButtonStyle(&Style()).IsFocusable(false).ContentPadding(0)
+    return SNew(SACEPluginTab).Selected(Selected).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding))
         .OnClicked_Lambda([Action](){Action();return FReply::Handled();})
-        [SNew(SBorder).BorderImage(White()).BorderBackgroundColor_Lambda([Selected]{return Selected.Get()?FLinearColor(.19f,.08f,.005f):Card;}).Padding(FMargin(8,6))
-            [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[SNew(SACEPluginText).Text(FText::FromString(Caption)).Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).AutoWrapText(true).ColorAndOpacity_Lambda([Selected]{return Selected.Get()?Accent:Ink;})]
-             +SVerticalBox::Slot().AutoHeight()[Text(Detail,12,Muted)]]];
+        [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[SNew(SACEPluginText).Text(FText::FromString(Caption)).Font(FACEPluginStyle::NativeFont("Regular",14)).AutoWrapText(true).ColorAndOpacity_Lambda([Selected]{return Selected.Get()?Accent:Ink;})]
+             +SVerticalBox::Slot().AutoHeight()[Text(Detail,12,Muted)]];
 }
 FString LootDraftJson()const
 {
@@ -95,7 +94,7 @@ void LootTabs()
     auto Menu=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
     const TCHAR* Names[]={TEXT("Rules"),TEXT("Salvage combination"),TEXT("Open / save profile"),TEXT("Looting settings")};
     for(int32 I=0;I<4;++I)
-        Menu->AddSlot()[SNew(SACEPluginTab).Tag(TEXT("UCMLootTab")).Text(FText::FromString(Names[I])).ContentPadding(FMargin(8,5))
+        Menu->AddSlot()[SNew(SACEPluginTab).Tag(TEXT("UCMLootTab")).Text(FText::FromString(Names[I])).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding))
             .Selected_Lambda([this,I](){return I==(EditingSalvage?1:ShowLootFiles?2:ShowLootOptions?3:0);})
             .OnClicked_Lambda([this,I](){
                 if(I==(EditingSalvage?1:ShowLootFiles?2:ShowLootOptions?3:0))return FReply::Handled();
@@ -194,7 +193,7 @@ void LootPanel()
 TSharedRef<SWidget> LootPropertyPicker(const FString& Field,int32 Current,TFunction<void(int32)> Changed)
 {
     auto Row=SNew(SVerticalBox);
-    Row->AddSlot().AutoHeight()[SNew(SComboButton).ButtonStyle(&Style()).ContentPadding(8)
+    Row->AddSlot().AutoHeight()[SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo)
         .ButtonContent()[Text(ACEUCMLootPresentation::PropertyLabel(Field,Current),15)]
         .OnGetMenuContent_Lambda([Field,Changed]()->TSharedRef<SWidget>
         {
@@ -207,7 +206,7 @@ TSharedRef<SWidget> LootPropertyPicker(const FString& Field,int32 Current,TFunct
                     const FString Label=FString::Printf(TEXT("%s (%d)"),Entry.Name,Entry.Id);
                     if(!Filter.IsEmpty()&&!Label.Contains(Filter))continue;
                     if(++Count>80)break;
-                    List->AddSlot().AutoHeight()[Button(Label,[Changed,Id=Entry.Id](){FSlateApplication::Get().DismissAllMenus();Changed(Id);})];
+                    List->AddSlot().AutoHeight()[MenuButton(Label,[Changed,Id=Entry.Id](){FSlateApplication::Get().DismissAllMenus();Changed(Id);})];
                 }
                 if(Count>80)List->AddSlot().AutoHeight()[Text(TEXT("Type to narrow the remaining properties."),13,Muted)];
                 if(!Count)List->AddSlot().AutoHeight()[Text(TEXT("No named match. Enter a custom ID below the selector."),13,Muted)];
@@ -227,7 +226,7 @@ TSharedRef<SWidget> LootPropertyPicker(const FString& Field,int32 Current,TFunct
 void LootText(const TCHAR* Key,const FString& Caption)
 {
     Add(Text(Caption,15,Muted));
-    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",16))
+    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16))
         .Text(FText::FromString(Str(LootDraft,Key)))
         .OnTextChanged_Lambda([this,Key](const FText& V){LootDraft->SetStringField(Key,V.ToString());}));
 }
@@ -235,13 +234,13 @@ void LootChoice(const TCHAR* Key,const FString& Caption,const TArray<TPair<FStri
 {
     Add(Text(Caption,15,Muted));
     auto Menu=SNew(SVerticalBox);
-    for(const auto& Option:Options)Menu->AddSlot().AutoHeight()[Button(Option.Value,[this,Key,Option,Numeric]()
+    for(const auto& Option:Options)Menu->AddSlot().AutoHeight()[MenuButton(Option.Value,[this,Key,Option,Numeric]()
     {
         if(Numeric)LootDraft->SetNumberField(Key,FCString::Atod(*Option.Key));else LootDraft->SetStringField(Key,Option.Key);
         FSlateApplication::Get().DismissAllMenus();
     })];
-    Add(SNew(SComboButton).ButtonStyle(&Style()).ContentPadding(FMargin(12,9))
-        .ButtonContent()[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).ColorAndOpacity(Ink)
+    Add(SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo)
+        .ButtonContent()[SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",16)).ColorAndOpacity(Ink)
             .Text_Lambda([this,Key,Options,Numeric]()
             {
                 const FString Value=Numeric?FString::Printf(TEXT("%.0f"),Num(LootDraft,Key)):Str(LootDraft,Key);
@@ -258,7 +257,7 @@ void LootRange(const FString& Field,const FString& Caption,double Maximum)
     {
         const FString Key=Prefix+Field;
         Row->AddSlot().FillWidth(1).Padding(0,0,8,0)[SNew(SSpinBox<double>).Style(&FACEPluginStyle::Current()->Spin).MinValue(0).MaxValue(Maximum)
-            .Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).Value(Num(LootDraft,*Key))
+            .Font(FACEPluginStyle::NativeFont("Regular",16)).Value(Num(LootDraft,*Key))
             .OnValueChanged_Lambda([this,Key](double V){LootDraft->SetNumberField(Key,V);})];
     }
     Add(Row);
@@ -342,6 +341,8 @@ void LootSettings()
     if(!Original.IsEmpty())Add(Button(TEXT("View / edit original Classic UTL copy"),[this,Original](){PreviewLegacy(Original);if(LegacyDocument){LegacyName=TEXT("Loot_edited");LegacyRule.Reset();Page=TEXT("Legacy loot");Rebuild();}}));
     Slider(TEXT("loot_range"),TEXT("Corpse search range"),1,60,15,Accent,TEXT(" m"));
     Add(Toggle(TEXT("salvage_inventory"),TEXT("Apply salvage rules to existing inventory"),TEXT("While UCM runs, destroys matching items in all packs using the active loot profile and an Ust. First matching rule wins. Skips equipped, retained, traded, tinkered and inscribed items; Keep/Skip rules protect items. Off by default.")));
+    Add(Toggle(TEXT("autostack"),TEXT("Auto-combine stackable items"),TEXT("Merges matching partial stacks across all your packs, including components, ammunition, pyreals and other stackable items. Skips equipped, retained and traded items. Runs while UCM is idle; salvage bags use the separate option below.")));
+    Add(Text(TEXT("Components, ammunition, pyreals and other matching stacks. Works across all packs; no Ust needed."),15,Muted));
     Add(Toggle(TEXT("salvage_combine"),TEXT("Combine partial salvage bags"),TEXT("Uses imported workmanship groups and value thresholds; consumes matching bags with an Ust.")));
     Add(Button(TEXT("Edit salvage combining groups"),[this](){EditingSalvage=true;SalvageMaterial=0;SalvageDraft.Reset();Rebuild();}));
     Add(Toggle(TEXT("loot_only_rare"),TEXT("Only rare corpses"),TEXT("Appraises corpses and checks the server's rare-generation description.")));
@@ -349,13 +350,12 @@ void LootSettings()
     Add(Toggle(TEXT("loot_all_corpses"),TEXT("Loot other corpses"),TEXT("Waits 100 seconds after seeing a corpse. Another player's rare corpse remains excluded.")));
     Add(Toggle(TEXT("read_unknown_scrolls"),TEXT("Learn unknown spells"),TEXT("Collect and read scrolls your current skills can learn, before applying loot rules. Known spells and carried duplicates follow normal rules.")));
     Add(Toggle(TEXT("autocram"),TEXT("Move loose items into packs"),TEXT("Keeps main-pack slots free using owned packs.")));
-    Add(Toggle(TEXT("autostack"),TEXT("Combine matching stacks"),TEXT("Uses the normal stack-merge action.")));
 
 }
 void LootProfileFiles()
 {
     Heading(TEXT("Save / load loot rules"),TEXT("Reuse rules between hunts without changing buffs, combat or routes. Loading stops UCM; press Start when ready. Saved files are in Saved/ClientPlugins/Profiles/Loot. Edits save to the selected shared file."));
-    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).HintText(FText::FromString(TEXT("Profile name, e.g. Copper_W7")))
+    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).HintText(FText::FromString(TEXT("Profile name, e.g. Copper_W7")))
         .Text(FText::FromString(LootProfileName)).OnTextChanged_Lambda([this](const FText& V){LootProfileName=V.ToString();}));
     Add(Button(TEXT("Save loot profile"),[this](){if(Host->SaveLootProfile(LootProfileName))Rebuild();}));
     TArray<FString> Files=Host->UCMSectionProfiles(TEXT("Loot"));
@@ -396,7 +396,7 @@ void LootConditions()
     for(const auto& Type:Types)
     {
         if(Str(ConditionDraft,TEXT("field"))==Type.Key)CurrentType=Type.Value;
-        TypeMenu->AddSlot().AutoHeight()[LootTool(Type.Value,[this,Field=Type.Key]()
+        TypeMenu->AddSlot().AutoHeight()[MenuButton(Type.Value,[this,Field=Type.Key]()
         {
             FSlateApplication::Get().DismissAllMenus();if(Str(ConditionDraft,TEXT("field"))==Field)return;
             ConditionDraft=MakeShared<FJsonObject>();ConditionDraft->SetStringField(TEXT("field"),Field);ConditionDraft->SetStringField(TEXT("op"),TEXT("ge"));
@@ -405,14 +405,14 @@ void LootConditions()
             if(Field==TEXT("legacy"))ConditionDraft->SetArrayField(TEXT("args"),{MakeShared<FJsonValueNumber>(1)});Rebuild();
         })];
     }
-    Add(SNew(SComboButton).ButtonStyle(&Style()).ContentPadding(6).ButtonContent()[Text(CurrentType,15)].MenuContent()[TypeMenu]);
+    Add(SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[Text(CurrentType,15)].MenuContent()[TypeMenu]);
     const FString Field=Str(ConditionDraft,TEXT("field"));
     if(Field==TEXT("legacy"))
     {
         const int Key=int(Num(ConditionDraft,TEXT("key")));const auto* Definition=Calculated.Find(Key);
         auto Menu=SNew(SVerticalBox);TArray<int> Keys;Calculated.GetKeys(Keys);Keys.Sort();
-        for(int Type:Keys){const auto Choice=Calculated[Type];Menu->AddSlot().AutoHeight()[Button(Choice.Name,[this,Type,Choice](){ConditionDraft->SetNumberField(TEXT("key"),Type);TArray<TSharedPtr<FJsonValue>> Args;for(const auto& Label:Choice.Arguments)Args.Add(MakeShared<FJsonValueNumber>(0));ConditionDraft->SetArrayField(TEXT("args"),Args);FSlateApplication::Get().DismissAllMenus();Rebuild();})];}
-        Add(SNew(SComboButton).ButtonStyle(&Style()).ButtonContent()[Text(Definition?Definition->Name:TEXT("Retired legacy condition"),16)].MenuContent()[SNew(SBox).MaxDesiredHeight(320)[SNew(SScrollBox)+SScrollBox::Slot()[Menu]]]);
+        for(int Type:Keys){const auto Choice=Calculated[Type];Menu->AddSlot().AutoHeight()[MenuButton(Choice.Name,[this,Type,Choice](){ConditionDraft->SetNumberField(TEXT("key"),Type);TArray<TSharedPtr<FJsonValue>> Args;for(const auto& Label:Choice.Arguments)Args.Add(MakeShared<FJsonValueNumber>(0));ConditionDraft->SetArrayField(TEXT("args"),Args);FSlateApplication::Get().DismissAllMenus();Rebuild();})];}
+        Add(SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[Text(Definition?Definition->Name:TEXT("Retired legacy condition"),16)].MenuContent()[SNew(SBox).MaxDesiredHeight(320)[SNew(SScrollBox)+SScrollBox::Slot()[Menu]]]);
         if(Definition)for(int Index=0;Index<Definition->Arguments.Num();++Index)
         {
             const auto& Args=ConditionDraft->GetArrayField(TEXT("args"));Add(Text(Definition->Arguments[Index],15,Muted));
@@ -454,9 +454,9 @@ void LootConditions()
         for(const auto& Op:Comparisons)
         {
             if(Str(ConditionDraft,TEXT("op"))==Op.Key)CurrentOp=Op.Value;
-            Ops->AddSlot().AutoHeight()[LootTool(Op.Value,[this,Op](){ConditionDraft->SetStringField(TEXT("op"),Op.Key);FSlateApplication::Get().DismissAllMenus();Rebuild();})];
+            Ops->AddSlot().AutoHeight()[MenuButton(Op.Value,[this,Op](){ConditionDraft->SetStringField(TEXT("op"),Op.Key);FSlateApplication::Get().DismissAllMenus();Rebuild();})];
         }
-        Add(SNew(SComboButton).ButtonStyle(&Style()).ContentPadding(6).ButtonContent()[Text(CurrentOp,15)].MenuContent()[Ops]);
+        Add(SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[Text(CurrentOp,15)].MenuContent()[Ops]);
         Add(Text(TEXT("Value"),14,Muted));
         Add(SNew(SSpinBox<double>).Style(&FACEPluginStyle::Current()->Spin).MaxFractionalDigits(12).MinValue(TOptional<double>()).MaxValue(TOptional<double>()).MinSliderValue(TOptional<double>()).MaxSliderValue(TOptional<double>()).Value(Num(ConditionDraft,TEXT("value"))).OnValueChanged_Lambda([this](double V){ConditionDraft->SetNumberField(TEXT("value"),V);}));
         Add(Button(Bool(ConditionDraft,TEXT("missing_zero"))?TEXT("Missing value: use 0 (VT)"):TEXT("Missing value: does not match"),[this](){ConditionDraft->SetBoolField(TEXT("missing_zero"),!Bool(ConditionDraft,TEXT("missing_zero")));Rebuild();}));
@@ -489,15 +489,15 @@ void SalvagePanel()
         SalvageDraft->SetNumberField(TEXT("target"),Target);
     }
     auto Menu=SNew(SVerticalBox);
-    for(int32 Id=0;Id<=77;++Id)Menu->AddSlot().AutoHeight()[Button(Id?ACERetailObjectNames::GetMaterialTypeName(Id):TEXT("Default groups"),[this,Id](){SalvageMaterial=Id;SalvageDraft.Reset();FSlateApplication::Get().DismissAllMenus();Rebuild();})];
-    Add(SNew(SComboButton).ButtonStyle(&Style()).ContentPadding(FMargin(12,9)).ButtonContent()[Text(SalvageMaterial?ACERetailObjectNames::GetMaterialTypeName(SalvageMaterial):TEXT("Default groups"),16)]
+    for(int32 Id=0;Id<=77;++Id)Menu->AddSlot().AutoHeight()[MenuButton(Id?ACERetailObjectNames::GetMaterialTypeName(Id):TEXT("Default groups"),[this,Id](){SalvageMaterial=Id;SalvageDraft.Reset();FSlateApplication::Get().DismissAllMenus();Rebuild();})];
+    Add(SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[Text(SalvageMaterial?ACERetailObjectNames::GetMaterialTypeName(SalvageMaterial):TEXT("Default groups"),16)]
         .MenuContent()[SNew(SBox).MaxDesiredHeight(320)[SNew(SScrollBox)+SScrollBox::Slot()[Menu]]]);
     Add(Text(TEXT("Workmanship groups: minimum / maximum. Classic assigns gaps to the preceding group: 1-6 includes 6.99 until the next group starts at 7. Materials never mix."),16,Muted));
     const auto Ranges=SalvageDraft->GetArrayField(TEXT("ranges"));
     for(int32 Index=0;Index<Ranges.Num();++Index)
     {
         auto Row=SNew(SHorizontalBox);auto Range=Ranges[Index]->AsObject();
-        for(const FString Key:{TEXT("min"),TEXT("max")})Row->AddSlot().FillWidth(1).Padding(0,0,8,0)[SNew(SSpinBox<double>).Style(&FACEPluginStyle::Current()->Spin).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).MinValue(0).MaxValue(1000).Value(Num(Range,*Key))
+        for(const FString Key:{TEXT("min"),TEXT("max")})Row->AddSlot().FillWidth(1).Padding(0,0,8,0)[SNew(SSpinBox<double>).Style(&FACEPluginStyle::Current()->Spin).Font(FACEPluginStyle::NativeFont("Regular",16)).MinValue(0).MaxValue(1000).Value(Num(Range,*Key))
             .OnValueChanged_Lambda([Range,Key](double V){Range->SetNumberField(Key,V);})];
         Row->AddSlot().AutoWidth()[Button(TEXT("Remove"),[this,Index](){auto R=SalvageDraft->GetArrayField(TEXT("ranges"));R.RemoveAt(Index);SalvageDraft->SetArrayField(TEXT("ranges"),R);Rebuild();})];Add(Row);
     }
@@ -505,7 +505,7 @@ void SalvagePanel()
     if(SalvageMaterial)
     {
         Add(Text(TEXT("Minimum combined value for a full bag (pyreals; 0 = disabled)"),15,Muted));
-        Add(SNew(SSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).MinValue(0).MaxValue(MAX_int32).Value(int32(Num(SalvageDraft,TEXT("target"))))
+        Add(SNew(SSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).Font(FACEPluginStyle::NativeFont("Regular",16)).MinValue(0).MaxValue(MAX_int32).Value(int32(Num(SalvageDraft,TEXT("target"))))
             .OnValueChanged_Lambda([this](int32 V){SalvageDraft->SetNumberField(TEXT("target"),V);}));
     }
     auto Save=[this,Policy](bool Remove)

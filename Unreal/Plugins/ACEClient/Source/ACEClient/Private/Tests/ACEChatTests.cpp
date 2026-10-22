@@ -1,5 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "ACEClientSubsystem.h"
 #include "ACEClientChatCommands.h"
 #include "ACEInputBindings.h"
@@ -30,6 +32,17 @@
 #include "Slate/WidgetRenderer.h"
 #include "Misc/App.h"
 
+
+namespace
+{
+FString ACEChatTestsDatDirectory()
+{
+    FString Directory=TEXT("C:/Turbine/Asheron's Call");
+    FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),Directory);
+    return Directory;
+}
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEChatParityTest, "ACE.RetailParity.ChatInputAndCommands",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEChatParityTest::RunTest(const FString&)
@@ -57,7 +70,7 @@ bool FACEChatParityTest::RunTest(const FString&)
     auto* Main = NewObject<UACEChatEntry>(); Main->InitializeChat(Binder);
     auto* Other = NewObject<UACEChatEntry>(); Other->InitializeChat(Binder);
     auto* Dat=NewObject<UACEDatSubsystem>(GI);
-    if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat->LoadDatDirectory(ACEChatTestsDatDirectory())) return false;
     auto* Resources=NewObject<UACEUIResourceResolver>(); Resources->Initialize(Dat);
     auto* Output=NewObject<UACERetailTextBlock>(); Output->SetSelectable(true);
     Output->SetText(FText::FromString(TEXT("Copy this chat message")));

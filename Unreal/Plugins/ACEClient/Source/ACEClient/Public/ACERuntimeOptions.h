@@ -11,7 +11,8 @@ inline constexpr FOption Values[] = {
  {TEXT("CameraStiffness"),TEXT("Camera Stiffness"),1,.25f,3},
  {TEXT("CameraAdjustment"),TEXT("Camera Adjustment Speed"),1,.25f,3},
  {TEXT("FieldOfViewDegrees"),TEXT("Field of View"),90,10,160},
- {TEXT("Brightness"),TEXT("Screen Brightness"),2.2f,1.6f,2.8f},
+ {TEXT("ScreenBrightness"),TEXT("Screen Brightness"),1.f,.2f,2.f},
+ {TEXT("Contrast"),TEXT("Screen Contrast"),1.f,.5f,2.f},
  {TEXT("Anisotropy"),TEXT("Texture Filtering"),16,1,16},
  {TEXT("DesktopUIScale"),TEXT("Desktop UI Scale"),1,1,3},
  {TEXT("ShowFrameRate"),TEXT("Show FPS overlay"),0,0,1},
@@ -19,11 +20,14 @@ inline constexpr FOption Values[] = {
  {TEXT("ChatFontSize"),TEXT("Chat Font Size"),1,0,4},
  {TEXT("CursorScale"),TEXT("Cursor size"),1,.5f,3},
  {TEXT("ObjectGlow"),TEXT("Highlight selected and hovered objects"),1,0,1},
- {TEXT("ConstrainUIWindows"),TEXT("Keep UI windows on screen"),1,0,1}
+ {TEXT("ConstrainUIWindows"),TEXT("Keep UI windows on screen"),1,0,1},
+ {TEXT("DynamicLightingQuality"),TEXT("Dynamic lights"),2,0,2}
 };
 ACECLIENT_API float Get(const TCHAR* Key);
 ACECLIENT_API void Set(const TCHAR* Key, float Value);
 ACECLIENT_API void Apply();
+/** Applied lighting preference: 0 off, 1 reduced, 2 full. No config reads per effect. */
+ACECLIENT_API int32 DynamicLightingQuality();
 ACECLIENT_API float SoundGain(bool bAmbient);
 /** Retail EnumIDMap 25000012; actual glyph atlases from the user's DAT on every platform. */
 ACECLIENT_API uint32 ChatFontId();

@@ -193,4 +193,82 @@ bool FACEUCMSchedulingTest::RunTest(const FString&)
  }
  return !HasAnyErrors();
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMPostCombatLootTest,"ACE.Plugins.PostCombatLootHandoff",
+ EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMPostCombatLootTest::RunTest(const FString&)
+{
+ auto Json=[](const TCHAR* Text){TSharedPtr<FJsonObject> O;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text),O);return O;};
+ FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+ auto Snapshot=[&](){return Json(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"action_serial":0,"action_error":0,"container":0,"teleport_sequence":1,"position":{"cell":30998795,"x":30,"y":0,"z":0},"spells":[],"targets":[],"inventory":[{"id":99,"wcid":99,"type":256,"equipped":true,"identified":true,"can_wield":true,"damage":10,"name":"Thrown weapon"},{"id":51,"wcid":51,"name":"Potion","type":32,"identified":true,"usable":true,"count":5,"boost_vital":2,"boost":50}]})"));};
+ auto Profile=[&](){return Json(TEXT(R"({"buffing":false,"recovery":false,"combat":"missile","approach_range":60,"radius":1,"navigation":true,"looting":true,"loot_rules":[{"action":"keep"}],"route":[{"cell":30998795,"x":25,"y":0,"z":0},{"cell":30998795,"x":45,"y":0,"z":0}]})"));};
+ auto Step=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
+ auto Action=[](auto I){FString A;I->TryGetStringField(TEXT("action"),A);return A;};
+ auto Kill=[&](FACEPluginVM& VM,auto S,auto P,bool Confirmed=true)
+ {
+  TestTrue(TEXT("Post-combat policy loads"),VM.Load(Source,Error));
+  S->SetObjectField(TEXT("route_visible"),Json(TEXT(R"({"1":false,"2":true})")));
+  TestEqual(TEXT("Start along ordered route"),Action(Step(VM,S,P)),FString(TEXT("move")));
+  auto Enemy=Json(TEXT(R"({"id":500,"name":"Rat","distance":6,"identified":true,"line_of_sight":true,"cell":30998795,"x":30,"y":6,"z":0})"));
+  S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(Enemy)});
+  TestEqual(TEXT("Leave route to approach enemy"),Step(VM,S,P)->GetNumberField(TEXT("target")),500.);
+  S->GetObjectField(TEXT("position"))->SetNumberField(TEXT("y"),5);Enemy->SetNumberField(TEXT("distance"),1);
+  S->SetNumberField(TEXT("time"),100.5);
+  TestEqual(TEXT("Attack after approaching"),Action(Step(VM,S,P)),FString(TEXT("attack")));
+  S->SetArrayField(TEXT("targets"),{});
+  if(Confirmed)S->SetObjectField(TEXT("combat_death"),Json(TEXT(R"({"id":500,"time":100.5,"teleport_sequence":1,"cell":30998795,"x":30,"y":6,"z":0})")));
+  TestEqual(TEXT("Cancel old attack before other activities"),Action(Step(VM,S,P)),FString(TEXT("cancel_attack")));
+ };
+ for(bool NavigationPriority:{false,true})
+ {
+  FACEPluginVM VM;auto S=Snapshot(),P=Profile();Kill(VM,S,P);
+  P->SetBoolField(TEXT("nav_priority"),NavigationPriority);
+  // An already-looted old corpse must not be mistaken for this kill's spawn.
+  S->SetArrayField(TEXT("corpses"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":600,"name":"Old corpse","distance":1,"identified":true,"looted":true,"observed_age":50})")))});
+  for(double Time:{100.5,101.,103.})
+  {
+   S->SetNumberField(TEXT("time"),Time);auto I=Step(VM,S,P);
+   TestEqual(TEXT("Only navigation priority bypasses the delayed corpse handoff"),Action(I),FString(NavigationPriority?TEXT("move"):TEXT("")));
+   if(!NavigationPriority)TestEqual(TEXT("Pending corpse wait is visible"),I->GetStringField(TEXT("status")),FString(TEXT("Waiting for defeated creature's corpse")));
+  }
+  auto Corpse=Json(TEXT(R"({"id":700,"name":"Corpse of Rat","distance":1,"identified":true,"line_of_sight":true,"observed_age":0})"));
+  S->SetArrayField(TEXT("corpses"),{MakeShared<FJsonValueObject>(Corpse)});
+  TestEqual(TEXT("Corpse arrival starts loot immediately, before the wait deadline"),Action(Step(VM,S,P)),FString(TEXT("open_corpse")));
+  TestEqual(TEXT("Route cannot interrupt pending corpse open"),Action(Step(VM,S,P)),FString());
+  S->SetNumberField(TEXT("container"),700);S->SetBoolField(TEXT("container_is_corpse"),true);S->SetBoolField(TEXT("contents_ready"),false);
+  TestEqual(TEXT("Route waits for delayed contents"),Action(Step(VM,S,P)),FString());
+  S->SetBoolField(TEXT("contents_ready"),true);
+  auto Ring=Json(TEXT(R"({"id":701,"wcid":701,"name":"Ring","count":1,"identified":true})"));
+  S->SetArrayField(TEXT("contents"),{MakeShared<FJsonValueObject>(Ring)});
+  TestEqual(TEXT("Take the loot before returning to the route"),Action(Step(VM,S,P)),FString(TEXT("loot")));
+  TestEqual(TEXT("Route cannot interrupt transfer confirmation"),Action(Step(VM,S,P)),FString());
+  auto Inventory=S->GetArrayField(TEXT("inventory"));Inventory.Add(MakeShared<FJsonValueObject>(Ring));S->SetArrayField(TEXT("inventory"),Inventory);
+  S->SetArrayField(TEXT("contents"),{});
+  TestEqual(TEXT("Close completed corpse before route rejoin"),Action(Step(VM,S,P)),FString(TEXT("close_corpse")));
+  S->SetNumberField(TEXT("container"),0);auto I=Step(VM,S,P);
+  TestEqual(TEXT("Resume return trail immediately after loot, without remaining spawn delay"),I->GetStringField(TEXT("status")),FString(TEXT("Returning to route")));
+  TestEqual(TEXT("Rejoin follows the observed departure position"),I->GetNumberField(TEXT("y")),0.);
+ }
+ {
+  FACEPluginVM VM;auto S=Snapshot(),P=Profile();Kill(VM,S,P);
+  P->SetBoolField(TEXT("recovery"),true);S->SetNumberField(TEXT("health"),10);
+  TestEqual(TEXT("Recovery still runs while awaiting a corpse"),Step(VM,S,P)->GetNumberField(TEXT("item")),51.);
+  S->SetNumberField(TEXT("health"),100);S->SetNumberField(TEXT("action_serial"),1);
+  S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":501,"name":"Rat","distance":1,"identified":true,"line_of_sight":true})")))});
+  TestEqual(TEXT("Another living target still takes combat priority"),Action(Step(VM,S,P)),FString(TEXT("attack")));
+  S->SetArrayField(TEXT("targets"),{});Step(VM,S,P);
+  S->SetNumberField(TEXT("time"),109);
+  TestEqual(TEXT("Missing corpse cannot stall navigation indefinitely"),Action(Step(VM,S,P)),FString(TEXT("move")));
+ }
+ for(int32 Case=0;Case<5;++Case)
+ {
+  FACEPluginVM VM;auto S=Snapshot(),P=Profile();Kill(VM,S,P,Case!=0);
+  if(Case==1)P->SetBoolField(TEXT("looting"),false);
+  if(Case==2)P->SetArrayField(TEXT("loot_rules"),{});
+  if(Case==3)S->GetObjectField(TEXT("position"))->SetNumberField(TEXT("y"),100);
+  if(Case==4)S->SetNumberField(TEXT("teleport_sequence"),2);
+  const auto I=Step(VM,S,P);
+  TestEqual(*FString::Printf(TEXT("Excluded corpse-wait case %d resumes route: %s"),Case,*I->GetStringField(TEXT("status"))),Action(I),FString(TEXT("move")));
+ }
+ return !HasAnyErrors();
+}
 #endif

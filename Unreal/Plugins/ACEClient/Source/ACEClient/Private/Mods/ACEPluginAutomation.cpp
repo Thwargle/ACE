@@ -103,7 +103,7 @@ bool UACEPluginSubsystem::IsOwnedPluginItem(const FACEWorldObject& Item) const
 }
 void UACEPluginSubsystem::ObserveAppraisal(const FACEAppraisalInfo& Info)
 {
-    Appraisals.Add(Info.ObjectGuid,Info);++DataRevision;
+    Appraisals.Add(Info.ObjectGuid,Info);DirtyInventoryAppraisals.Add(Info.ObjectGuid);++DataRevision;
     for(const auto& P:Plugins)if(P->WaitAction==TEXT("identify")&&P->WaitItem==Info.ObjectGuid)
     {
         P->NextAction=FMath::Min(P->NextAction,P->ActionSentAt+.25);
@@ -161,25 +161,55 @@ void UACEPluginSubsystem::ReleaseCombatTarget(int32 Guid)
     // Do not clear PendingSpell: its untagged UseDone still belongs to that
     // cast. A death event can arrive while a projectile or recoil is active.
 }
+void UACEPluginSubsystem::RecordCombatDeath(int32 Guid)
+{
+    auto P=PolicyPlugin();
+    if(!P||!P->Running)return;
+    const bool DeferredTarget=P->CombatTransitionIntent
+        &&(S(P->CombatTransitionIntent,TEXT("action"))==TEXT("attack")||S(P->CombatTransitionIntent,TEXT("action"))==TEXT("cast"))
+        &&int32(uint32(N(P->CombatTransitionIntent,TEXT("target"))))==Guid;
+    if(CombatTarget!=Guid&&PhysicalAttackTarget!=Guid&&!DeferredTarget)return;
+    if(LastCombatDeath&&int32(uint32(N(LastCombatDeath,TEXT("id"))))==Guid)return;
+    auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();FACEWorldObject Object;
+    if(!Client->GetWorldObject(Guid,Object)||!Object.bHasPosition||Object.bIsPlayer||Object.PetOwnerId)return;
+    // A zero-health/death-motion notification precedes the corpse ObjectCreate.
+    // Retain this across deletion, but never infer death from lost visibility.
+    LastCombatDeath=Pos(Object.Position);
+    LastCombatDeath->SetNumberField(TEXT("id"),uint32(Guid));
+    LastCombatDeath->SetNumberField(TEXT("time"),FPlatformTime::Seconds());
+    LastCombatDeath->SetNumberField(TEXT("teleport_sequence"),Client->GetTeleportSeq());
+}
 void UACEPluginSubsystem::ObserveTargetHealth(int32 Guid,float Fraction)
 {
     if(!FMath::IsFinite(Fraction))return;
     FACEWorldObject Object;auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
-    if(Fraction>0){DefeatedTargets.Remove(Guid);return;}
+    if(Fraction>0)
+    {
+        DefeatedTargets.Remove(Guid);
+        if(LastCombatDeath&&int32(uint32(N(LastCombatDeath,TEXT("id"))))==Guid)LastCombatDeath.Reset();
+        return;
+    }
     if(C->GetWorldObject(Guid,Object)&&Object.IsAttackable()&&!Object.bIsPlayer&&!Object.PetOwnerId)
-    {DefeatedTargets.Add(Guid);ReleaseCombatTarget(Guid);}
+    {RecordCombatDeath(Guid);DefeatedTargets.Add(Guid);ReleaseCombatTarget(Guid);}
 }
 void UACEPluginSubsystem::ObserveTargetMotion(int32 Guid,const FACEObjectMotionState& Motion)
 {
     FACEWorldObject Object;
     if(Motion.IsDeathMotion()&&GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->GetWorldObject(Guid,Object)&&Object.bDying)
-        ReleaseCombatTarget(Guid);
+        {RecordCombatDeath(Guid);ReleaseCombatTarget(Guid);}
 }
 void UACEPluginSubsystem::ObserveTargetDeleted(int32 Guid)
-{CorpseFirstSeen.Remove(Guid);DefeatedTargets.Remove(Guid);ReleaseCombatTarget(Guid);}
+{CorpseFirstSeen.Remove(Guid);DefeatedTargets.Remove(Guid);ReleaseCombatTarget(Guid);ForgetTargetEffects(Guid);}
 void UACEPluginSubsystem::ObserveTargetCreated(const FACEWorldObject& Object)
 {
+    ForgetTargetEffects(Object.Guid);
     DefeatedTargets.Remove(Object.Guid);
+    if(LastCombatDeath&&int32(uint32(N(LastCombatDeath,TEXT("id"))))==Object.Guid)LastCombatDeath.Reset();
+    if(Object.IsCorpse())
+    {
+        CorpseFirstSeen.Add(Object.Guid,FPlatformTime::Seconds());
+        if(LastCombatDeath&&FPlatformTime::Seconds()-N(LastCombatDeath,TEXT("time"))<8)WakeCombatDecision();
+    }
     // VT fo retains opened corpse IDs across Stop and visibility releases,
     // but a new corpse at a different position can reuse an old ID.
     if(const auto* Record=LootedCorpses.Find(Object.Guid);Record&&Object.bHasPosition)
@@ -236,6 +266,8 @@ void UACEPluginSubsystem::PrepareSpellConfirmation(const FString& SpellName)
 }
 void UACEPluginSubsystem::ObserveUseDone(uint32 Error)
 {
+    if(Error)PendingDebuffCasts.RemoveAll([this](const auto& E){const auto J=E->AsObject();return N(J,TEXT("spell"))==LastTargetEffectSpell
+        &&N(J,TEXT("target"))==uint32(LastTargetEffectTarget);});
     // A confirmed buff may have already advanced the policy. Its late success
     // acknowledgment must never finish the next cast or an inventory action.
     if(ConfirmedBuffAckAt && !Error)
@@ -293,7 +325,7 @@ void UACEPluginSubsystem::CompletePendingAction(uint32 Error)
         auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
         if(auto Session=Client->GetSession())for(const auto& Pair:Session->GetWorldObjects())
             if(Pair.Value.WielderId==Client->GetPlayerGuid())
-            {Appraisals.Remove(Pair.Key);AppraisalRequests.Remove(Pair.Key);}
+            {Appraisals.Remove(Pair.Key);AppraisalRequests.Remove(Pair.Key);DirtyInventoryAppraisals.Add(Pair.Key);}
         ++DataRevision;
     }
     PendingManaRefresh=false;
@@ -301,7 +333,7 @@ void UACEPluginSubsystem::CompletePendingAction(uint32 Error)
     // Reassess them before another maintenance decision can reuse stale contents.
     for (int32 Id : PendingResourceRefresh)
     {
-        Appraisals.Remove(Id);AppraisalRequests.Remove(Id);
+        Appraisals.Remove(Id);AppraisalRequests.Remove(Id);DirtyInventoryAppraisals.Add(Id);
         auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();FACEWorldObject Item;
         if(Client->GetWorldObject(Id,Item)&&IsOwnedPluginItem(Item))
         {
@@ -439,18 +471,19 @@ void UACEPluginSubsystem::RefreshAutomationData()
     if(!Session || C->GetSessionState()!=EACESessionState::InWorld)
     {
         SaveItemBuffTimers();
-        CombatTarget=0;DefeatedTargets.Empty();LastCombatVitals=FIntVector(-1,-1,-1);
+        CombatTarget=0;DefeatedTargets.Empty();LastCombatDeath.Reset();LastCombatVitals=FIntVector(-1,-1,-1);
         ConfirmedBuffAckAt=BuffRetryAt=0;ConfirmedBuffOwner.Empty();DeferredBuffIntent.Reset();DeferredBuffOwner.Empty();PendingBuffResultDriven=false;
-        DataPlayer=0;Appraisals.Empty();CorpseFirstSeen.Empty();LootedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();CachedInventory.Empty();ClearBuffRequests();
+        DataPlayer=0;Appraisals.Empty();CorpseFirstSeen.Empty();LootedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();CachedInventory.Empty();CachedInventoryIndices.Empty();DirtyInventoryAppraisals.Empty();ClearBuffRequests();
         PendingSpell=0;PendingSpellOwner.Empty();FastCastOwner.Empty();PendingManaRefresh=false;PendingResourceRefresh.Empty();Debuffs.Empty();PendingDebuffCasts.Empty();OffensiveCasts.Empty();InventoryRevision=MAX_uint64;C->BackgroundAppraisals.Empty();return;
     }
     if(DataPlayer!=C->GetPlayerGuid()||DataServer!=C->GetServerName()||ObservedSession.Pin()!=Session)
     {
         SaveItemBuffTimers();
-        UnbindCombatEvents();CombatTarget=0;DefeatedTargets.Empty();LastCombatVitals=FIntVector(-1,-1,-1);
+        UnbindCombatEvents();CombatTarget=0;DefeatedTargets.Empty();LastCombatDeath.Reset();LastCombatVitals=FIntVector(-1,-1,-1);
         ConfirmedBuffAckAt=BuffRetryAt=0;ConfirmedBuffOwner.Empty();DeferredBuffIntent.Reset();DeferredBuffOwner.Empty();PendingBuffResultDriven=false;
-        if(auto Old=ObservedSession.Pin()){Old->OnUseDone.Remove(UseDoneHandle);Old->OnPlayerTell.Remove(TellHandle);Old->OnChatMessage.Remove(MetaChatHandle);Old->OnCombatFeedback.Remove(CombatFeedbackHandle);}
+        if(auto Old=ObservedSession.Pin()){Old->OnUseDone.Remove(UseDoneHandle);Old->OnSpellCastRequested.Remove(SpellCastHandle);Old->OnPlayerTell.Remove(TellHandle);Old->OnChatMessage.Remove(MetaChatHandle);Old->OnCombatFeedback.Remove(CombatFeedbackHandle);}
         ObservedSession=Session;UseDoneHandle=Session->OnUseDone.AddUObject(this,&UACEPluginSubsystem::ObserveUseDone);
+        SpellCastHandle=Session->OnSpellCastRequested.AddUObject(this,&UACEPluginSubsystem::ObserveTargetSpellCast);
         MetaChatHandle=Session->OnChatMessage.AddUObject(this,&UACEPluginSubsystem::ObserveMetaChat);MetaChatEvents.Empty();MetaPortalEvents.Empty();MetaPortalSpace=false;
         CombatFeedbackHandle=Session->OnCombatFeedback.AddUObject(this,&UACEPluginSubsystem::ObserveCombatFeedback);
         TargetHealthHandle=Session->OnObjectHealth.AddUObject(this,&UACEPluginSubsystem::ObserveTargetHealth);
@@ -463,9 +496,14 @@ void UACEPluginSubsystem::RefreshAutomationData()
         TellHandle=Session->OnPlayerTell.AddUObject(this,&UACEPluginSubsystem::ObservePlayerTell);ClearBuffRequests();
         DataPlayer=C->GetPlayerGuid();DataServer=C->GetServerName();NextAppraisalScan=0;Appraisals.Empty();CachedSpeciesNames.Reset();CorpseFirstSeen.Empty();LootedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();
         LoadItemBuffTimers();
+        CachedInventory.Empty();CachedInventoryIndices.Empty();DirtyInventoryAppraisals.Empty();
         PendingSpell=0;PendingSpellOwner.Empty();FastCastOwner.Empty();PendingResourceRefresh.Empty();PendingManaRefresh=false;Debuffs.Empty();PendingDebuffCasts.Empty();InventoryRevision=MAX_uint64;++DataRevision;C->BackgroundAppraisals.Empty();
     }
     ExpireOffensiveCasts(FPlatformTime::Seconds());
+    const double EffectNow=FPlatformTime::Seconds();
+    Debuffs.RemoveAll([&](const auto& E){return N(E->AsObject(),TEXT("expires"))<=EffectNow
+        ||!Session->GetWorldObjects().Contains(int32(uint32(N(E->AsObject(),TEXT("target")))));});
+    PendingDebuffCasts.RemoveAll([EffectNow](const auto& E){return EffectNow-N(E->AsObject(),TEXT("sent"))>30;});
     auto UCM=PolicyPlugin();if(!UCM||!UCM->Enabled)return;
     if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController()))
     {
@@ -480,6 +518,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
     // Object IDs are session-local. Do not retain assessments for objects that
     // left awareness or inventory; refreshed mana/requirements must not stay stale.
     for(auto It=Appraisals.CreateIterator();It;++It)if(!Session->GetWorldObjects().Contains(It.Key()))It.RemoveCurrent();
+    for(auto It=DirtyInventoryAppraisals.CreateIterator();It;++It)if(!Session->GetWorldObjects().Contains(*It))It.RemoveCurrent();
     for(auto It=CorpseFirstSeen.CreateIterator();It;++It)if(!Session->GetWorldObjects().Contains(It.Key()))It.RemoveCurrent();
     for(auto It=LootedCorpses.CreateIterator();It;++It)
     {
@@ -590,6 +629,8 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
     Out->SetArrayField(TEXT("confirmations"),Confirmations);
     Out->SetNumberField(TEXT("chat_serial"),MetaChatSerial);Out->SetArrayField(TEXT("chat_events"),MetaChatEvents);
     Out->SetArrayField(TEXT("combat_events"),CombatOutcomes);
+    if(LastCombatDeath)Out->SetObjectField(TEXT("combat_death"),LastCombatDeath);
+    else Out->RemoveField(TEXT("combat_death"));
     Out->SetNumberField(TEXT("portal_serial"),MetaPortalSerial);Out->SetArrayField(TEXT("portal_events"),MetaPortalEvents);Out->SetBoolField(TEXT("portal_space"),MetaPortalSpace);
     Out->SetNumberField(TEXT("selected"),uint32(C->GetSelectedObject().Guid));Out->SetNumberField(TEXT("vendor"),uint32(C->GetOpenVendorGuid()));
     FACEWorldObject Vendor;
@@ -774,18 +815,27 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
         }
         return MakeShared<FJsonValueObject>(J);
     };
-    // Inventory records are immutable until an inventory/appraisal revision changes.
+    // Keep immutable rows across background assessments. A one-item reply used
+    // to reconstruct every item's property/spell tables on the game thread.
     uint32 Eligibility=GetTypeHash(V.Level);
     for(int32 Id=1;Id<=6;++Id){Eligibility=HashCombine(Eligibility,GetTypeHash(V.GetAttributeBase(Id)));Eligibility=HashCombine(Eligibility,GetTypeHash(V.GetAttributeCurrent(Id)));}
     for(const auto& Skill:V.Skills){Eligibility=HashCombine(Eligibility,GetTypeHash(Skill.Base));Eligibility=HashCombine(Eligibility,GetTypeHash(Skill.Current));Eligibility=HashCombine(Eligibility,GetTypeHash(Skill.AdvancementClass));}
     Eligibility=HashCombine(Eligibility,GetTypeHash(V.MaxHealth));Eligibility=HashCombine(Eligibility,GetTypeHash(V.MaxStamina));Eligibility=HashCombine(Eligibility,GetTypeHash(V.MaxMana));
     for(const auto& Pair:V.StatQualityInts)Eligibility=HashCombine(Eligibility,HashCombine(GetTypeHash(Pair.Key),GetTypeHash(Pair.Value)));
-    if(InventoryRevision!=Session->GetInventoryDataRevision() || InventoryAppraisalRevision!=DataRevision || InventoryEligibility!=Eligibility)
+    if(InventoryRevision!=Session->GetInventoryDataRevision() || InventoryEligibility!=Eligibility
+        || (InventoryAppraisalRevision!=DataRevision && DirtyInventoryAppraisals.IsEmpty()))
     {
-        CachedInventory.Empty();for(const auto& Pair:Session->GetWorldObjects())
-            if(IsOwnedPluginItem(Pair.Value) && CachedInventory.Num()<1024)CachedInventory.Add(ItemJson(Pair.Value));
-        InventoryRevision=Session->GetInventoryDataRevision();InventoryAppraisalRevision=DataRevision;InventoryEligibility=Eligibility;
+        CachedInventory.Empty();CachedInventoryIndices.Empty();
+        for(const auto& Pair:Session->GetWorldObjects())
+            if(IsOwnedPluginItem(Pair.Value) && CachedInventory.Num()<1024)
+            {CachedInventoryIndices.Add(Pair.Key,CachedInventory.Num());CachedInventory.Add(ItemJson(Pair.Value));}
+        InventoryRevision=Session->GetInventoryDataRevision();InventoryEligibility=Eligibility;
     }
+    else if(InventoryAppraisalRevision!=DataRevision)
+        for(int32 Id:DirtyInventoryAppraisals)
+            if(const auto* Index=CachedInventoryIndices.Find(Id))
+                if(const auto* Item=Session->GetWorldObjects().Find(Id))CachedInventory[*Index]=ItemJson(*Item);
+    InventoryAppraisalRevision=DataRevision;DirtyInventoryAppraisals.Reset();
     Out->SetArrayField(TEXT("inventory"),CachedInventory);
     Out->SetNumberField(TEXT("inventory_revision"),double(InventoryRevision));
     Out->SetNumberField(TEXT("appraisal_revision"),double(InventoryAppraisalRevision));
@@ -834,7 +884,11 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
         if(!Monster&&!Obj.IsCorpse())
         {
             if(Obj.bIsPlayer || ACEInventoryRules::IsUsable(Obj.ItemUseable))
-            {auto R=Pos(Obj.Position);R->SetNumberField(TEXT("id"),uint32(Obj.Guid));R->SetNumberField(TEXT("wcid"),Obj.WeenieClassId);R->SetStringField(TEXT("name"),Obj.Name);R->SetNumberField(TEXT("object_class"),ACEVTObjectClass::Classify(Obj));R->SetBoolField(TEXT("door_open"),Obj.IsDoor()&&(Obj.InitialMotionCommand==int32(ACEMotion::On)||Obj.InitialMotionCommand==int32(ACEMotion::OnCommandU16)));R->SetNumberField(TEXT("distance"),FVector::Distance(Obj.Position.ToUnrealLocation(),P.ToUnrealLocation())/100);RouteObjects.Add(MakeShared<FJsonValueObject>(R));}
+            {auto R=Pos(Obj.Position);R->SetNumberField(TEXT("id"),uint32(Obj.Guid));R->SetNumberField(TEXT("wcid"),Obj.WeenieClassId);R->SetStringField(TEXT("name"),Obj.Name);R->SetNumberField(TEXT("object_class"),ACEVTObjectClass::Classify(Obj));
+                // The physics update is authoritative for passage. Motion can
+                // still say On after an auto-close or Off while a door opens.
+                R->SetBoolField(TEXT("door_open"),Obj.IsDoor()&&Obj.IsEthereal());
+                R->SetNumberField(TEXT("distance"),FVector::Distance(Obj.Position.ToUnrealLocation(),P.ToUnrealLocation())/100);RouteObjects.Add(MakeShared<FJsonValueObject>(R));}
             continue;
         }
         auto J=Pos(Obj.Position);J->SetNumberField(TEXT("id"),uint32(Obj.Guid));J->SetStringField(TEXT("name"),Obj.Name);
@@ -1303,7 +1357,7 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
         FACEWorldObject Target;const double RawTarget=N(I,TEXT("target"));
         if(RawTarget<=0||RawTarget>MAX_uint32||FMath::FloorToDouble(RawTarget)!=RawTarget)return true;
         const int32 To=int32(uint32(RawTarget));
-        if(Owned&&C->GetWorldObject(To,Target)&&C->IsOwnedInventoryItem(Target))
+        if(Owned&&C->GetWorldObject(To,Target)&&LootItemAvailable(C,Item)&&LootItemAvailable(C,Target))
             if(int32 Amount=ACEInventoryRules::MergeAmount(Item,Target))C->SendStackableMerge(Id,To,Amount);
         return true;
     }
@@ -1460,6 +1514,55 @@ void UACEPluginSubsystem::DrawRoute()
     RouteMesh->CreateMeshSection_LinearColor(0,Vertices,Triangles,Normals,{},Colors,{},false);
 }
 
+void UACEPluginSubsystem::ForgetTargetEffects(int32 Target)
+{
+    const auto Matches=[Target](const auto& E){return N(E->AsObject(),TEXT("target"))==uint32(Target);};
+    Debuffs.RemoveAll(Matches);PendingDebuffCasts.RemoveAll(Matches);
+}
+
+void UACEPluginSubsystem::ObserveTargetSpellCast(int32 Spell,int32 Target)
+{
+    LastTargetEffectSpell=Spell;LastTargetEffectTarget=Target;
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    auto* Dat=GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
+    FACEWorldObject Object;uint32 School=0,Power=0,Category=0,Flags=0,Icon=0;double Duration=0;FString Name;
+    if(!Target||Target==C->GetPlayerGuid()||!Dat->TryGetPluginSpellInfo(Spell,School,Power,Category,Flags,Duration)
+        ||(Flags&(4|8))||Duration<=0||!Dat->TryGetSpellInfo(Spell,Name,Icon)||!C->GetWorldObject(Target,Object)
+        ||Object.bDying||Object.Name.IsEmpty())return;
+    const double Now=FPlatformTime::Seconds();
+    PendingDebuffCasts.RemoveAll([&](const auto& E){const auto J=E->AsObject();return Now-N(J,TEXT("sent"))>30
+        ||(N(J,TEXT("target"))==uint32(Target)&&N(J,TEXT("spell"))==Spell);});
+    auto Record=MakeShared<FJsonObject>();Record->SetNumberField(TEXT("target"),uint32(Target));Record->SetNumberField(TEXT("spell"),Spell);
+    Record->SetStringField(TEXT("confirmation"),TEXT("You cast ")+Name+TEXT(" on ")+Object.Name);
+    Record->SetStringField(TEXT("resist"),Object.Name+TEXT(" resists your spell"));
+    Record->SetNumberField(TEXT("category"),Category);Record->SetNumberField(TEXT("power"),Power);
+    Record->SetNumberField(TEXT("duration"),Duration);Record->SetNumberField(TEXT("sent"),Now);
+    PendingDebuffCasts.Add(MakeShared<FJsonValueObject>(Record));if(PendingDebuffCasts.Num()>8)PendingDebuffCasts.RemoveAt(0);
+}
+
+bool UACEPluginSubsystem::GetTargetEffectTimer(int32 Target,int32 Spell,double& Remaining,double& Duration) const
+{
+    Remaining=Duration=0;
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    auto* Dat=GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
+    const auto Session=C->GetSession();
+    const auto* Object=Session?Session->GetWorldObjects().Find(Target):nullptr;
+    uint32 School=0,Power=0,Category=0,Flags=0;double BaseDuration=0;
+    if(!Target||Target==C->GetPlayerGuid()||C->GetSessionState()!=EACESessionState::InWorld||ObservedSession.Pin()!=Session
+        ||DataPlayer!=C->GetPlayerGuid()||DataServer!=C->GetServerName()
+        ||!Object||Object->bDying||DefeatedTargets.Contains(Target)
+        ||!Dat->TryGetPluginSpellInfo(Spell,School,Power,Category,Flags,BaseDuration)||(Flags&(4|8))||BaseDuration<=0)return false;
+    const double Now=FPlatformTime::Seconds();
+    for(const auto& Value:Debuffs)
+    {
+        const auto E=Value->AsObject();
+        if(N(E,TEXT("target"))!=uint32(Target)||N(E,TEXT("category"))!=Category||N(E,TEXT("power"))<Power)continue;
+        const double Left=N(E,TEXT("expires"))-Now;
+        if(Left>Remaining){Remaining=Left;Duration=N(E,TEXT("duration"));}
+    }
+    return Remaining>0&&Duration>0;
+}
+
 void UACEPluginSubsystem::ObserveMetaChat(const FString& Text,const FString& Sender,int32 Type)
 {
     if(Type==0x18&&Sender.IsEmpty()&&AutoCraft&&AutoCraft->Pending&&AutoCraft->Preparation.IsEmpty())
@@ -1512,6 +1615,8 @@ void UACEPluginSubsystem::ObserveMetaChat(const FString& Text,const FString& Sen
             if(Text==TEXT("Your spell fizzled.")){PendingSpellFizzled=true;FastCastOwner.Empty();FastCastStarted=false;}
         }
         const double Now=FPlatformTime::Seconds();
+        if(Text==TEXT("Your spell fizzled."))PendingDebuffCasts.RemoveAll([this](const auto& Value)
+        {const auto J=Value->AsObject();return N(J,TEXT("spell"))==LastTargetEffectSpell&&N(J,TEXT("target"))==uint32(LastTargetEffectTarget);});
         for(int32 Index=PendingDebuffCasts.Num()-1;Index>=0;--Index)
         {
             const auto E=PendingDebuffCasts[Index]->AsObject();
@@ -1521,10 +1626,23 @@ void UACEPluginSubsystem::ObserveMetaChat(const FString& Text,const FString& Sen
             const FString Resist=E->GetStringField(TEXT("resist"));
             if(Success)
             {
+                // Server text identifies targets by name. Multiple outstanding
+                // casts at identically named creatures cannot be disambiguated.
+                const bool Ambiguous=PendingDebuffCasts.ContainsByPredicate([&](const auto& Other)
+                {const auto J=Other->AsObject();return J!=E&&Now-N(J,TEXT("sent"))<=30
+                    &&S(J,TEXT("confirmation"))==Prefix&&N(J,TEXT("target"))!=N(E,TEXT("target"));});
+                if(Ambiguous)
+                {
+                    PendingDebuffCasts.RemoveAll([&](const auto& Other){return S(Other->AsObject(),TEXT("confirmation"))==Prefix;});
+                    break;
+                }
                 // Use the known spell's base duration conservatively. A stronger
                 // pre-existing enchantment still confirms this weaker layer exists.
                 E->SetNumberField(TEXT("expires"),Now+N(E,TEXT("duration")));
-                Debuffs.RemoveAll([&](const auto& Old){return N(Old->AsObject(),TEXT("target"))==N(E,TEXT("target"))&&N(Old->AsObject(),TEXT("category"))==N(E,TEXT("category"));});
+                // Retain stronger layers when a weaker cast is confirmed.
+                Debuffs.RemoveAll([&](const auto& Old){return N(Old->AsObject(),TEXT("expires"))<=Now
+                    ||(N(Old->AsObject(),TEXT("target"))==N(E,TEXT("target"))&&N(Old->AsObject(),TEXT("category"))==N(E,TEXT("category"))
+                        &&N(Old->AsObject(),TEXT("power"))==N(E,TEXT("power")));});
                 Debuffs.Add(MakeShared<FJsonValueObject>(E));
             }
             if(Success||Text==Resist||Text==Resist+TEXT("."))

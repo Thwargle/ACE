@@ -11,6 +11,7 @@ namespace ACEAppraisalFormatting
 {
 FString EquipmentSetName(int32 Id);
 FString ItemLevelDetails(const FACEAppraisalInfo& Info);
+FString SlayerProperty(UACEDatSubsystem* Dat, uint32 CreatureType);
 FString RequirementEnumName(UACEDatSubsystem* Dat, uint32 Enum, int32 Value);
 inline FString ManaStoneDetails(const FACEAppraisalInfo& Info)
 {
@@ -195,7 +196,7 @@ inline TArray<FLinearColor> ItemTextColors(const FACEAppraisalInfo& Info, const 
     {
         if (!(Flags & Bit)) return;
         const bool Higher = (Flags & (Bit << 16)) != 0;
-        const FLinearColor Color = Higher ? FLinearColor(.45f,.85f,.05f) : FLinearColor(1.f,.2f,.15f);
+        const FLinearColor Color = Higher ? FLinearColor::Green : FLinearColor(1.f,.2f,.15f);
         int32 Start = 0;
         while ((Start = Text.Find(Label, ESearchCase::CaseSensitive, ESearchDir::FromStart, Start)) != INDEX_NONE)
         {
@@ -216,6 +217,11 @@ inline TArray<FLinearColor> ItemTextColors(const FACEAppraisalInfo& Info, const 
     Stat(TEXT("Bonus to Melee Defense:"), Info.WeaponEnchantments, 2);
     Stat(TEXT("Bonus to Mana Conversion:"), Info.ResistanceEnchantments, 0x1000);
     Stat(TEXT("Elemental Damage Bonus:"), Info.ResistanceEnchantments, 0x2000);
+    // Appraisal_ShowCasterData applies the elemental multiplier's enchantment
+    // color to its heading and both damage rows, even without a weapon profile.
+    Stat(TEXT("Damage bonus for "), Info.ResistanceEnchantments, 0x2000);
+    Stat(TEXT(" vs. Monsters:"), Info.ResistanceEnchantments, 0x2000);
+    Stat(TEXT(" vs. Players:"), Info.ResistanceEnchantments, 0x2000);
     return Colors;
 }
 
@@ -317,9 +323,9 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
     for (int32 I=0; I<UE_ARRAY_COUNT(RatingIds); ++I)
         if (const int32 Value=Info.IntProperties.FindRef(RatingIds[I]); Value>0)
             Ratings.Add(FString::Printf(TEXT("%s %d"),RatingNames[I],Value));
-    if (!Ratings.IsEmpty()) AppendItemText(Text,TEXT("Ratings: ")+FString::Join(Ratings,TEXT(", ")));
+    if (!Ratings.IsEmpty()) AppendItemText(Text,TEXT("Ratings: ")+FString::Join(Ratings,TEXT(", "))+TEXT("."),SetName.IsEmpty());
     const int32 Vitality=Info.IntProperties.FindRef(379);
-    if (Vitality>0) AppendItemText(Text,FString::Printf(TEXT("This item adds %d Vitality."),Vitality));
+    if (Vitality>0) AppendItemText(Text,FString::Printf(TEXT("This item adds %d Vitality."),Vitality),SetName.IsEmpty() && Ratings.IsEmpty());
     if (!SetName.IsEmpty() || !Ratings.IsEmpty() || Vitality>0)
     { Text.TrimEndInline(); Text+=TEXT("\n\n"); }
     if ((Info.IntProperties.FindRef(9)&0x8007FFF) || (Info.ItemType&(ACEItemType::Armor|ACEItemType::Clothing)))
@@ -411,6 +417,11 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
     TArray<FString> Properties;
     if (Info.IntProperties.FindRef(33)) Properties.Add(TEXT("Bonded"));
     if (Info.IntProperties.FindRef(114)) Properties.Add(TEXT("Attuned"));
+    if (const int32* Slayer=Info.IntProperties.Find(166))
+    {
+        const FString Name=SlayerProperty(Dat,uint32(*Slayer));
+        if (!Name.IsEmpty()) Properties.Add(Name);
+    }
     for (const auto& E : {TPair<uint32,const TCHAR*>(1,TEXT("Critical Strike")),{2,TEXT("Crippling Blow")},{4,TEXT("Armor Rending")},
         {8,TEXT("Slash Rending")},{16,TEXT("Pierce Rending")},{32,TEXT("Bludgeon Rending")},{64,TEXT("Acid Rending")},
         {128,TEXT("Cold Rending")},{256,TEXT("Lightning Rending")},{512,TEXT("Fire Rending")},{16384,TEXT("Nether Rending")},

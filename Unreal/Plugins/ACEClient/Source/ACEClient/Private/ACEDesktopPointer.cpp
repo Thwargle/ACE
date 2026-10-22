@@ -37,7 +37,7 @@ void FACEDesktopPointer::PrepareInputMode(FReply& Operations, UGameViewportClien
 
 bool FACEDesktopPointer::ShouldConfine(EWindowMode::Type Mode, bool bForeground, bool bDesktopActive)
 {
-    return bDesktopActive && bForeground && Mode != EWindowMode::Windowed;
+    return bDesktopActive && bForeground && Mode == EWindowMode::Fullscreen;
 }
 
 FACEDesktopPointer::~FACEDesktopPointer()

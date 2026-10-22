@@ -1,4 +1,5 @@
 #include "UI/ACEUIElementManager.h"
+#include "UI/ACEUIResourceResolver.h"
 #include "ACERuntimeOptions.h"
 #include "UI/ACERetailUILayout.h"
 #include "HAL/IConsoleManager.h"
@@ -178,6 +179,7 @@ void UACEUIElementManager::Initialize()
 
 void UACEUIElementManager::Shutdown()
 {
+	ResourceResolver = nullptr;
 	ClearRoots();
 	Factories.Reset();
 	SyntheticRoot.Reset();
@@ -188,6 +190,11 @@ void UACEUIElementManager::Shutdown()
 	DragFloaty.Reset();
 	CaptureRefCount = 0;
 	bDragMoved = false;
+}
+
+void UACEUIElementManager::SetResourceResolver(UACEUIResourceResolver* InResolver)
+{
+	ResourceResolver = InResolver;
 }
 
 FIntRect UACEUIElementManager::GetCanvasViewportRect(FVector2D ViewportSize) const
@@ -877,11 +884,19 @@ TSharedPtr<FACEUIElement> UACEUIElementManager::FindWindowAtCanvas(int32 CanvasX
 
 TSharedPtr<FACEUIElement> UACEUIElementManager::HitTestCanvas(int32 CanvasX, int32 CanvasY) const
 {
+    const auto HitTestMask = [this](const FACEUIElement& Element, FIntPoint Point)
+    {
+        if (!ResourceResolver) return true;
+        const FACEUIStateMedia* State = Element.States.Find(Element.PaintState);
+        // An image-only rollover/pressed state does not replace the region's interaction mask.
+        const uint32 MaskId = State && State->AlphaFileId ? State->AlphaFileId : Element.AlphaFileId;
+        return ResourceResolver->IsPointInHitMask(MaskId, Point);
+    };
     if (const auto Window=FindWindowAtCanvas(CanvasX,CanvasY))
     {
         const auto Parent=Window->Parent.Pin();
         const FIntPoint O=Parent ? Parent->GetScreenOrigin() : FIntPoint::ZeroValue;
-        const auto Hit=Window->HitTestInParentSpace(CanvasX-O.X,CanvasY-O.Y);
+        const auto Hit=Window->HitTestInParentSpace(CanvasX-O.X,CanvasY-O.Y,HitTestMask);
         if (IsUiLocked() && (IsFloatyDragHandle(Hit) || IsFloatyResizeHandle(Hit))) return Window;
         if (!IsUiLocked() && FindFloatyRoot(Window))
         {
@@ -913,7 +928,7 @@ TSharedPtr<FACEUIElement> UACEUIElementManager::HitTestCanvas(int32 CanvasX, int
 	for (int32 i = SyntheticRoot->Children.Num() - 1; i >= 0; --i)
 	{
 		if (TSharedPtr<FACEUIElement> Hit =
-			SyntheticRoot->Children[i]->HitTestInParentSpace(CanvasX, CanvasY))
+            SyntheticRoot->Children[i]->HitTestInParentSpace(CanvasX, CanvasY, HitTestMask))
 		{
 			if (IsUiLocked() && (IsFloatyDragHandle(Hit) || IsFloatyResizeHandle(Hit)))
 			{
@@ -1001,7 +1016,8 @@ void UACEUIElementManager::NotifyMouseMove(FVector2D ViewportPos, FVector2D View
 		return;
 	}
 
-	TSharedPtr<FACEUIElement> Hit = CaptureElement.IsValid() ? CaptureElement : HitTestCanvas(Cx, Cy);
+	// Capture owns the release, but must not force rollover while the pointer is outside the mask.
+	TSharedPtr<FACEUIElement> Hit = HitTestCanvas(Cx, Cy);
 	if (Hit != HoverElement)
 	{
 		HoverElement = Hit;
@@ -1133,6 +1149,11 @@ void UACEUIElementManager::NotifyMouseUp(FVector2D ViewportPos, FVector2D Viewpo
 	if (ViewportToCanvas(ViewportPos, ViewportSize, Cx, Cy))
 	{
 		Released = HitTestCanvas(Cx, Cy);
+	}
+	if (Released != HoverElement)
+	{
+		HoverElement = Released;
+		OnHoverChanged.Broadcast(HoverElement);
 	}
 
 	const bool bHadCapture = CaptureElement.IsValid();

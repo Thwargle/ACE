@@ -126,6 +126,23 @@ bool FACEMissingDatLoginTest::RunTest(const FString&)
  TestFalse(TEXT("Missing files never trigger a pointless lifestone recall"),PC->bWorldEntryRecoveryAttempted);
  TestFalse(TEXT("Failed world loading is no longer active"),PC->bEnterWorldLoading);
  TestTrue(TEXT("Missing cell data is explained in the login panel"),Login->StatusText->GetText().ToString().Contains(TEXT("client_cell_1.dat")));
+ // A synchronous tool/test load supersedes queued background completions.
+ // Previously an old portal completion could free the resolver inside a texture
+ // upload while Unreal pumped game-thread tasks, crashing UCM panel creation.
+ const int32 SupersededGeneration=Dat->BackgroundLoadGeneration;
+ Dat->bBackgroundLoadInProgress=true;Dat->bCellBackgroundLoadInProgress=true;
+ TestTrue(TEXT("Synchronous reload succeeds"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
+ TestTrue(TEXT("Synchronous reload invalidates portal and cell workers"),Dat->BackgroundLoadGeneration!=SupersededGeneration
+  && !Dat->bBackgroundLoadInProgress && !Dat->bCellBackgroundLoadInProgress);
+ auto* ActiveResolver=Dat->GetTextureResolver();auto* ActivePortal=Dat->GetPortalDat();auto* ActiveCell=Dat->CellDat.Get();
+ const auto Stale=MakeShared<UACEDatSubsystem::FBackgroundLoadResult>();
+ Stale->bOk=true;Stale->Portal=MakeUnique<FACEDatDatabase>();
+ TestTrue(TEXT("Stale portal fixture opens"),Stale->Portal->Open(TEXT("C:/Turbine/Asheron's Call/client_portal.dat")));
+ Dat->InstallBackgroundLoadResult(Stale,SupersededGeneration);
+ Dat->InstallCellDatBackgroundLoadResult(TUniquePtr<FACEDatDatabase>(),SupersededGeneration);
+ TestTrue(TEXT("Stale completions cannot replace live resolvers or erase world data"),Dat->GetTextureResolver()==ActiveResolver
+  && Dat->GetPortalDat()==ActivePortal && Dat->CellDat.Get()==ActiveCell && Dat->GetDatLoadError().IsEmpty());
+ TestNotNull(TEXT("UI texture upload remains usable after stale completions"),ActiveResolver->GetOrCreateUiTexture(0x06004CC2));
  GI->Shutdown(); GEngine->DestroyWorldContext(World); World->DestroyWorld(false);
  return !HasAnyErrors();
 }

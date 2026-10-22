@@ -22,6 +22,8 @@
 #include "GameFramework/Pawn.h"
 #include "Camera/PlayerCameraManager.h"
 #include "HAL/IConsoleManager.h"
+#include "SceneInterface.h"
+#include "UObject/UObjectIterator.h"
 
 namespace
 {
@@ -1230,12 +1232,29 @@ void AACESkyDomeActor::UpdateWorldLighting(const FACEDatSkyTimeOfDay& A, const F
 				AppliedDirColor = SunColor;
 			}
 			Dir->SetVisibility(true);
-			static constexpr int32 ShadowSettingsRev = 21;
-			const bool bWantDirShadows = true;
+			static constexpr int32 ShadowSettingsRev = 22;
+			static const auto* ShadowQualityCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("sg.ShadowQuality"));
+			const int32 ShadowQuality = ShadowQualityCVar ? FMath::Clamp(ShadowQualityCVar->GetInt(), 0, 4) : 3;
+			const bool bWantDirShadows = ShadowQuality > 0;
 			const int8 DirShadowIndoor = 0;
 			if (!bDirShadowSettingsApplied || AppliedShadowSettingsRev != ShadowSettingsRev
-				|| LastDirShadowIndoor != DirShadowIndoor)
+				|| LastDirShadowIndoor != DirShadowIndoor || AppliedShadowQuality != ShadowQuality)
 			{
+				if (AppliedShadowQuality == 0 && bWantDirShadows && World->Scene)
+				{
+					// UE omits cached shadow draw commands for meshes created or
+					// updated at r.ShadowQuality=0. Re-enable those passes once,
+					// without recreating geometry buffers or physics components.
+					TArray<FPrimitiveSceneProxy*> Casters;
+					for (TObjectIterator<UPrimitiveComponent> It; It; ++It)
+						if (IsValid(*It) && It->GetWorld() == World && It->IsRegistered() && It->CastShadow && It->SceneProxy)
+							Casters.Add(It->SceneProxy);
+					ENQUEUE_RENDER_COMMAND(ACERefreshEnabledShadowPasses)(
+						[Scene=World->Scene, Casters=MoveTemp(Casters)](FRHICommandListImmediate&)
+						{
+							for (auto* Proxy : Casters) Scene->UpdateCachedRenderStates(Proxy);
+						});
+				}
 				Dir->bAllowMegaLights = false;
 				Dir->SetCastRaytracedShadows(ECastRayTracedShadow::Disabled);
 				Dir->bUseRayTracedDistanceFieldShadows = false;
@@ -1255,9 +1274,10 @@ void AACESkyDomeActor::UpdateWorldLighting(const FACEDatSkyTimeOfDay& A, const F
 					// blend), so pitching the headset swept a quality line across
 					// the world. One 2048 map over 40m retains nearby definition
 					// with no internal quality boundary and one shadow pass.
-					// Desktop retains four cascades and 600m coverage.
-					Dir->DynamicShadowDistanceMovableLight = Mobile ? 4000.f : 60000.f;
-					Dir->DynamicShadowCascades = Mobile ? 1 : 4;
+					// Desktop Low/Medium reduce both coverage and shadow passes.
+					// High retains the full four cascades and 600m coverage.
+					Dir->DynamicShadowDistanceMovableLight = Mobile ? 4000.f : ShadowQuality == 1 ? 10000.f : ShadowQuality == 2 ? 30000.f : 60000.f;
+					Dir->DynamicShadowCascades = Mobile || ShadowQuality == 1 ? 1 : ShadowQuality == 2 ? 2 : 4;
 					Dir->CascadeDistributionExponent = Mobile ? 1.f : 4.f;
 					Dir->CascadeTransitionFraction = 0.1f;
 					Dir->ShadowDistanceFadeoutFraction = 0.12f;
@@ -1269,6 +1289,7 @@ void AACESkyDomeActor::UpdateWorldLighting(const FACEDatSkyTimeOfDay& A, const F
 				}
 				Dir->MarkRenderStateDirty();
 				AppliedShadowSettingsRev = ShadowSettingsRev;
+				AppliedShadowQuality = ShadowQuality;
 				bDirShadowSettingsApplied = true;
 				LastDirShadowIndoor = DirShadowIndoor;
 			}

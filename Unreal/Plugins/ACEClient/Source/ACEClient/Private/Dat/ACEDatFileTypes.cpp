@@ -1004,14 +1004,9 @@ namespace ACEDatUnpack
 			return false;
 		}
 
-		// Modifiers — skip into a temp map
-		{
-			TMap<uint32, FACEDatMotionData> Modifiers;
-			if (!UnpackMotionDict(Modifiers))
-			{
-				return false;
-			}
-		}
+		// Turning/sidestepping modifiers can contain physics without any mesh
+		// animation. Retain them for remote movement, as CMotionTable does.
+		if (!UnpackMotionDict(Out.Modifiers)) return false;
 
 		// Links: Dict<u32, Dict<u32, MotionData>> — door On/Off transitions live here.
 		{

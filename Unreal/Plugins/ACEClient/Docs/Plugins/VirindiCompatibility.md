@@ -1013,3 +1013,17 @@ owned-item, trade, retained-item and equipment protections still apply.
 items, donor demand, appraisal, minimum mana, loot-rule precedence, post-pickup
 protection changes, filling, and recharging equipped items. These are offline
 policy checks, not a live server hunt.
+
+## Buff-wand equipment handoff
+
+The supplied vTank `gz.cs` enchantment reader sends only positive-duration effects
+to its regular-spell callbacks (`m_d`); permanent equipment effects are stored
+separately in `m_b`. `eq.cs` subscribes its buff controller to that regular stream.
+UCM uses the same distinction for automatic buffs, NeedBuff and consumable buffs.
+A wand's permanent Focus/Willpower/Mana Conversion effects must not substitute
+for the timed buffs that remain after switching back to combat equipment.
+
+`ACE.Plugins.BuffEquipmentHandoff` replays those equipment layers appearing and
+disappearing, normal and forced buff cycles, melee/dual-wield/missile restoration,
+continued attacks, and rebuffing after a real dispel. These are offline policy
+checks; they do not claim a live server reproduction.

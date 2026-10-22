@@ -56,6 +56,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACEPortalDropTest;
 	friend class FACEPortalMotionTest;
 	friend class FACELoadingTransitionTest;
+	friend class FACEPortalInterfaceTest;
 	friend class FACEPortalRetirementTest;
 	friend class FACELedgeStairsTest;
 	friend class FACELedgeSafetyTest;
@@ -242,6 +243,7 @@ protected:
 	bool bRetailCursorInteractable = false;
 	bool bPendingUseTargeting = false;
 	UPROPERTY(Transient) TObjectPtr<UTexture2D> RetailCursorDefaultTex = nullptr;
+	UPROPERTY(Transient) TObjectPtr<UTexture2D> RetailCursorBusyTex = nullptr;
 	UPROPERTY(Transient) TArray<TObjectPtr<UACEMouseCursorWidget>> RetailWindowCursorWidgets;
 	UPROPERTY(Transient) TObjectPtr<UTexture2D> RetailCursorInteractableTex = nullptr;
 	UPROPERTY(Transient) TObjectPtr<UTexture2D> RetailCursorTargetTex = nullptr;
@@ -514,8 +516,9 @@ protected:
 	void PollObjectClick();
 	void PollObjectHover();
 	AACEWorldEntityActor* PickWorldPointer(bool& bHitSelf) const;
-	void UpdateDesktopHighlights(bool bEnabled);
+	void UpdateObjectHighlights(bool bEnabled, bool bDesktop = true);
 	TWeakObjectPtr<AACEWorldEntityActor> DesktopHover, DesktopHighlightSelection, DesktopHighlightHover;
+	TWeakObjectPtr<UACECharacterAppearanceComponent> HighlightedPlayerAppearance;
 	/** True when the cursor is over interactive UMG (inventory, hotbar, panels) — skip world pick. */
 	bool IsMouseOverBlockingUI() const;
 	void EnsureHoverTooltipWidget();

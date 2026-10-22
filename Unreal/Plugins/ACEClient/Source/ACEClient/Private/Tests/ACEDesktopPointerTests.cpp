@@ -6,6 +6,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Input/Reply.h"
 #include "Widgets/SViewport.h"
+#include "Slate/SceneViewport.h"
 #include "UObject/StrongObjectPtr.h"
 #if PLATFORM_LINUX
 #include "Misc/ScopeExit.h"
@@ -20,15 +21,43 @@ bool FACEDesktopPointerTest::RunTest(const FString& Parameters)
 {
     TStrongObjectPtr<UGameViewportClient> Viewport(NewObject<UGameViewportClient>(GEngine));
     const auto Widget = SNew(SViewport);
+    const auto Scene = Viewport->CreateViewport(Widget);
+    struct FLoginMode : FInputModeUIOnly { using FInputModeUIOnly::ApplyInputMode; };
+    struct FWorldMode : FInputModeGameAndUI { using FInputModeGameAndUI::ApplyInputMode; };
+    struct FLookMode : FInputModeGameOnly { using FInputModeGameOnly::ApplyInputMode; };
 
-    // A visible pointer may roam outside an ordinary window. Both fullscreen
-    // modes retain the monitor boundary, and releasing focus/VR always lets go.
+    // A visible pointer may roam outside both windowed modes. Only exclusive
+    // fullscreen confines it; releasing focus/VR always lets go.
     for (EWindowMode::Type Mode : {EWindowMode::Windowed, EWindowMode::Fullscreen, EWindowMode::WindowedFullscreen})
     {
         TestEqual(TEXT("Foreground confinement follows the actual display mode"),
-            FACEDesktopPointer::ShouldConfine(Mode, true, true), Mode != EWindowMode::Windowed);
+            FACEDesktopPointer::ShouldConfine(Mode, true, true), Mode == EWindowMode::Fullscreen);
         TestFalse(TEXT("Alt-tab releases native confinement"), FACEDesktopPointer::ShouldConfine(Mode, false, true));
         TestFalse(TEXT("Entering VR releases desktop confinement"), FACEDesktopPointer::ShouldConfine(Mode, true, false));
+
+        const bool bLock = FACEDesktopPointer::ShouldConfine(Mode, true, true);
+        const auto Lock = bLock ? EMouseLockMode::LockAlways : EMouseLockMode::DoNotLock;
+        FReply Operations = FReply::Handled();
+        FLookMode Look;
+        Look.ApplyInputMode(Operations, *Viewport);
+        TestTrue(TEXT("Mouse look retains relative movement and capture in every display mode"),
+            Operations.ShouldUseHighPrecisionMouse() && Operations.GetMouseCaptor() == Widget);
+
+        FWorldMode World;
+        World.SetLockMouseToViewportBehavior(Lock);
+        World.SetHideCursorDuringCapture(false);
+        World.ApplyInputMode(Operations, *Viewport);
+        TestTrue(TEXT("Releasing mouse look releases permanent capture"), Operations.ShouldReleaseMouse());
+        TestEqual(TEXT("World pointer lock follows the chosen mode"), Operations.GetMouseLockWidget().IsValid(), bLock);
+        TestEqual(TEXT("Next click cannot restore the old fullscreen lock"), Viewport->GetMouseLockMode(), Lock);
+        TestEqual(TEXT("Item dragging keeps temporary capture"), Viewport->GetMouseCaptureMode(), EMouseCaptureMode::CaptureDuringMouseDown);
+        TestFalse(TEXT("Pointer remains visible during item dragging"), Viewport->HideCursorDuringCapture());
+
+        FLoginMode Login;
+        Login.SetLockMouseToViewportBehavior(Lock);
+        Login.ApplyInputMode(Operations, *Viewport);
+        TestEqual(TEXT("Login pointer lock follows the chosen mode too"), Operations.GetMouseLockWidget().IsValid(), bLock);
+        TestEqual(TEXT("Login does not acquire gameplay capture"), Viewport->GetMouseCaptureMode(), EMouseCaptureMode::NoCapture);
     }
 
     // Reproduce the operations left by all three engine input modes. Checking
@@ -118,9 +147,10 @@ bool FACEDesktopPointerSDLTest::RunTest(const FString& Parameters)
                 TestTrue(TEXT("Install the engine-style stale rectangle"), SDL_SetWindowMouseRect(Native->Handle, &Bounds));
                 Pointer.Update(true);
                 TestNull(TEXT("All client-area edges are free of stale absolute/inset bounds"), SDL_GetWindowMouseRect(Native->Handle));
-                TestEqual(TEXT("Native fullscreen grab follows every mode transition"), IsGrabRequested(), Mode != EWindowMode::Windowed);
+                TestEqual(TEXT("Native fullscreen grab follows every mode transition"), IsGrabRequested(), Mode == EWindowMode::Fullscreen);
             }
         }
+        Native->Mode = EWindowMode::Fullscreen;
         Native->bForeground = false;
         Pointer.Update(true);
         TestFalse(TEXT("Focus loss ungrabs the native window"), IsGrabRequested());

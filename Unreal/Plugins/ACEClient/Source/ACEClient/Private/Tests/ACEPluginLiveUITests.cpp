@@ -3,6 +3,9 @@
 #include "Misc/ScopeExit.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEClientSubsystem.h"
+#include "ACEHoverTooltipWidget.h"
+#include "ACERuntimeOptions.h"
+#include "Misc/ConfigCacheIni.h"
 #include "ACEDatSubsystem.h"
 #include "Mods/ACEPluginStyle.h"
 #include "ACESession.h"
@@ -26,6 +29,8 @@
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Widgets/IToolTip.h"
+#include "Components/Border.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPluginLiveUITest,"ACE.Plugins.LiveUI",
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
@@ -42,9 +47,9 @@ bool FACEPluginLiveUITest::RunTest(const FString&)
     auto Snapshot=[&](int Kills,const TCHAR* Value=TEXT("Melee"),bool Extra=false)
     {
         const FString Json=FString::Printf(TEXT(R"({"ui":[{"id":"tasks","type":"section","text":"Kill tasks","children":[
-          {"id":"kills","text":"Killed %d / 50"},
+          {"id":"kills","text":"Killed %d / 50","tooltip":"Progress: %d / 50"},
           {"id":"mode","type":"select","text":"Mode","value":"%s","options":["Melee","Magic"]},
-          {"id":"filter","type":"input","text":"Filter","value":"Server value"}%s]}]})"),Kills,Value,
+          {"id":"filter","type":"input","text":"Filter","value":"Server value"}%s]}]})"),Kills,Kills,Value,
           Extra?TEXT(",{\"id\":\"extra\",\"text\":\"New quest\"}"):TEXT(""));
         TSharedPtr<FJsonObject> O;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json),O);
         if(TestTrue(TEXT("Live snapshot parsed"),O.IsValid())){P->PanelRows=O->GetArrayField(TEXT("ui"));++P->PanelRevision;}
@@ -71,9 +76,18 @@ bool FACEPluginLiveUITest::RunTest(const FString&)
     TestTrue(TEXT("Dropdown created"),Combo.IsValid());TestTrue(TEXT("Text input created"),Input.IsValid());
     TestTrue(TEXT("Task label created"),Label.IsValid());TestTrue(TEXT("Section created"),Section.IsValid());
     if(!Combo||!Input||!Label||!Section)return false;
+    const auto LiveTooltip=Label->GetToolTip();
+    if(!TestTrue(TEXT("Plugin API hover text has a retail tooltip"),LiveTooltip.IsValid()))return false;
+    LiveTooltip->OnOpening();const auto TooltipWidget=LiveTooltip->AsWidget();
+    auto TooltipLabel=StaticCastSharedPtr<STextBlock>(Find(TooltipWidget,TEXT("SACERetailTextBlock"),false));
+    if(!TestTrue(TEXT("Plugin API hover uses inventory bitmap text"),TooltipLabel.IsValid()))return false;
+    TestEqual(TEXT("Initial plugin tooltip text"),TooltipLabel->GetText().ToString(),FString(TEXT("Progress: 12 / 50")));
 
     Combo->SetIsOpen(true);TestTrue(TEXT("Dropdown starts open"),Combo->IsOpen());
     Snapshot(13,TEXT("Magic"));Frame();
+    LiveTooltip->AsWidget();
+    TestEqual(TEXT("Open plugin tooltip follows live snapshot updates"),TooltipLabel->GetText().ToString(),FString(TEXT("Progress: 13 / 50")));
+    TestTrue(TEXT("Updating plugin help retains its tooltip"),Label->GetToolTip()==LiveTooltip);
     TestTrue(TEXT("Value updates keep the same control and menu anchor"),Control(TEXT("mode"))==Mode);
     TestTrue(TEXT("Lua update does not dismiss the dropdown"),Combo->IsOpen());
     TestEqual(TEXT("Other rows update while the dropdown is open"),Label->GetText().ToString(),FString(TEXT("Killed 13 / 50")));
@@ -116,6 +130,30 @@ bool FACEPluginLiveUITest::RunTest(const FString&)
     auto Rows=P->PanelRows[0]->AsObject()->GetArrayField(TEXT("children"));Rows[0]->AsObject()->SetStringField(TEXT("type"),TEXT("button"));++P->PanelRevision;Frame();
     TestTrue(TEXT("Type change replaces the incompatible control"),Control(TEXT("kills"))!=Kills);
     TestTrue(TEXT("Type change preserves sibling controls"),Control(TEXT("mode"))==Mode&&Control(TEXT("filter"))==Filter);
+
+    // Check the real retained Lua button, including live text updates. These
+    // widgets used to stretch their text at the upper-left of the button.
+    auto CheckButtonCenter=[&](const TSharedRef<SButton>& Button,const FString& Context)
+    {
+        const auto& G=Button->GetCachedGeometry();const auto& C=Button->GetContent()->GetCachedGeometry();
+        const auto ChildCenter=G.AbsoluteToLocal(C.LocalToAbsolute(C.GetLocalSize()*.5));
+        TestTrue(Context+TEXT(" centers content on both axes"),ChildCenter.Equals(G.GetLocalSize()*.5,.1f));
+    };
+    auto SetPressed=[](const TSharedRef<SButton>& Button,bool Pressed)
+    {
+        if(!Pressed){Button->OnMouseCaptureLost(FCaptureLostEvent(0,0));return;}
+        const auto& G=Button->GetCachedGeometry();const auto At=G.LocalToAbsolute(G.GetLocalSize()*.5);
+        Button->OnMouseButtonDown(G,FPointerEvent(0,At,At,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
+    };
+    auto LuaButton=StaticCastSharedPtr<SButton>(Find(Control(TEXT("kills")).ToSharedRef(),TEXT("SACEPluginButton"),false));
+    if(TestTrue(TEXT("Lua actions use the shared plugin button"),LuaButton.IsValid()))
+    {
+        Frame();CheckButtonCenter(LuaButton.ToSharedRef(),TEXT("Lua action"));
+        Rows[0]->AsObject()->SetStringField(TEXT("text"),TEXT("Add selected\nWatch for matches"));++P->PanelRevision;Frame();Frame();Frame();
+        CheckButtonCenter(LuaButton.ToSharedRef(),TEXT("Multiline Lua action"));
+        SetPressed(LuaButton.ToSharedRef(),true);Frame();CheckButtonCenter(LuaButton.ToSharedRef(),TEXT("Pressed Lua action"));
+        SetPressed(LuaButton.ToSharedRef(),false);
+    }
 
     // Exercise the actual retained Lua/companion labels with retail bitmap fonts,
     // not only Slate's fallback font metrics. All rows contain identical text.
@@ -235,6 +273,164 @@ bool FACEPluginLiveUITest::RunTest(const FString&)
     TestTrue(TEXT("Widening restores multiword labels to one line"),FMath::IsNearlyEqual(float(Phrase->GetDesiredSize().Y),LineHeight,.02f));
     // Detach callbacks that reference fixture-local width before it goes away.
     Window->SetContent(Content);
+
+    // Exercise authored retail faces, fallback glyphs, compact controls and
+    // stretched buttons at actual Slate geometry, including the pressed state.
+    auto Buttons=SNew(SVerticalBox);TArray<TSharedRef<SACEPluginButton>> Actions;
+    const FString Captions[]={TEXT("Add selected"),TEXT("Buy missing supplies"),TEXT("Force Buff\nRefresh all"),
+        TEXT("Summ")+FString::Chr(TCHAR(FallbackCode))+TEXT("oning"),TEXT("<"),TEXT("X"),TEXT("+"),TEXT("-")};
+    for(int32 I=0;I<UE_ARRAY_COUNT(Captions);++I)
+    {
+        const float Inset=I>=6?0:I<4?FACEPluginStyle::ButtonPadding:I==4?FACEPluginStyle::CompactButtonPadding:FACEPluginStyle::ChromeButtonPadding;
+        auto Button=SNew(SACEPluginButton).ButtonStyle(I==4||I==5?&RetailStyle->DockButton:&RetailStyle->Button).ContentPadding(FMargin(Inset))
+            [SNew(SACEPluginText).Text(FText::FromString(Captions[I])).Font(FACEPluginStyle::NativeFont("Regular",I==5?10:15)).AutoWrapText(true)];
+        Actions.Add(Button);
+        Buttons->AddSlot().AutoHeight().Padding(8).HAlign(I>=4?HAlign_Center:HAlign_Fill)
+            [SNew(SBox).MinDesiredHeight(I>=4?20:50)[Button]];
+    }
+    Window->SetContent(Buttons);
+    for(int32 State=0;State<4;++State)
+    {
+        for(auto Button:Actions)
+        {
+            SetPressed(Button,State==2);Button->SetEnabled(State!=3);
+            if(State==1)Button->OnMouseEnter(Button->GetCachedGeometry(),FPointerEvent());
+            else Button->OnMouseLeave(FPointerEvent());
+        }
+        Frame();Frame();Frame();
+        for(auto Button:Actions)
+        {
+            CheckButtonCenter(Button,FString::Printf(TEXT("Button state %d"),State));
+            const auto& G=Button->GetCachedGeometry();const auto& C=Button->GetContent()->GetCachedGeometry();
+            const auto TopLeft=G.AbsoluteToLocal(C.GetAbsolutePosition());
+            TestTrue(TEXT("Captions fit inside the button border"),TopLeft.X>=.9&&TopLeft.Y>=.9);
+            const auto Insets=Button->GetDesiredSize()-Button->GetContent()->GetDesiredSize();
+            TestTrue(TEXT("Natural button layout reserves padding on both axes"),Insets.X>=2&&Insets.Y>=2);
+            if(Button==Actions[6]||Button==Actions[7])
+            {
+                TestTrue(TEXT("Single-symbol retail buttons have a usable minimum size"),G.GetLocalSize().X>=28&&G.GetLocalSize().Y>=28);
+                TestTrue(TEXT("Zero requested padding cannot put symbols against the retail bevel"),TopLeft.X>=5.9&&TopLeft.Y>=5.9);
+            }
+        }
+        if(State==0)
+        {
+            TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);
+            Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);TArray64<uint8> Png;
+            FImageUtils::PNGCompressImageArray(int32(Size.X),int32(Size.Y),Pixels,Png);
+            FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("PluginButtons.png")));
+        }
+    }
+    Window->SetContent(Content);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPluginTooltipTest,"ACE.Plugins.Tooltips",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FACEPluginTooltipTest::RunTest(const FString&)
+{
+    if(!FApp::CanEverRender()||!FSlateApplication::IsInitialized())return true;
+    auto* GI=NewObject<UGameInstance>();GI->Init();ON_SCOPE_EXIT{GI->Shutdown();};
+    if(!TestTrue(TEXT("Load inventory tooltip artwork"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+    const auto Style=FACEPluginStyle::Use(GI->GetSubsystem<UACEPluginSubsystem>());
+    auto* Inventory=NewObject<UBorder>(GI);
+    FText HoverText;
+    const auto Button=SNew(SACEPluginButton).ButtonStyle(&Style->Button)
+        .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([&HoverText]{return HoverText;})));
+    const auto PluginTip=Button->GetToolTip();
+    TestTrue(TEXT("An empty bound plugin tooltip stays hidden"),PluginTip->IsEmpty());
+    auto Render=[&](TSharedRef<SWidget> Widget,const TCHAR* Capture)
+    {
+        Widget->SlatePrepass();
+        const FIntPoint Size(FMath::CeilToInt(Widget->GetDesiredSize().X),FMath::CeilToInt(Widget->GetDesiredSize().Y));
+        FWidgetRenderer Renderer(false,true);
+        auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(Size),TF_Nearest,false);
+        ++GFrameCounter;Renderer.DrawWidget(Target,Widget,FVector2D(Size),.016f);FlushRenderingCommands();
+        TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);
+        Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
+        if(Capture)
+        {
+            TArray<FColor> Display=Pixels;for(auto& Pixel:Display)Pixel=Pixel.ReinterpretAsLinear().ToFColor(true);
+            TArray64<uint8> Png;FImageUtils::PNGCompressImageArray(Size.X,Size.Y,Display,Png);
+            FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/Capture));
+        }
+        Target->ReleaseResource();return Pixels;
+    };
+    TSharedPtr<SWidget> OriginalContent;
+    for(const auto* Text:{TEXT("Steel Salvage (100)"),TEXT("Track selected items across your inventory.\nClick an icon or name to toggle all item names. Resize the window to move the counts.")})
+    {
+        HoverText=FText::FromString(Text);
+        TestFalse(TEXT("Bound hover text becomes available without rebuilding the button"),PluginTip->IsEmpty());
+        if(!OriginalContent)PluginTip->OnOpening();
+        const auto PluginWidget=PluginTip->AsWidget();
+        const auto Content=PluginTip->GetContentWidget();
+        if(OriginalContent)TestTrue(TEXT("Changing hover text retains the same retail widget"),Content==OriginalContent);
+        else OriginalContent=Content;
+        UACEHoverTooltipWidget::SetWidgetTooltip(Inventory,HoverText,UACEHoverTooltipWidget::ObjectTemplate);
+        auto* InventoryTip=CastChecked<UACEHoverTooltipWidget>(Inventory->GetToolTip());
+        InventoryTip->SetResources(GI->GetSubsystem<UACEClientSubsystem>()->GetUIResourceResolver());
+        const auto InventoryWidget=InventoryTip->TakeWidget();
+        PluginWidget->SlatePrepass();InventoryWidget->SlatePrepass();
+        TestTrue(TEXT("Plugin tooltip uses inventory sizing and padding"),PluginWidget->GetDesiredSize().Equals(InventoryWidget->GetDesiredSize(),.01f));
+        TestTrue(TEXT("Long plugin help wraps at inventory tooltip width"),PluginWidget->GetDesiredSize().X<=260);
+        const auto PluginPixels=Render(PluginWidget,TEXT("PluginTooltip.png"));
+        const auto InventoryPixels=Render(InventoryWidget,TEXT("InventoryTooltip-reference.png"));
+        TestTrue(TEXT("Plugin hover pixels exactly match inventory font, background and frame"),PluginPixels==InventoryPixels);
+    }
+    HoverText=FText::GetEmpty();TestTrue(TEXT("Clearing dynamic hover text hides the tooltip"),PluginTip->IsEmpty());
+    PluginTip->OnClosed();
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACETooltipCursorClearanceTest,"ACE.RetailParity.TooltipCursorClearance",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACETooltipCursorClearanceTest::RunTest(const FString&)
+{
+    const FString OriginalIni=GGameUserSettingsIni;
+    GGameUserSettingsIni=FPaths::ProjectSavedDir()/TEXT("Automation/TooltipCursorClearance.ini");
+    FConfigFile EmptyConfig;GConfig->SetFile(GGameUserSettingsIni,&EmptyConfig);
+    // Offscreen clients may not have received a pointer event. Initialize the
+    // virtual cursor before evaluating Slate's pixel-space avoidance bounds.
+    const FVector2D OriginalCursor=FSlateApplication::Get().GetCursorPos();
+    FSlateApplication::Get().SetCursorPos(FVector2D(400,300));
+    ON_SCOPE_EXIT{GGameUserSettingsIni=OriginalIni;FSlateApplication::Get().SetCursorPos(OriginalCursor);};
+    // Exercise both UMG construction orders. A tooltip assigned before the
+    // inventory icon is built must still install its Slate avoidance region.
+    for(bool BuildFirst:{false,true})
+    {
+        auto* Icon=NewObject<UBorder>();
+        if(BuildFirst)Icon->TakeWidget();
+        UACEHoverTooltipWidget::SetWidgetTooltip(Icon,FText::FromString(TEXT("Ancient Falatacot Trinkets")),UACEHoverTooltipWidget::ObjectTemplate);
+        const auto Widget=Icon->TakeWidget();
+        TestTrue(TEXT("Inventory tooltips avoid their owner and cursor"),Widget->HasToolTipForceField());
+        const auto Tip=Widget->GetToolTip();
+        TestTrue(TEXT("Avoidance does not make the tooltip interactive"),Tip&&!Tip->IsInteractive());
+        for(float Scale:{.5f,1.f,1.25f,2.f,3.f})
+        {
+            ACERuntimeOptions::Set(TEXT("CursorScale"),Scale);
+            TestEqual(TEXT("Cursor scale fixture is active"),ACERuntimeOptions::Get(TEXT("CursorScale")),Scale);
+            const auto Bounds=Widget->GetToolTipForceFieldExpansion();
+            if(!TestTrue(TEXT("UMG cursor avoidance remains bound"),Bounds.IsSet()))return false;
+            const FVector2D Pointer=FSlateApplication::Get().GetCursorPos();
+            TestTrue(FString::Printf(TEXT("Avoidance covers the scaled pointer body, not only its tip (scale %.2f, pointer %.2f,%.2f, bounds %.2f,%.2f,%.2f,%.2f)"),
+                Scale,Pointer.X,Pointer.Y,Bounds->Left,Bounds->Top,Bounds->Right,Bounds->Bottom),
+                Bounds->Left<=Pointer.X&&Bounds->Top<=Pointer.Y&&Bounds->Right>=Pointer.X+15*Scale&&Bounds->Bottom>=Pointer.Y+28*Scale);
+        }
+    }
+    for(float Scale:{.5f,1.f,1.25f,2.f,3.f})
+    {
+        ACERuntimeOptions::Set(TEXT("CursorScale"),Scale);
+        for(FVector2D Screen:{FVector2D(1024,768),FVector2D(1920,1080),FVector2D(2560,1440)})
+        for(float Dpi:{1.f,1.5f,2.f})
+        for(FVector2D Point:{FVector2D(2,2),FVector2D(Screen.X-2,2),FVector2D(2,Screen.Y-2),Screen-FVector2D(2,2),Screen*.5})
+        {
+            const FVector2D Size=FVector2D(240,24)*Dpi;
+            const auto Pos=UACEHoverTooltipWidget::CalculateTooltipPosition(Point,Size,Screen,Dpi);
+            const FSlateRect TipRect(Pos,Pos+Size);
+            TestFalse(TEXT("Screen-edge clamping never puts the name under the scaled cursor"),
+                FSlateRect::DoRectanglesIntersect(TipRect,UACEHoverTooltipWidget::GetCursorExclusionRect(Point)));
+            TestTrue(TEXT("Complete tooltip stays on screen"),Pos.X>=0&&Pos.Y>=0&&Pos.X+Size.X<=Screen.X&&Pos.Y+Size.Y<=Screen.Y);
+        }
+    }
     return true;
 }
 

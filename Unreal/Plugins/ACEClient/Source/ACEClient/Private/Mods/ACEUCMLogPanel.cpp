@@ -30,13 +30,13 @@ namespace
                 .IsChecked_Lambda([this]{return Follow?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                 .OnCheckStateChanged_Lambda([this](ECheckBoxState V){Follow=V==ECheckBoxState::Checked;if(Follow){FollowLayoutPasses=3;List->ScrollToBottom();}})
                 [SNew(SACEPluginText).Text(FText::FromString(TEXT("Follow latest")))]];
-            Controls->AddSlot().FillWidth(1).HAlign(HAlign_Right)[SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false)
+            Controls->AddSlot().FillWidth(1).HAlign(HAlign_Right)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false)
                 .Text(FText::FromString(TEXT("Copy log"))).OnClicked_Lambda([this]
                 {
                     FString Text;for(const auto& E:Rows){Text+=E->ToText();Text+=TEXT("\r\n\r\n");}
                     FPlatformApplicationMisc::ClipboardCopy(*Text);return FReply::Handled();
                 })];
-            Controls->AddSlot().AutoWidth().Padding(6,0,0,0)[SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false)
+            Controls->AddSlot().AutoWidth().Padding(6,0,0,0)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false)
                 .Text(FText::FromString(TEXT("Clear"))).OnClicked_Lambda([this]{if(Host.IsValid())Host->ClearUCMLog();Refresh();return FReply::Handled();})];
             ChildSlot[SNew(SBorder).Padding(12).BorderImage(&FACEPluginStyle::Current()->Background)
                 [SNew(SVerticalBox)
@@ -52,11 +52,11 @@ namespace
                     .OnGenerateRow_Lambda([](TSharedPtr<FACEUCMLogEntry> E,const TSharedRef<STableViewBase>& Owner)
                     {
                         return SNew(STableRow<TSharedPtr<FACEUCMLogEntry>>,Owner).Padding(FMargin(3,7))
-                            [SNew(SACEPluginText).AutoWrapText(true).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
+                            [SNew(SACEPluginText).AutoWrapText(true).Font(FACEPluginStyle::NativeFont("Regular",12))
                             .ColorAndOpacity(Color(E->Level)).Text_Lambda([E]{return FText::FromString(E->ToText());})];
                     })]
                 +SVerticalBox::Slot().AutoHeight().Padding(0,8,0,0)[SNew(SACEPluginText).AutoWrapText(true)
-                    .Font(FCoreStyle::GetDefaultFontStyle("Regular",11)).ColorAndOpacity(FLinearColor(.55f,.65f,.72f))
+                    .Font(FACEPluginStyle::NativeFont("Regular",11)).ColorAndOpacity(FLinearColor(.55f,.65f,.72f))
                     .Text_Lambda([this]
                     {
                         if(!Host.IsValid())return FText::GetEmpty();

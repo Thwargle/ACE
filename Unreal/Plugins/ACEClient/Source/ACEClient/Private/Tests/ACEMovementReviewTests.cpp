@@ -1,5 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "ACEBodySweep.h"
 #include "ACEDatSubsystem.h"
 #include "ACEWorldEntityActor.h"
@@ -18,10 +20,22 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/BoxComponent.h"
 #include "Camera/PlayerCameraManager.h"
+#include "GameFramework/GameModeBase.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Protocol/ACEBinaryReader.h"
 #include "Protocol/ACEBinaryWriter.h"
+
+
+namespace
+{
+FString ACEMovementReviewTestsDatDirectory()
+{
+    FString Directory=TEXT("C:/Turbine/Asheron's Call");
+    FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),Directory);
+    return Directory;
+}
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEMovementReviewTest,"ACE.RetailParity.MovementReview",
  EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
@@ -34,7 +48,7 @@ bool FACEMovementReviewTest::RunTest(const FString&)
  auto* GI=NewObject<UGameInstance>(GEngine);World->SetGameInstance(GI);
  Context.OwningGameInstance=GI;Context.SetCurrentWorld(World);GI->Init();
  auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
- if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+ if (!Dat->LoadDatDirectory(ACEMovementReviewTestsDatDirectory())) return false;
  // Compare actual creature components with retail SPHEREPATH sphere pairs.
  // Setup.Radius deliberately differs from the physical radius on these models.
  // Low carenzi, mid-body gromnies, both wasp spheres, and the reported
@@ -199,7 +213,9 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   Walker->ApplyACEPosition(P);
   TestTrue(TEXT("Incoming walking heading does not snap the displayed actor"),Walker->GetActorQuat().Equals(Before,.001));
   Walker->Tick(.01f);
-  TestTrue(TEXT("Heading starts blending on the following frame"),!Walker->GetActorQuat().Equals(Before,.001) && !Walker->GetActorQuat().Equals(P.ToUnrealQuat(),.001));
+  // InterpolationManager replaces the full offset frame, without a separate
+  // exponential rotation filter on the displayed creature.
+  TestTrue(TEXT("The next physics frame uses the authoritative correction heading"),Walker->GetActorQuat().Equals(P.ToUnrealQuat(),.001));
   for(int I=0;I<1000;++I)Walker->Tick(.01f);
   TestTrue(TEXT("A missing stop packet cannot extrapolate forever"),FVector::Dist(Walker->RemotePredictLocation,Walker->RemoteAnchorLocation)<=801);
   P.Location.X+=100;Walker->ApplyACEPosition(P);
@@ -335,9 +351,12 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   FloorActor->SetActorLocation(Origin);
   for(bool Grounded:{false,true})
   {
+   // DAT human lower sphere radius=.48, center.z=.475, plane z=-.4*y.
+   const double SlopeContact=1.+100.*(.48*FMath::Sqrt(1.+.4*.4)-.475);
    FACEWorldObject Spawn;Spawn.Guid=12344;Spawn.SetupId=0x02000001;Spawn.ItemType=ACEItemType::Creature;Spawn.bIsPlayer=true;
    Spawn.PhysicsState=ACEPhysicsState::Gravity;
    Spawn.bHasPosition=true;Spawn.Position=P;Spawn.Position.bIsGrounded=Grounded;
+   if(!Grounded)Spawn.Position.Location.Z+=SlopeContact/100.;
    Spawn.bHasVelocity=true;Spawn.Velocity=FVector(0,4,Grounded?0:3);
    auto* Walker=World->SpawnActor<AACEWorldEntityActor>();Walker->InitializeFromObject(Spawn,100,false);
    TestEqual(TEXT("Grounded position wins over the descriptor velocity exactly once"),Walker->bHavePhysicsVelocity,!Grounded);
@@ -346,7 +365,7 @@ bool FACEMovementReviewTest::RunTest(const FString&)
    for(int I=0;I<90;++I){Walker->Tick(1.f/90);Highest=FMath::Max(Highest,Walker->GetActorLocation().Z-Origin.Z);}
    const FVector L=Walker->GetActorLocation()-Origin;
    TestTrue(TEXT("A grounded velocity-bearing spawn follows the slope; a real jump stays airborne"),
-    Grounded ? FMath::Abs(L.Z+.4*L.Y-1)<1.5 : Highest>25);
+    Grounded ? FMath::Abs(L.Z+.4*L.Y-SlopeContact)<1.5 : Highest>25);
    Walker->Destroy();
   }
   // ObjectCreate has no PositionPack contact bit. A horizontal vector is also
@@ -358,6 +377,7 @@ bool FACEMovementReviewTest::RunTest(const FString&)
    Spawn.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck|ACEObjectDescFlag::Attackable;
    Spawn.PhysicsState=Gravity?ACEPhysicsState::Gravity:0;
    Spawn.bHasPosition=true; Spawn.Position=P;
+   if(!Gravity)Spawn.Position.Location.Z+=.1; // Authored hover height, clear of the slope.
    const FVector Direction=FACEPosition::UnrealDirFromAceHeadingDegrees(Heading);
    Spawn.Position.SetAceFacingFromUnrealDir2D(Direction);
    Spawn.bHasVelocity=true; Spawn.Velocity=Spawn.Position.GetAceForwardInAcSpace()*4;
@@ -369,7 +389,8 @@ bool FACEMovementReviewTest::RunTest(const FString&)
     if(I%45==0) Walker->ApplyPhysicsVelocity(Spawn.Velocity);
     Walker->Tick(1.f/90);
     const FVector L=Walker->GetActorLocation()-Origin;
-    MaxError=FMath::Max(MaxError,Gravity?FMath::Abs(L.Z+.4*L.Y-1):FMath::Abs(L.Z));
+    const double SlopeContact=1.+100.*(.48*FMath::Sqrt(1.+.4*.4)-.475);
+    MaxError=FMath::Max(MaxError,Gravity?FMath::Abs(L.Z+.4*L.Y-SlopeContact):FMath::Abs(L.Z-10));
     MaxLateral=FMath::Max(MaxLateral,FMath::Abs(L.X*Direction.Y-L.Y*Direction.X));
    }
    TestTrue(FString::Printf(TEXT("Velocity packets honor gravity: slope contact or authored elevation, gravity=%d error=%.2f"),Gravity,MaxError),MaxError<2);
@@ -692,13 +713,17 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   // Change only the live player pose; the world-object network echo is stale.
   Session.PlayerPosition.Location.Y+=1.f;
   const FVector NewPlayerFeet=Session.PlayerPosition.ToUnrealLocation(100);
+  // A completed approach is not a permanent follow command. The server sends
+  // another MoveTo when the target leaves melee reach.
+  RatActor->ApplyMotionState(Approach);
   for(int32 I=0;I<240;++I)RatActor->Tick(1.f/60);
   TestTrue(TEXT("Rat follows the live local player pose without walking inside it"),FMath::Abs(FVector::Dist2D(NewPlayerFeet,RatActor->GetActorLocation())-ExpectedSeparation)<.2f);
   // Starting inside approach distance must still turn, without translating.
   const FVector RatFeet=RatActor->GetActorLocation();
   Session.PlayerPosition.SetLocationFromUnreal(RatFeet+FVector(30,0,0),100);
-  RatActor->RemoteMotion=Approach;
-  for(int32 I=0;I<60;++I)RatActor->Tick(1.f/60);
+  FACEObjectMotionState FaceClose=Approach;FaceClose.MoveToFlags|=0x40; // UseFinalHeading
+  RatActor->ApplyMotionState(FaceClose);
+  for(int32 I=0;I<90;++I)RatActor->Tick(1.f/60);
   TestTrue(TEXT("Close MoveTo faces the attacker without stepping into them"),RatActor->GetActorQuat().RotateVector(FVector::YAxisVector).X>.99 && FVector::Dist2D(RatFeet,RatActor->GetActorLocation())<.1);
   // A real interpreted swing carries StickToObject after the command list.
   Session.WorldObjects.Add(Rat.Guid,Rat);
@@ -775,6 +800,31 @@ bool FACEMovementReviewTest::RunTest(const FString&)
  TestEqual(TEXT("Raised targets include retail vertical separation"),Range.ApproachDistance(FVector(0,0,3),.5,2,.5,1),FMath::Sqrt(5.f));
  Range.MoveToFlags=0;
  TestEqual(TEXT("MoveTo without UseSpheres still measures point distance"),Range.ApproachDistance(FVector(0,0,3),.5,2,.5,1),3.f);
+ // Retail TargetManager supplies another object's simulated physics frame,
+ // not the last F748 retained by the session/radar.
+ World->SetGameMode(FURL(nullptr,TEXT("/Game/Test?game=/Script/Engine.GameModeBase"),TRAVEL_Absolute));
+ if(auto* Mode=World->GetAuthGameMode())
+ {
+  auto* Entities=NewObject<UACEWorldPresenterComponent>(Mode);Mode->AddInstanceComponent(Entities);
+  FACEWorldObject Other=Self;Other.Guid=101;Other.bIsPlayer=true;Other.ItemType=ACEItemType::Creature;
+  Session.WorldObjects.Add(Other.Guid,Other);
+  auto* Target=World->SpawnActor<AACEWorldEntityActor>();Target->InitializeFromObject(Other,100,false);
+  Target->SetActorLocation(Other.Position.ToUnrealLocation(100)+FVector(500,300,0));
+  Entities->Spawned.Add(Other.Guid,Target);
+  auto* Observer=World->SpawnActor<AACEWorldEntityActor>();
+  FVector Facing;float Radius=0,Height=0;
+  TestTrue(TEXT("Remote pursuit uses the rendered physics frame between packets"),
+   Observer->ResolveMovementTarget(Other.Guid,Facing,Radius,Height) && Facing.Equals(Target->GetActorLocation()));
+  Target->SetActorLocation(Target->GetActorLocation()+FVector(100,-200,0));
+  TestTrue(TEXT("Sticky target frame advances without another position packet"),
+   Observer->ResolveMovementTarget(Other.Guid,Facing,Radius,Height) && Facing.Equals(Target->GetActorLocation()));
+  TestTrue(TEXT("Current target frame still uses authored body dimensions"),Radius>0 && Height>0);
+  Entities->Spawned.Remove(Other.Guid);
+  TestTrue(TEXT("An unrendered target falls back to its valid network position"),
+   Observer->ResolveFacingTarget(Other.Guid,Facing) && Facing.Equals(Other.Position.ToUnrealLocation(100)));
+  Session.WorldObjects.Remove(Other.Guid);Target->Destroy();Observer->Destroy();Entities->DestroyComponent();
+ }
+ else AddError(TEXT("Target-frame fixture requires a game mode"));
  Client->Session=SavedSession;
  // A hanging sign's initial placement honors Stuck, and so must the following
  // correction ticks. Loose items with Gravity can also rest on tables or

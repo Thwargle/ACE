@@ -390,6 +390,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "ACE|Inventory")
 	bool IsUseBusy() const;
 
+	/** The world view is in a portal transition; interface browsing remains available. */
+	bool IsInPortalSpace() const;
+
 	/** Drag & drop: equip an item onto the paper doll (EquipMask location). */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Inventory")
 	void SendGetAndWieldItem(int32 ItemGuid, int64 WieldLocation);

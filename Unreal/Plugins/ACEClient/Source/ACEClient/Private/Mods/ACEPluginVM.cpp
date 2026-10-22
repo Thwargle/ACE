@@ -1,4 +1,5 @@
 #include "ACEPluginVM.h"
+#include "ACEProfiling.h"
 #include "ACEVTRegex.h"
 #include "ACEVTProfile.h"
 #include "Interfaces/IPluginManager.h"
@@ -343,6 +344,7 @@ bool FACEPluginVM::Load(const FString& Source, FString& Error, const FString& Po
 bool FACEPluginVM::Step(const TSharedPtr<FJsonObject>& Snapshot, const TSharedPtr<FJsonObject>& Profile,
     TSharedPtr<FJsonObject>& Intent, FString& Error)
 {
+    ACE_PROFILE_SCOPE(PluginLua);
     TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginLuaStep);
     Intent.Reset();RegexWork=0;SpellIndexWork=0;Instructions=0;
     lua_settop(State, 0);

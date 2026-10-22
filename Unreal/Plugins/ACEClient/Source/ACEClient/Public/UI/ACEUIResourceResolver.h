@@ -24,6 +24,8 @@ public:
 	UACEDatSubsystem* GetDatSubsystem() const { return Dat.Get(); }
 
 	UTexture2D* ResolveTexture(uint32 ResourceId, uint32 AlphaResourceId = 0);
+	/** UIRegion::PointIsOverRegion: sample the separate DAT interaction mask in local pixels. */
+	bool IsPointInHitMask(uint32 ResourceId, FIntPoint Point);
 	/** Item / spell icons — Clamp, no mips (Wrap+mip chrome fringes white on cutouts). */
 	UTexture2D* ResolveIconTexture(uint32 ResourceId);
 	uint32 ResolveItemBackgroundId(uint32 ItemType);
@@ -61,6 +63,7 @@ public:
 		uint32 HotY = 0;
 	};
 	bool TryGetCursor(uint32 CursorImageId, FCursorDesc& Out) const;
+	uint32 ResolveCursorId(uint32 CursorEnum);
 
 private:
 	bool EnsureEnumStringsLoaded(uint32 Did);
@@ -84,6 +87,12 @@ private:
 	TMap<uint32, TMap<uint32, uint32>> DidMaps;
 	TMap<uint32, TMap<uint32, FString>> EnumStrings;
 	TMap<uint32, uint32> BaseEnumMaps;
+	struct FHitMask
+	{
+		FIntPoint Size = FIntPoint::ZeroValue;
+		TBitArray<> HitPixels;
+	};
+	TMap<uint32, FHitMask> HitMasks;
 	TArray<FColor> PaperDollClickPixels;
 	FIntPoint PaperDollClickSize = FIntPoint::ZeroValue;
 	uint32 ResolveMappedDid(uint32 MapperId, uint32 Key, uint32 FallbackKey);
