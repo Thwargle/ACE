@@ -15,6 +15,8 @@
 #include "RenderTimer.h"
 #include "DynamicRHI.h"
 #include "RHI.h"
+#include "HAL/IConsoleManager.h"
+#include "Scalability.h"
 
 TArray<FString> ACEFrameDiagnostics::Describe(UWorld* World,double FrameMs)
 {
@@ -52,5 +54,17 @@ TArray<FString> ACEFrameDiagnostics::Describe(UWorld* World,double FrameMs)
  if(Client)if(auto Session=Client->GetSession())Lines.Add(Session->DescribeNetworkPump());
  const FString Costs=ACEProfiling::DescribeLastFrame();
  if(!Costs.IsEmpty())Lines.Add(Costs);
+ // Report effective settings, not just saved preferences: PIE/editor and
+ // command-line overrides can differ. Read only when a report is requested.
+ const auto Quality=Scalability::GetQualityLevels();
+ const auto CVar=[](const TCHAR* Name,float Fallback)
+ {
+  const auto* Value=IConsoleManager::Get().FindConsoleVariable(Name);
+  return Value?Value->GetFloat():Fallback;
+ };
+ Lines.Add(FString::Printf(TEXT("render settings: %s screen=%.0f%% texture=%d shadow=%d effects=%d lightBudget=%.0f fpsLimit=%.0f vsync=%.0f; RHI texture allocations=%.1f MiB"),
+  World->IsPlayInEditor()?TEXT("editor play"):TEXT("game"),CVar(TEXT("r.ScreenPercentage"),100),Quality.TextureQuality,Quality.ShadowQuality,Quality.EffectsQuality,
+  CVar(TEXT("ace.FXLightBudget"),0),CVar(TEXT("t.MaxFPS"),0),CVar(TEXT("r.VSync"),0),
+  (GRHIGlobals.StreamingTextureMemorySizeInKB+GRHIGlobals.NonStreamingTextureMemorySizeInKB)/1024.));
  return Lines;
 }

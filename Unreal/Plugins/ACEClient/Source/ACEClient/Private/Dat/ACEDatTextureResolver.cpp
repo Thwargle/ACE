@@ -11,6 +11,7 @@
 #include "Modules/ModuleManager.h"
 #include "HAL/PlatformTime.h"
 #include "HAL/IConsoleManager.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 namespace
 {
@@ -151,6 +152,7 @@ UTexture2D* FACEDatTextureResolver::CreateTransientRgbaWithMips(
 	TextureAddress AddressX, TextureAddress AddressY, bool bPremultiplyAlpha,
 	bool bDilateRgbIntoTransparent, int32 MaxMipLevels, TextureFilter Filter, bool bApplyWorldSizeLimit)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_CreateWorldTexture);
 	if (Width <= 0 || Height <= 0 || Pixels.Num() < Width * Height)
 	{
 		return nullptr;

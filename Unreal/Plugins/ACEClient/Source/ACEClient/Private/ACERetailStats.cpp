@@ -93,11 +93,12 @@ void UACEDatSubsystem::RecomputePlayerStats(FACEPlayerVitals& V, const TArray<FA
 		Skill.Base = Innate + Formula(false);
 		float Mul, Add; Modifiers(0x10, Skill.SkillId, Mul, Add);
 		Skill.Current = FMath::Max(0, FMath::RoundToInt((Innate + Formula(true)) * Vitae * Mul + Add));
-		// Retail deliberately adds Jack of All Trades and LumAugSkilledSpec only
-		// after EnchantSkill in its !raw branch. gmSkillUI displays these as (+N),
-		// even without spells; moving them to Base would break retail parity.
-		if (V.StatQualityInts.FindRef(0x146) > 0) { Skill.Current += 5; }
-		if (Skill.AdvancementClass == 3) { Skill.Current += 2 * FMath::Max(0, V.StatQualityInts.FindRef(0x158)); }
+		// Keep retail's post-enchantment ordering and raw equipment requirement
+		// value. The interface includes these permanent gains in its unbuffed
+		// baseline, so Jack/spec luminance do not masquerade as active spells.
+		Skill.UnscaledAugmentationBonus = V.StatQualityInts.FindRef(0x146) > 0 ? 5 : 0;
+		if (Skill.AdvancementClass == 3) { Skill.UnscaledAugmentationBonus += 2 * FMath::Max(0, V.StatQualityInts.FindRef(0x158)); }
+		Skill.Current += Skill.UnscaledAugmentationBonus;
 		if (Skill.SkillId == 22) { V.JumpSkillCurrent = Skill.Current; }
 		if (Skill.SkillId == 24) { V.RunSkillCurrent = Skill.Current; }
 	}

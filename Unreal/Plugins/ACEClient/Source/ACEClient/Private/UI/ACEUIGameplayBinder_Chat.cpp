@@ -1102,6 +1102,20 @@ bool UACEUIGameplayBinder::TryHandleChatTargetPopupClick(FVector2D Absolute)
 	return false;
 }
 
+bool UACEUIGameplayBinder::DispatchActionDeckCommand(const FString& Command)
+{
+    if(!Client||Client->GetSessionState()!=EACESessionState::InWorld)return false;
+    FString Message=Command.TrimStartAndEnd();
+    if(!Message.StartsWith(TEXT("/"))&&!Message.StartsWith(TEXT("@")))return false;
+    Message[0]=TEXT('@');
+    // Route through the same aliases, channel selection and server-command path
+    // as typed chat, but leave the user's unfinished message and focus intact.
+    const int32 PreviousSource=ChatSourceWindow;ChatSourceWindow=0;
+    const bool Result=TryDispatchChatCommand(Message);
+    ChatSourceWindow=PreviousSource;
+    return Result;
+}
+
 bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEditableTextBox* Entry, bool* bClearEntry)
 {
 	if (!Client)

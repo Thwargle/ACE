@@ -54,11 +54,17 @@ bool FACERetailStatsTest::RunTest(const FString& Parameters)
         Unbuffed.StatQualityInts.Add(326,1); // Retail adds Jack of All Trades to current, not raw.
         Dat->RecomputePlayerStats(Unbuffed,{});
         for(const auto& S:Unbuffed.Skills)
-            TestEqual(TEXT("Jack of All Trades legitimately shows +5 with an empty spell list"),S.Current-S.Base,5);
+        {
+            TestEqual(TEXT("Jack of All Trades adds five after retail enchantment math"),S.Current-S.Base,5);
+            TestEqual(TEXT("Jack of All Trades belongs to the unbuffed display baseline"),S.GetDisplayBase(),S.Current);
+            TestEqual(TEXT("Jack of All Trades alone has no display modifier"),S.GetDisplayModifier(),0);
+        }
         Unbuffed.Skills[0].AdvancementClass=3;Unbuffed.StatQualityInts.Add(344,3);
         Dat->RecomputePlayerStats(Unbuffed,{});
         TestEqual(TEXT("Specialized luminance bonus also affects current without an enchantment"),Unbuffed.Skills[0].Current-Unbuffed.Skills[0].Base,11);
         TestEqual(TEXT("Specialization bonus does not affect trained skills"),Unbuffed.Skills[1].Current-Unbuffed.Skills[1].Base,5);
+        for(const auto& S:Unbuffed.Skills)
+            TestEqual(TEXT("Combined permanent gains have no display modifier"),S.GetDisplayModifier(),0);
     }
 
     FACEBinaryWriter Skill;
@@ -252,21 +258,28 @@ bool FACERetailAugmentationStatsTest::RunTest(const FString& Parameters)
         Session.NotifyVitalsChanged();
         const auto Before = V.Skills;
         // Apply each skill family separately: no leakage to other skills.
-        for (int32 Property : {300, 301, 302, 365})
+        for (int32 Property : {300, 301, 302, 365, 326, 344, 390})
         {
-            Quality(Property, Property == 365 ? 3 : 1);
+            Quality(Property, Property == 365 || Property == 344 ? 3 : 1);
             for (int32 Index = 0; Index < V.Skills.Num(); ++Index)
             {
                 const auto& Skill = V.Skills[Index];
-                const int32 Gain = Property == 365 ? 3 :
+                const int32 Gain = Property == 365 ? 3 : Property == 326 ? 5 :
+                    Property == 344 ? (Class == 3 ? 6 : 0) : Property == 390 ? (Class >= 2 ? 1 : 0) :
                     ((Property == 300 && Melee.Contains(Skill.SkillId)) ||
                      (Property == 301 && Skill.SkillId == 47) ||
                      (Property == 302 && Magic.Contains(Skill.SkillId))) ? 10 : 0;
+                const bool PostEnchantment = Property == 326 || Property == 344;
                 const FString Context = FString::Printf(TEXT("Class %d skill %d augmentation %d"), Class, Skill.SkillId, Property);
-                TestEqual(*Context, Skill.Base, Before[Index].Base + Gain);
-                TestEqual(*(Context + TEXT(" is neutral without spells")), Skill.Current, Skill.Base);
+                TestEqual(*(Context + TEXT(" raw requirement")), Skill.Base, Before[Index].Base + (PostEnchantment ? 0 : Gain));
+                TestEqual(*(Context + TEXT(" total")), Skill.Current, Before[Index].Base + Gain);
+                TestEqual(*(Context + TEXT(" display baseline")), Skill.GetDisplayBase(), Before[Index].Base + Gain);
+                TestEqual(*(Context + TEXT(" is neutral without spells")), Skill.GetDisplayModifier(), 0);
             }
             Quality(Property, 0);
+            for (int32 Index = 0; Index < V.Skills.Num(); ++Index)
+                TestEqual(TEXT("Removing an augmentation also resets its display baseline"),
+                    V.Skills[Index].GetDisplayBase(), Before[Index].Base);
         }
     }
 
@@ -290,11 +303,30 @@ bool FACERetailAugmentationStatsTest::RunTest(const FString& Parameters)
     Quality(326, 1);
     Quality(344, 3);
     TestEqual(TEXT("Retail Jack/spec luminance do not overwrite raw skill"), V.Skills[0].Base, 166);
-    TestEqual(TEXT("Retail shows +11 for Jack and three spec luminance ranks without spells"), V.Skills[0].Current, 177);
+    TestEqual(TEXT("Jack and three spec luminance ranks increase the total by eleven"), V.Skills[0].Current, 177);
+    TestEqual(TEXT("Permanent gains are part of the displayed base"), V.Skills[0].GetDisplayBase(), 177);
+    TestEqual(TEXT("No spell bonus for permanent gains"), V.Skills[0].GetDisplayModifier(), 0);
+    FACEActiveEnchantment Cook;
+    Cook.SpellId = 2; Cook.SpellCategory = 102; Cook.StatModType = 0x8010;
+    Cook.StatModKey = 39; Cook.StatModValue = 40;
+    Session.ActiveEnchantments = {Focus, Cook}; Session.NotifyVitalsChanged();
+    TestEqual(TEXT("Real buffs retain the total including permanent gains"), V.Skills[0].Current, 237);
+    TestEqual(TEXT("Only direct and attribute spell gains appear in the display modifier"), V.Skills[0].GetDisplayModifier(), 60);
+    Cook.StatModValue = -3;
+    Session.ActiveEnchantments = {Cook}; Session.NotifyVitalsChanged();
+    TestEqual(TEXT("A small debuff is not hidden by positive permanent gains"), V.Skills[0].GetDisplayModifier(), -3);
+    Cook.StatModType = 0x4010; Cook.StatModValue = .5f;
+    Session.ActiveEnchantments = {Cook}; Session.NotifyVitalsChanged();
+    TestEqual(TEXT("Multiplicative spells do not scale Jack or specialized luminance"), V.Skills[0].Current, 94);
+    TestEqual(TEXT("Multiplicative penalty uses the complete permanent baseline"), V.Skills[0].GetDisplayModifier(), -83);
     FACEActiveEnchantment Vitae; Vitae.bVitae = true; Vitae.StatModValue = .9f;
     Session.ActiveEnchantments = {Vitae}; Session.NotifyVitalsChanged();
     TestEqual(TEXT("Retail applies vitae to innate gains, but not Jack/spec luminance"), V.Skills[0].Current, 160);
+    TestEqual(TEXT("Vitae remains visible as a penalty without a phantom positive augmentation"), V.Skills[0].GetDisplayModifier(), -17);
     Session.ActiveEnchantments.Reset(); Session.NotifyVitalsChanged();
+    TestEqual(TEXT("Spell and vitae expiry restore the permanent baseline"), V.Skills[0].GetDisplayModifier(), 0);
+    Session.NotifyVitalsChanged();
+    TestEqual(TEXT("Repeated stat refresh does not accumulate permanent gains"), V.Skills[0].GetDisplayBase(), 177);
     Quality(326, 0); Quality(344, 0);
     TestEqual(TEXT("Removing modified-only augmentations restores neutral comparison immediately"), V.Skills[0].Current, V.Skills[0].Base);
     TestTrue(TEXT("Augmentation updates do not invent active enchantments"), Session.ActiveEnchantments.IsEmpty());

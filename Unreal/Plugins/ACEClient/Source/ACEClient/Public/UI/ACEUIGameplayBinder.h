@@ -167,6 +167,8 @@ public:
 	 * drive @title / @clear targeting).
 	 */
 	bool TrySendChatFromEntry(const FString* OverrideText = nullptr, int32 SourceWindow = 0);
+	/** Dispatch an explicit macro command without changing typed chat, its history or focus. */
+	bool DispatchActionDeckCommand(const FString& Command);
 	/** Jump charge meter (0 = hidden, 0..1 = fill). Uses retail Powerbar fill texture. */
 	void SetJumpChargeFraction(float Fraction);
 	/** Hit-test inventory/pack/spell overlays. bRightClick → identify (inventory/doll). */

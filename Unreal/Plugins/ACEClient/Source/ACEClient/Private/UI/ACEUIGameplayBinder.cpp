@@ -9107,7 +9107,8 @@ void UACEUIGameplayBinder::RefreshSkillOverlays()
 			Val->SetText(FText::AsNumber(Sk.Current));
 			Val->SetVisibility(ESlateVisibility::HitTestInvisible);
 			Val->SetJustification(ETextJustify::Right);
-			Val->SetColorAndOpacity(FSlateColor(Sk.Current > Sk.Base ? FLinearColor::Green : Sk.Current < Sk.Base ? FLinearColor::Red : TextWhite));
+			const int32 Modifier = Sk.GetDisplayModifier();
+			Val->SetColorAndOpacity(FSlateColor(Modifier > 0 ? FLinearColor::Green : Modifier < 0 ? FLinearColor::Red : TextWhite));
 			FString Tooltip;
 			if (Dat) Dat->TryGetSkillTooltip(static_cast<uint32>(Sk.SkillId), Tooltip);
 			UACEHoverTooltipWidget::SetWidgetTooltip(Val, FText::FromString(Tooltip));
@@ -9149,11 +9150,11 @@ void UACEUIGameplayBinder::RefreshSkillOverlays()
 	}
 	PlaceTextUnder(AttrFooterTitle, TEXT("SkillPage"), TEXT("StatManagement_Footer_Title"),
 		bNeedsTrain ? Sel->Name : Sel ? FString::Printf(TEXT("%s: %d%s"), *Sel->Name, Sel->Current,
-			Sel->Current == Sel->Base ? TEXT("") : *FString::Printf(TEXT(" (%+d)"), Sel->Current-Sel->Base))
+			Sel->GetDisplayModifier() == 0 ? TEXT("") : *FString::Printf(TEXT(" (%+d)"), Sel->GetDisplayModifier()))
 			: TEXT("Select a Skill"), 9, TextWhite, StatOverlayZ);
 	if (auto* Retail = Cast<UACERetailTextBlock>(AttrFooterTitle))
 		Retail->SetModifierSuffix(Sel && !bNeedsTrain ? FString::Printf(TEXT("%s: %d"), *Sel->Name, Sel->Current).Len() : -1,
-			Sel && Sel->Current > Sel->Base ? FLinearColor::Green : FLinearColor::Red);
+			Sel && Sel->GetDisplayModifier() > 0 ? FLinearColor::Green : FLinearColor::Red);
 	if (bNeedsTrain)
 	{
 		PlaceTextUnder(AttrFooterLine1Label, TEXT("SkillPage"), TEXT("StatManagement_Footer_LineOneLabel"),

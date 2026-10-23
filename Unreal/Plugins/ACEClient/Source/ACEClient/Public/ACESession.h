@@ -115,6 +115,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEPanelResizeSocialTest;
 	friend class FACEMovementReviewTest;
 	friend class FACERemoteMovementReplayTest;
+	friend class FACERemoteTurnTargetsTest;
 	friend class FACEAvatarMotionTest;
 	friend class FACEEmoteTest;
 	friend class FACEVRInteriorTest;

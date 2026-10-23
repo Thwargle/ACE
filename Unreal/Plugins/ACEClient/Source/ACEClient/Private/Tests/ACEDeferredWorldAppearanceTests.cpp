@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "Misc/ScopeExit.h"
 #include "ACECharacterAppearanceComponent.h"
 #include "ACEClientSubsystem.h"
@@ -27,7 +28,7 @@ bool FACEDeferredWorldAppearanceTest::RunTest(const FString&)
     ON_SCOPE_EXIT { GI->Shutdown(); World->DestroyWorld(false); GEngine->DestroyWorldContext(World); };
 
     auto* Dat = GI->GetSubsystem<UACEDatSubsystem>();
-    if (!TestTrue(TEXT("Retail models are available"), Dat && Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+    if (!TestTrue(TEXT("Retail models are available"), Dat && Dat->LoadDatDirectory(ACETestDatDirectory()))) return false;
     Dat->SetLightweightStreaming(false);
     auto* Client = GI->GetSubsystem<UACEClientSubsystem>();
     auto Session = Client->GetSession();

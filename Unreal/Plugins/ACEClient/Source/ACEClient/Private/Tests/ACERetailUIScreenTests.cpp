@@ -179,7 +179,7 @@ FORCENOINLINE void FACERetailAugmentationUIFixture::Check(FAutomationTestBase& T
     for (int32 Id : {39, 44, 47, 34})
     {
         FACESkillInfo Skill; Skill.SkillId = Id;
-        Skill.AdvancementClass = Id == 39 ? 3 : 2;
+        Skill.AdvancementClass = Id == 39 ? 3 : Id == 34 ? 1 : 2;
         Skill.InitLevel = Id == 39 ? 10 : 5; Skill.Ranks = 50;
         V.Skills.Add(Skill);
     }
@@ -201,15 +201,42 @@ FORCENOINLINE void FACERetailAugmentationUIFixture::Check(FAutomationTestBase& T
     }
     V.StatQualityInts.Add(326, 1); V.StatQualityInts.Add(344, 3);
     Dat->RecomputePlayerStats(V, {}); Client->OnVitalsUpdated.Broadcast(V);
-    Gameplay->SelectedSkillId = 39; Gameplay->RefreshSkillOverlays();
-    Test.TestEqual(TEXT("Retail Jack/spec luminance remain visible without active spells"),
-        Gameplay->AttrFooterTitle->GetText().ToString(), FString(TEXT("Cooking: 177 (+11)")));
-    const int32 CookingRow = Gameplay->SkillRowIds.IndexOfByKey(39);
-    if (Test.TestTrue(TEXT("Modified-only augmented skill still has a row"), CookingRow != INDEX_NONE))
+    for (int32 Id : {39, 44, 47, 34})
     {
-        const auto Color = Gameplay->SkillRowValues[CookingRow]->GetColorAndOpacity().GetSpecifiedColor();
-        Test.TestTrue(TEXT("Retail modified-only augmentations paint green"), Color.G > Color.R);
+        Gameplay->SelectedSkillId = Id; Gameplay->RefreshSkillOverlays();
+        const int32 Row = Gameplay->SkillRowIds.IndexOfByKey(Id);
+        if (Test.TestTrue(TEXT("Augmented trained, specialized and untrained skills have rows"), Row != INDEX_NONE))
+        {
+            const auto Color = Gameplay->SkillRowValues[Row]->GetColorAndOpacity().GetSpecifiedColor();
+            Test.TestTrue(TEXT("Jack/spec luminance alone paint neutral ivory"), Color.Equals(FLinearColor(.95f, .95f, .9f, 1.f)));
+            Test.TestFalse(TEXT("Permanent gains have no positive footer suffix"), Gameplay->AttrFooterTitle->GetText().ToString().Contains(TEXT(" (+")));
+        }
     }
+    Gameplay->SelectedSkillId = 39;
+    auto CheckCooking = [&](const TCHAR* Title, int32 Modifier)
+    {
+        Client->OnVitalsUpdated.Broadcast(V); Gameplay->RefreshSkillOverlays();
+        Test.TestEqual(TEXT("Skill footer includes permanent gains in its baseline"),
+            Gameplay->AttrFooterTitle->GetText().ToString(), FString(Title));
+        const int32 Row = Gameplay->SkillRowIds.IndexOfByKey(39);
+        if (Test.TestTrue(TEXT("Cooking remains visible"), Row != INDEX_NONE))
+        {
+            const auto Color = Gameplay->SkillRowValues[Row]->GetColorAndOpacity().GetSpecifiedColor();
+            Test.TestTrue(TEXT("Row color agrees with actual spell/vitae contribution"),
+                Modifier > 0 ? Color.G > Color.R : Modifier < 0 ? Color.R > Color.G : Color.Equals(FLinearColor(.95f, .95f, .9f, 1.f)));
+        }
+    };
+    CheckCooking(TEXT("Cooking: 177"), 0);
+    FACEActiveEnchantment Buff; Buff.SpellId = 3; Buff.SpellCategory = 102;
+    Buff.StatModType = 0x8010; Buff.StatModKey = 39; Buff.StatModValue = 40;
+    Dat->RecomputePlayerStats(V, {Buff}); CheckCooking(TEXT("Cooking: 217 (+40)"), 40);
+    Buff.StatModValue = -3;
+    Dat->RecomputePlayerStats(V, {Buff}); CheckCooking(TEXT("Cooking: 174 (-3)"), -3);
+    FACEActiveEnchantment Vitae; Vitae.bVitae = true; Vitae.StatModValue = .9f;
+    Dat->RecomputePlayerStats(V, {Vitae}); CheckCooking(TEXT("Cooking: 160 (-17)"), -17);
+    Dat->RecomputePlayerStats(V, {}); CheckCooking(TEXT("Cooking: 177"), 0);
+    V.StatQualityInts.Remove(326); V.StatQualityInts.Remove(344);
+    Dat->RecomputePlayerStats(V, {}); CheckCooking(TEXT("Cooking: 166"), 0);
     Gameplay->AttributeScrollOffset = 0; Gameplay->SyncSkillPanelTab(TEXT("AttributePage"));
     for (int32 Row = 0; Row < 6; ++Row)
     {
@@ -546,7 +573,11 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     if (TestTrue(TEXT("Casting tab exists"),Tab.IsValid()))
     {
         TestTrue(TEXT("Casting text tab is an activatable hit target"),Tab->IsInteractiveHitTarget());
-        for (auto P=Tab; P; P=P->Parent.Pin()) P->bVisible=true;
+        // Enter through the normal stance path. Forcing only the spell panel
+        // visible leaves the mutually exclusive melee panel over it in retail.
+        Gameplay->SyncCombatModeFromServer(static_cast<int32>(ACECombatMode::Magic));
+        TestFalse(TEXT("Magic stance hides the overlapping melee panel"),
+            bool(Manager->FindElementByName(TEXT("CombatPanel"))->bVisible));
         Manager->ApplyEdgeAnchoredLayout(1600,900);
         const auto Origin=Tab->GetScreenOrigin();
         const FVector2D Pos(Origin.X+Tab->Width/2,Origin.Y+Tab->Height/2);

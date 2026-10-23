@@ -31,6 +31,8 @@ public:
 
 	bool Contains(uint32 ObjectId) const { return Files.Contains(ObjectId); }
 	bool ReadFile(uint32 ObjectId, TArray<uint8>& OutBuffer) const;
+	/** Sorted catalog without reading or decoding file bodies (zero size means no filter). */
+	TArray<uint32> GetFileIds(uint8 Type,int32 MaxFileSize=0) const;
 
 	/**
 	 * Stable fingerprint of this DAT on disk (path + size + mtime). Used by the

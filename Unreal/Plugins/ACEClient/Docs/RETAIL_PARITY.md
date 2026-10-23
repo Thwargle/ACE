@@ -8,6 +8,31 @@ button exists, its opcode has a constant, or a focused regression test passes.
 This is the working acceptance record, most recently reviewed on 2026-10-13. The client
 is **not yet a feature-complete retail replacement**.
 
+## Toolbar icon depth: 2026-10-23
+
+The Allegiance/Social and Options icon rims were covered by their end trim.
+Retail `UIRegion::AddChild` (006A0760) orders children from larger to smaller
+depth, and `DrawChildren` (0069FCA0) paints that list from the head. The DAT
+toolbar places trim at depth 2 behind buttons at depth 1. Our import preserved
+the depth without converting to the canvas's higher-is-front convention.
+
+The layout importer now negates signed retail depths, including unsigned JSON
+encodings such as tooltip depth -1. Runtime window promotion and overlays keep
+their existing higher-is-front ordering. The fix applies to authored layouts
+without icon-specific position, size, texture, or depth overrides.
+
+`SelectionToolbar` compares rendered normal/selected icon rims with and without
+the trim at 100%, 150%, and 200% UI scale, checks edge hit targets and all six
+panel-button sibling orders, and verifies signed tooltip depth conversion.
+
+Validation: Windows editor build and Quest shared-source CheckOnly passed.
+Seven UI suites passed: SelectionToolbar, UIScreens, UIInteractions, Housing,
+CharacterButtonMasks, CharacterManagement, and CharacterScreenRendering.
+Reports are in `Unreal/Saved/ToolbarLayerReview/{tests,retest,final}`; the first
+run exposed two invalid fixture assumptions, corrected before successful reruns
+(both combat panels forced visible, and a viewport below 600 logical pixels).
+Final toolbar screenshots were inspected at native and enlarged UI scales.
+
 ## Apostate elevated selection and quest completion: 2026-10-20
 
 Compared retail `Render::GfxObjUnderSelectionRay`, `GetMouseSelectionObjectID`
@@ -104,7 +129,7 @@ errors. The first handoff run exposed a fixture that moved the cached death
 position instead of moving the player out of loot range; the corrected fixture
 passed on rerun.
 
-## Augmentation base values and bonus colors: 2026-10-20
+## Augmentation base values and bonus colors: updated 2026-10-23
 
 Verified against retail `CACQualities::InqSkill` (00592660),
 `AttributeCache::InqAttribute` (005CC4E0), `SkillInfoRegion::Update`, and
@@ -114,26 +139,41 @@ Melee/Missile/Magic (+10) and LumAugAllSkills are included in both raw and modif
 skills. These gains must not produce a green bonus by themselves or be added
 again from the augmentation count.
 
-Retail explicitly treats Jack of All Trades (+5) and LumAugSkilledSpec (+2 per
-rank for specialized skills) differently: `InqSkill` adds them after enchantments
-only when `raw == false`. The retail skill row and footer therefore show these
-as green bonuses even with an empty enchantment list. The current implementation
-already follows this distinction; it has been preserved rather than hiding all
-permanent bonuses. ACE's `AugmentationDevice::DoAugmentation` and
-`CreatureSkill::GetAugBonus_Base/GetAugBonus_Current` corroborate the packet and
-skill split (Enlightenment is an ACE extension).
+Retail treats Jack of All Trades (+5) and LumAugSkilledSpec (+2 per rank for
+specialized skills) differently: `InqSkill` adds them after enchantments only
+when `raw == false`. The retail skill row and footer compare against the raw
+value and can show these as green bonuses with an empty enchantment list.
+ACE's `AugmentationDevice::DoAugmentation` and
+`CreatureSkill::GetAugBonus_Base/GetAugBonus_Current` corroborate this split
+(Enlightenment is an ACE extension).
+
+At the user's request, the interface now includes **all permanent augmentation
+gains in its unbuffed baseline**. This intentionally differs from retail's raw
+UI comparison. `FACESkillInfo::GetDisplayBase` includes Jack/spec luminance;
+`GetDisplayModifier` supplies the skill row color and signed footer suffix.
+Without spells or vitae, augmented skills are neutral and have no bonus suffix.
+Direct/attribute buffs, debuffs and vitae compare against the complete permanent
+baseline; even a small debuff cannot be hidden by a positive augmentation.
+The fallback HUD uses the same baseline for its skill colors and base tooltip.
+
+`Base` remains the retail raw value for equipment requirements and plugin
+automation. `Current` still adds Jack/spec luminance **after** enchantment and
+vitae math, so the presentation change does not alter combat, run/jump speed,
+spell eligibility, or the order in which penalties and permanent gains apply.
 
 `ACE.RetailParity.AugmentationStats` exercises live attribute and quality packets,
 all six innate attributes, each skill family across untrained/trained/specialized
 skills, all-skills luminance, buff expiry, and the modified-only exceptions under
 vitae. `UIScreens` checks neutral augmented attribute/skill rows and footers,
-plus retail's green Jack/spec-luminance bonus. This is source and automated
-regression verification, not a live side-by-side retail capture.
+including Jack/spec luminance, real positive and negative spell modifiers, vitae,
+expiry, and augmentation removal. This is source and automated regression
+verification, not a live side-by-side retail capture.
 
-Validation: Windows editor build passed. `AugmentationStats` and `CharacterStats`
-passed in `Unreal/Saved/AugmentationStats-tests`; the final `UIScreens` run passed
-in `Unreal/Saved/AugmentationStats-ui-tests`, all with zero test errors. Shared
-Quest source synchronization and CheckOnly passed.
+Validation (2026-10-23): Windows editor build passed. `AugmentationStats`,
+`CharacterStats`, `Augmentations`, and `UIScreens` all passed in
+`Unreal/Saved/AugmentationDisplayReview/tests`, with zero test errors or warnings.
+The build log is `Unreal/Saved/AugmentationDisplayReview/build.log`. Shared Quest
+source synchronization and CheckOnly passed.
 
 ## Screen brightness and contrast: 2026-10-20
 
@@ -212,8 +252,9 @@ Damage and resource consumption do not change the comparison.
 
 Retail `CACQualities::InqSkill` adds Jack of All Trades (+5) and specialized
 skill luminance augmentations (+2 per rank) only to current skill values.
-Those bonuses legitimately produce green skills and a positive suffix with
-an empty enchantment list, so they remain intact. Source references are
+The original raw UI comparison showed these as bonuses with an empty enchantment
+list. The 2026-10-23 presentation change above now includes them in the displayed
+baseline while preserving retail's underlying calculation. Source references are
 `CACQualities.cpp`, `gmAttributeUI.cpp`, `Attribute2ndInfoRegion.cpp`, and
 `gmSkillUI.cpp` in `C:/dev/retail_client_source`.
 
@@ -3535,3 +3576,139 @@ frame of falling while appearance was deferred. Shared Quest source is synced.
 This verifies deterministic DAT/physics and packet fixtures; no live retail
 side-by-side capture or Linux/Quest binary test was performed. It is not a
 claim that all movement, collision or networking paths have complete parity.
+
+## Area-loading texture retention (2026-10-23)
+
+The new runtime texture-quality provider used `FCompression::CompressMemory`
+with `NAME_LZ4` on every world mip during streaming. Unreal implements that
+entry point with LZ4HC, including its speed-biased option. This added synchronous
+compression to new object/scenery appearances. Retention now uses Core's fast
+LZ4 encoder, retaining the same lossless format and decoder. Authored resolution,
+alpha, generated mip colors and live quality switching are unchanged. Fast
+encoding can retain somewhat more CPU memory than LZ4HC; GPU storage is unchanged
+and incompressible inputs still fall back to their original bytes.
+
+`ACE.Rendering.WorldTextureRetention` checks all uploaded bytes after both full
+and partial mip reloads. Its local 37-texture/313-mip comparison measured 16.12 ms
+for fast retention versus 319.16 ms for LZ4HC (5.31 versus 4.02 MiB retained from
+9.81 MiB raw). These are local microbenchmark measurements, not portal-duration
+claims. Loading trace scopes now distinguish retained mip compression, texture
+creation, setup decoding and mesh/material installation.
+
+In the offline outdoor scene with fresh per-run caches, game-thread compression
+fell from 2.17 s to 0.10 s. During the first 15 seconds after fixture preparation,
+frames over 50 ms fell from 40 to 14 and p99 frame time from 79.46 to 28.78 ms.
+The full 121-landblock terrain radius still took about 5.6 s to install; this
+change does not remove terrain generation or scene-construction costs. It does
+not shorten the safety gates that wait for collision and nearby appearances.
+The existing captured session had an 11.24-second portal transition and about
+6.95 seconds in logged appearance builds. No live-server before/after portal
+duration was measured. Evidence: `Saved/AreaLoadingReview/loading-comparison.json`,
+both outdoor traces/logs, and `tests/index.json` (six suites successful; video
+settings emitted existing console-variable priority warnings).
+
+### Follow-up: reported sustained FPS loss
+
+A same-executable encoder comparison at 2560x1440 did not reproduce the
+reported sustained regression. After a 45-second warmup, the offline outdoor
+fixture (32 synthetic NPCs and 121 terrain blocks) sampled 30 seconds per run.
+At Epic quality, old/new mean frame times were 5.434/5.416 ms (184.01/184.64 FPS).
+At Cinematic quality, matching the quality level recorded in the editor log,
+they were 5.973/5.965 ms (167.43/167.63 FPS). Both Cinematic runs used the same
+CPU/GPU tracing configuration. These small differences do not establish a
+steady-state speedup. The recorded p99 times were also comparable.
+
+World mip allocation increased from 27.81 to 35.41 MiB; RHI texture allocation
+was identical within each pair (1568.17 MiB at Epic, 2054.54 MiB at Cinematic).
+No texture creation/retention or setup construction occurred during either
+steady-state trace. The fixture had ample free system memory. This does not
+rule out pressure on lower-memory hardware, nor reproduce a live editor session
+with different characters, UI, weather, camera and network activity. The cause
+of the reported live-session FPS drop remains unconfirmed; no rendering quality
+or movement behavior was changed speculatively.
+
+`/acueperf` now includes runtime quality settings, frame cap, VSync, the screen
+percentage console setting, RHI texture allocations and editor-play status.
+The encoder comparison switch is restricted to non-Shipping automation builds.
+Evidence: `Saved/FpsRegressionReview/comparison.json`, paired logs/traces and
+`build-final.log`. FrameDiagnostics and WorldTextureRetention passed, with the
+retention suite also passing using the legacy comparison encoder (three test
+executions, no warnings/errors). Shared Quest source is synchronized; no live
+server, packaged Linux or Quest FPS result is claimed.
+
+### Live follow-up: editor cost versus arrival hitches
+
+The two subsequent reports were matched to their originating logs rather than
+compared as equivalent runs. The 2556x1354, 13.6 ms game-thread sample came from
+editor PIE with the updated local module. A 2,440-frame live trace averaged
+14.14 ms per engine tick: Slate drawing/prepass consumed 7.84 ms and
+`ProcessLocalPlayerSlateOperations` another 2.37 ms. The latter searches the
+Slate window tree for the game viewport before processing local-player replies.
+These scopes include editor windows; only 1.33 ms per frame was attributed to
+`Paint: Game UI`. This identifies the missing CPU time, but does not establish
+a regression in the game HUD or justify changing rendering quality.
+
+The later 2560x1440, 4.5 ms sample was emitted by the installed v131 executable,
+which predates the local fast-LZ4 fix. Its log directly records the subsequent
+appearance stalls: at 15:22:41-42 UTC, Iaret's appearance took 198.87 ms and the
+Apprentice Alchemist's 217.96 ms; at 15:25:29 UTC an arriving player's appearance
+took 679.85 ms (647.34 ms in mesh/material installation). These occur as new
+objects become visible after initial area entry, not just during the portal
+screen. The same NPCs in the updated editor log spent 40.06 and 22.85 ms in
+mesh/material installation respectively; the different processes, cache states
+and editor overhead make this supporting evidence, not a controlled speedup.
+
+The earlier controlled loading comparison remains the validation for the
+encoder fix. Remaining long frames are not all compression: in the fixed
+offline trace, a 324 ms frame and its following 110 ms frame include terrain mip
+uploads, task waits and editor shader/material work. No claim is made that all
+arrival hitches are eliminated. Neither user-owned running process was restarted
+or modified. Evidence: `Saved/FpsRegressionReview/LiveEditor/live-editor.utrace`,
+its exported timers, the installed-session evidence extract in that directory,
+and `Saved/AreaLoadingReview/remaining-hitches.csv`.
+
+## Loading cadence and TurnTo target frames (2026-10-23)
+
+Reviewed `CellManager::PreFetchCells` / `UpdateLoadPoint`,
+`LScape::PreFetchCells` / `update_loadpoint`, and `CEnvCell::PreFetchCells`
+against the terrain/environment presenters. Preserve the desktop residency
+radius, authored models/texture mips, and the arrival collision readiness gates.
+This pass changes the scheduling of repeated residency work, not the data used
+to construct the scene. Unreal's looping timer previously replayed every missed
+100 ms interval after a hitch, spending several application budgets in one frame.
+Coalesce those retries to one per frame. The actual callback test injects 550 ms
+and verifies one drain followed by normal progress on the next interval.
+Restoring streaming subscriptions is now idempotent: repeated restoration used
+to append the same position/entry/logout delegates again (and trigger an ensure).
+
+Retail `MovementManager::unpack_movement` resolves a known TurnToObject target
+through `CPhysicsObj::GetObjectA`. `TargetManager::SendVoyeurUpdate` supplies its
+current physics position; `MoveToManager::TurnToObject_Internal` adds the relative
+heading and freezes the destination for that command. An unknown target uses
+the packet's absolute fallback heading. Our separate TurnTo branches instead
+read sparse session positions, and could defer an unknown target's resolution
+until a later tick. Use the common live target resolver at command receipt.
+For the local player, use validated prediction instead of a transient server
+echo; pending teleport/forced-position sequences still win. A queued network
+object without a physics actor uses the packed fallback immediately. Do not
+continuously track the target or add another rotation smoothing filter.
+
+The new packet replay uses Pumpkin Buffer setup `020014E0` and motion table
+`09000028`, delayed local echoes, live remote movement, relative headings,
+late-spawned targets, and unapplied relocations. Before the fix, the synthetic
+slow orbit differed by 6 degrees and failed the live-target assertions. After
+the fix, every orbit frame is monotonic and agrees with the DAT turn rate within
+0.000025 degrees at 30/60/144/240 FPS, including heading wrap. This is a controlled
+protocol/DAT regression, not a recording of the user's live server.
+
+Validation: Development Editor build; 13 automation suites, zero failures:
+RemoteTurnTargets, RemoteMovementReplay, StreamingRetryBudget, ColdTerrainLoad,
+StreamingCost, DeferredWorldAppearance, ResolvedAppearanceCache, ArmorDistance,
+SpawnSupport, WorldEntry, StreamingRetirement, LoadingTransition, and
+LandscapeTextureFidelity. Cold terrain builds cover two complete 121-block rings;
+the fidelity checks compare restored mip bytes, authored LODs and palette remaps.
+Reports and logs: `Saved/LoadingTurningReview/{BaselineReport,FixedReport}`.
+The baseline retry fixture also exposed its first-use mesh-format invalidation;
+the final fixture consumes that initialization before measuring timer cadence.
+Individual synchronous uploads/collision/scene installation can still exceed a
+frame budget; this pass does not establish that every loading hitch is eliminated.

@@ -99,7 +99,9 @@ struct FACEUIElement : public TSharedFromThis<FACEUIElement>
 		const int32 Base = AuthoredHeight >= 0 ? AuthoredHeight : Height;
 		return FMath::Max(1, Base + UserResizeH);
 	}
-	uint32 ZLevel = 0;
+	/** Internal back-to-front order. DAT depth is negated on import: retail's
+	 * smaller depths paint in front; positive values remain runtime overlays. */
+	int64 ZLevel = 0;
 	/** Transient: preserves LayoutDesc sibling order across stable Z sorts. */
 	int32 SortKey = 0;
 	/** Only the cloned VR overhead meter removes its toolbar backing. */
@@ -202,8 +204,7 @@ struct FACEUIElement : public TSharedFromThis<FACEUIElement>
 	{
 		MarkTreeChanged();
 		// Stable for equal ZLevel so LayoutDesc sibling order (paint / hit order) is preserved.
-		// Decorative underlays always paint first — LayoutDesc gives InvBackgroundImage z=100 and
-		// lists it last; without this it covers PaperDoll / packs / item grid.
+		// Binder-created decorative underlays paint before the interactive content.
 		for (int32 i = 0; i < Children.Num(); ++i)
 		{
 			if (Children[i].IsValid())
@@ -219,8 +220,8 @@ struct FACEUIElement : public TSharedFromThis<FACEUIElement>
 			{
 				return Ba && !Bb; // underlays first, regardless of authored ZLevel
 			}
-			const uint32 Za = A.IsValid() ? A->ZLevel : 0;
-			const uint32 Zb = B.IsValid() ? B->ZLevel : 0;
+			const int64 Za = A.IsValid() ? A->ZLevel : 0;
+			const int64 Zb = B.IsValid() ? B->ZLevel : 0;
 			if (Za != Zb)
 			{
 				return Za < Zb;

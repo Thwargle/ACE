@@ -288,6 +288,15 @@ bool FACEDatDatabase::ReadDirectoryTree(IFileHandle* Handle, uint32 RootSectorOf
 	return true;
 }
 
+TArray<uint32> FACEDatDatabase::GetFileIds(uint8 Type,int32 MaxFileSize) const
+{
+    FScopeLock Lock(&IoMutex);
+    TArray<uint32> Result;
+    for(const auto& Pair:Files)
+        if((Pair.Key>>24)==Type&&(MaxFileSize<=0||Pair.Value.FileSize<=uint32(MaxFileSize)))Result.Add(Pair.Key);
+    Result.Sort();return Result;
+}
+
 bool FACEDatDatabase::ReadFile(uint32 ObjectId, TArray<uint8>& OutBuffer) const
 {
 	FScopeLock Lock(&IoMutex);

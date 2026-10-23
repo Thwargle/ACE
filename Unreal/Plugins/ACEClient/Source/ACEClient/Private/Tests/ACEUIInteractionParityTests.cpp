@@ -1,6 +1,7 @@
 #include "VR/ACEVRMenu.h"
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
 #include "Misc/FileHelper.h"
@@ -57,7 +58,7 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     auto* GI=NewObject<UGameInstance>();
     GI->Init();
     auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
-    if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     const FString ArtDirectory=FPaths::ProjectSavedDir()/TEXT("Automation/UIInteractions");
     IFileManager::Get().MakeDirectory(*ArtDirectory,true);
     auto* Resources=NewObject<UACEUIResourceResolver>(); Resources->Initialize(Dat);

@@ -49,6 +49,7 @@ void UACEActionDeckSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Collection.InitializeDependency<UACEClientSubsystem>();
     Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     Reset();
+    MacroTicker=FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this,&UACEActionDeckSubsystem::TickMacros),.05f);
     if(FSlateApplication::IsInitialized())
     {
         Input=MakeShared<FACEActionDeckInput>(this);
@@ -59,15 +60,19 @@ void UACEActionDeckSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 }
 void UACEActionDeckSubsystem::Deinitialize()
 {
+    FTSTicker::GetCoreTicker().RemoveTicker(MacroTicker);
+    StopMacro();CloseMacroEditor();
     if(Input&&FSlateApplication::IsInitialized())FSlateApplication::Get().UnregisterInputPreProcessor(Input);
     Input.Reset();Panel.Reset();Client=nullptr;
     Super::Deinitialize();
 }
 void UACEActionDeckSubsystem::Reset()
 {
+    StopMacro();CloseMacroEditor();
     Slots.SetNum(SlotCount);Available.SetNum(SlotCount);
     for(auto& S:Slots)S=FACEDeckSlot();
-    RowModifiers[0]=1;RowModifiers[1]=2;RowModifiers[2]=0;
+    RowModifiers[0]=1;RowModifiers[1]=2;RowModifiers[2]=0;RowModifiers[3]=4;
+    FourthRowEnabled=false;
     Override=false;ConfigOpen=false;CapturingKey=false;NextRefresh=0;Notice.Empty();
     HideSpellBar=HideCombatBar=ShowTargetTimers=false;
 }
@@ -80,7 +85,7 @@ void UACEActionDeckSubsystem::EnsureCharacter()
     StatePath=Host->UserDirectory()/TEXT("ActionDeck")/(FMD5::HashAnsiString(*Server)
         +FString::Printf(TEXT(".%08X.json"),uint32(Player)));
     FString Source;TSharedPtr<FJsonObject> Json;
-    if(IFileManager::Get().FileSize(*StatePath)<=128*1024&&FFileHelper::LoadFileToString(Source,*StatePath)
+    if(IFileManager::Get().FileSize(*StatePath)<=2*1024*1024&&FFileHelper::LoadFileToString(Source,*StatePath)
         &&FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Source),Json))Deserialize(Json);
 }
 bool UACEActionDeckSubsystem::Save()
@@ -100,6 +105,7 @@ TSharedRef<FJsonObject> UACEActionDeckSubsystem::ExportState() const
     J->SetBoolField(TEXT("hide_spell_bar"),HideSpellBar);
     J->SetBoolField(TEXT("hide_combat_bar"),HideCombatBar);
     J->SetBoolField(TEXT("target_effect_timers"),ShowTargetTimers);
+    J->SetBoolField(TEXT("fourth_row"),FourthRowEnabled);
     TArray<TSharedPtr<FJsonValue>> Mods,Entries;
     for(auto M:RowModifiers)Mods.Add(MakeShared<FJsonValueNumber>(M));
     J->SetArrayField(TEXT("rows"),Mods);
@@ -114,6 +120,11 @@ TSharedRef<FJsonObject> UACEActionDeckSubsystem::ExportState() const
         E->SetNumberField(TEXT("item_type"),S.Item.ItemType);
         E->SetBoolField(TEXT("custom_key"),S.CustomKey);E->SetStringField(TEXT("key"),S.Key.Key.ToString());
         E->SetNumberField(TEXT("modifiers"),ModifierBits(S.Key));
+        if(S.Action==EACEDeckAction::Macro)
+        {
+            E->SetStringField(TEXT("macro"),S.MacroText);
+            E->SetNumberField(TEXT("delay_ms"),S.MacroDelayMs);
+        }
         Entries.Add(MakeShared<FJsonValueObject>(E));
     }
     J->SetArrayField(TEXT("slots"),Entries);return J;
@@ -125,9 +136,11 @@ void UACEActionDeckSubsystem::Deserialize(const TSharedPtr<FJsonObject>& J)
     J->TryGetBoolField(TEXT("hide_spell_bar"),HideSpellBar);
     J->TryGetBoolField(TEXT("hide_combat_bar"),HideCombatBar);
     J->TryGetBoolField(TEXT("target_effect_timers"),ShowTargetTimers);
+    FourthRowEnabled=false;J->TryGetBoolField(TEXT("fourth_row"),FourthRowEnabled);
     const TArray<TSharedPtr<FJsonValue>>* Array=nullptr;
-    if(J->TryGetArrayField(TEXT("rows"),Array)&&Array->Num()==Rows)
-        for(int32 R=0;R<Rows;++R){double V=0;if((*Array)[R]->TryGetNumber(V)&&V>=0&&V<16&&V==FMath::TruncToDouble(V))RowModifiers[R]=uint8(V);}
+    // Existing three-row profiles retain their modifiers and slot identities.
+    if(J->TryGetArrayField(TEXT("rows"),Array)&&(Array->Num()==DefaultRows||Array->Num()==Rows))
+        for(int32 R=0;R<Array->Num();++R){double V=0;if((*Array)[R]->TryGetNumber(V)&&V>=0&&V<16&&V==FMath::TruncToDouble(V))RowModifiers[R]=uint8(V);}
     if(J->TryGetArrayField(TEXT("slots"),Array))
     {
         for(int32 I=0;I<FMath::Min(SlotCount,Array->Num());++I)
@@ -135,11 +148,19 @@ void UACEActionDeckSubsystem::Deserialize(const TSharedPtr<FJsonObject>& J)
             if((*Array)[I]->Type!=EJson::Object)continue;
             const auto E=(*Array)[I]->AsObject();auto& S=Slots[I];
             const int32 Action=Integer(E,TEXT("action"));
-            S.Action=Action>=0&&Action<=int32(EACEDeckAction::Self)?EACEDeckAction(Action):EACEDeckAction::Empty;
+            S.Action=Action>=0&&Action<=int32(EACEDeckAction::Macro)?EACEDeckAction(Action):EACEDeckAction::Empty;
             S.Guid=Integer(E,TEXT("guid"));S.Spell=Integer(E,TEXT("spell"));S.Height=FMath::Clamp(Integer(E,TEXT("height"),2),1,3);
             S.Item.ClassId=Integer(E,TEXT("class"));S.Item.Name=Text(E,TEXT("name")).Left(256);
             S.Item.Icon=Integer(E,TEXT("icon"));S.Item.Overlay=Integer(E,TEXT("overlay"));S.Item.Underlay=Integer(E,TEXT("underlay"));
             S.Item.Effects=Integer(E,TEXT("effects"));S.Item.ItemType=Integer(E,TEXT("item_type"));
+            S.MacroText=Text(E,TEXT("macro"));S.MacroDelayMs=Integer(E,TEXT("delay_ms"));
+            if(S.Action==EACEDeckAction::Macro)
+            {
+                TArray<FACEDeckMacroStep> Steps;FString Error;
+                if(!ParseMacro(S.MacroText,Steps,Error)||S.MacroDelayMs<0||S.MacroDelayMs>3600000)
+                    S.Action=EACEDeckAction::Empty;
+            }
+            if(S.Action!=EACEDeckAction::Macro){S.MacroText.Empty();S.MacroDelayMs=0;}
             E->TryGetBoolField(TEXT("custom_key"),S.CustomKey);
             S.Key=Chord(FKey(*Text(E,TEXT("key"))),uint8(FMath::Clamp(Integer(E,TEXT("modifiers")),0,15)));
             if(S.CustomKey&&!ValidKey(S.Key.Key))S.CustomKey=false;
@@ -147,12 +168,40 @@ void UACEActionDeckSubsystem::Deserialize(const TSharedPtr<FJsonObject>& J)
     }
     // A hand-edited file must not dispatch two slots from one key.
     TArray<FInputChord> Seen;
-    for(int32 I=0;I<SlotCount;++I)
+    for(int32 I=0;I<VisibleSlots();++I)
     {
         const auto K=EffectiveKey(I);
         if(Seen.Contains(K)){Slots[I].CustomKey=true;Slots[I].Key=FInputChord();}
         else Seen.Add(K);
     }
+}
+int32 UACEActionDeckSubsystem::RowAtDisplay(int32 Row) const
+{
+    if(Row<0||Row>=VisibleRows())return INDEX_NONE;
+    return FourthRowEnabled?(Row==0?DefaultRows:Row-1):Row;
+}
+int32 UACEActionDeckSubsystem::DisplayRow(int32 Index) const
+{
+    if(Index<0||Index>=VisibleSlots())return INDEX_NONE;
+    const int32 Row=Index/Columns;
+    return FourthRowEnabled?(Row==DefaultRows?0:Row+1):Row;
+}
+bool UACEActionDeckSubsystem::SetFourthRowEnabled(bool Enabled)
+{
+    EnsureCharacter();
+    if(Enabled==FourthRowEnabled)return true;
+    if(Enabled)
+    {
+        TArray<FInputChord> Seen;
+        for(int32 I=0;I<SlotCount;++I)
+        {
+            const auto K=EffectiveKey(I);if(!K.Key.IsValid())continue;
+            if(Seen.Contains(K))
+            {Notice=TEXT("The extra row shares a shortcut with another row. Change its modifier or the conflicting slot key first.");return false;}
+            Seen.Add(K);
+        }
+    }
+    FourthRowEnabled=Enabled;Notice.Empty();Save();Refresh(true);return true;
 }
 FInputChord UACEActionDeckSubsystem::EffectiveKey(int32 Index) const
 {
@@ -169,7 +218,7 @@ bool UACEActionDeckSubsystem::ValidKey(const FKey& Key)
 int32 UACEActionDeckSubsystem::MatchKey(const FInputChord& Key) const
 {
     if(!ValidKey(Key.Key))return INDEX_NONE;
-    for(int32 I=0;I<Slots.Num();++I)if(EffectiveKey(I)==Key)return I;
+    for(int32 I=0;I<VisibleSlots();++I)if(EffectiveKey(I)==Key)return I;
     return INDEX_NONE;
 }
 bool UACEActionDeckSubsystem::SetKey(int32 Index,const FInputChord& Key)
@@ -177,7 +226,7 @@ bool UACEActionDeckSubsystem::SetKey(int32 Index,const FInputChord& Key)
     EnsureCharacter();
     if(!Slots.IsValidIndex(Index)||!ValidKey(Key.Key)){Notice=TEXT("Choose a keyboard key other than Escape.");return false;}
     const int32 Other=MatchKey(Key);
-    if(Other!=INDEX_NONE&&Other!=Index){Notice=FString::Printf(TEXT("That key belongs to row %d, slot %d."),Other/Columns+1,Other%Columns+1);return false;}
+    if(Other!=INDEX_NONE&&Other!=Index){Notice=FString::Printf(TEXT("That key belongs to row %d, slot %d."),DisplayRow(Other)+1,Other%Columns+1);return false;}
     Slots[Index].Key=Key;Slots[Index].CustomKey=true;Notice.Empty();Save();return true;
 }
 bool UACEActionDeckSubsystem::SetRowModifier(int32 Row,uint8 Modifiers)
@@ -185,7 +234,7 @@ bool UACEActionDeckSubsystem::SetRowModifier(int32 Row,uint8 Modifiers)
     EnsureCharacter();if(Row<0||Row>=Rows||Modifiers>15)return false;
     const uint8 Previous=RowModifiers[Row];RowModifiers[Row]=Modifiers;
     TArray<FInputChord> Seen;
-    for(int32 I=0;I<SlotCount;++I)
+    for(int32 I=0;I<VisibleSlots();++I)
     {
         const auto K=EffectiveKey(I);if(!K.Key.IsValid())continue;
         if(Seen.Contains(K)){RowModifiers[Row]=Previous;Notice=TEXT("That row modifier would duplicate another slot's key.");return false;}
@@ -200,6 +249,14 @@ FString UACEActionDeckSubsystem::KeyLabel(int32 Index) const
     if(K.Key==EKeys::Hyphen)Name=TEXT("-");else if(K.Key==EKeys::Equals)Name=TEXT("=");
     return FString(K.bCtrl?TEXT("C+"):TEXT(""))+(K.bShift?TEXT("S+"):TEXT(""))
         +(K.bAlt?TEXT("A+"):TEXT(""))+(K.bCmd?TEXT("M+"):TEXT(""))+Name;
+}
+FString UACEActionDeckSubsystem::SlotHint(int32 Index) const
+{
+    if(Index<0||Index>=VisibleSlots())return FString();
+    const auto Key=EffectiveKey(Index);
+    FString Hint=SlotName(Index)+TEXT("\n")+(Key.Key.IsValid()?Key.GetInputText().ToString():TEXT("No shortcut assigned"));
+    if(!Available[Index].Reason.IsEmpty())Hint+=TEXT("\n")+Available[Index].Reason;
+    return Hint+TEXT("\nRight-click to configure. Drag to rearrange; drop outside the window to remove the shortcut.");
 }
 FString UACEActionDeckSubsystem::SlotName(int32 Index) const
 {
@@ -270,6 +327,7 @@ bool UACEActionDeckSubsystem::ReservesKey(const FInputChord& Key) const
 bool UACEActionDeckSubsystem::HandleKey(const FInputChord& Key,bool Repeat)
 {
     EnsureCharacter();
+    if(IsMacroEditorOpen())return false; // Modal owns input, including its key selector.
     if(!ReservesKey(Key))return false;
     // Let Slate's key selector see the event, but ReservesKey still prevents
     // a bubbled key-down from reaching the controller or native hotbar poll.
@@ -310,6 +368,7 @@ void UACEActionDeckSubsystem::Refresh(bool Force)
         if(S.Action==EACEDeckAction::Empty){A.Reason=TEXT("Drag an inventory item or spell here.");continue;}
         // Selection remains available during an action and in every stance.
         if(S.Action==EACEDeckAction::Self){A.Guid=Player;A.Ready=Player!=0;continue;}
+        if(S.Action==EACEDeckAction::Macro){A.Ready=true;continue;}
         if(S.Action==EACEDeckAction::Item)
         {
             const FACEWorldObject* Best=nullptr;
@@ -345,13 +404,14 @@ bool UACEActionDeckSubsystem::BindItem(int32 Index,int32 Guid)
     // Persist the action rather than an inventory match or a particular login's GUID.
     if(Slots.IsValidIndex(Index)&&Client&&Player&&Guid==Player)
     {
-        auto& S=Slots[Index];S.Action=EACEDeckAction::Self;S.Guid=S.Spell=0;S.Item=FACESupplyEntry();
+        auto& S=Slots[Index];S.Action=EACEDeckAction::Self;S.Guid=S.Spell=0;S.Item=FACESupplyEntry();S.MacroText.Empty();S.MacroDelayMs=0;
         S.Item.Icon=0x06004CF7;S.Item.ItemType=ACEItemType::Container;
         Notice.Empty();Save();Refresh(true);return true;
     }
     if(!Slots.IsValidIndex(Index)||!Client||!Client->GetWorldObject(Guid,Item)||!Client->IsOwnedInventoryItem(Item))
     {Notice=TEXT("Drag an item from your own inventory.");return false;}
     auto& S=Slots[Index];S.Action=EACEDeckAction::Item;S.Guid=Guid;S.Spell=0;
+    S.MacroText.Empty();S.MacroDelayMs=0;
     S.Item.ClassId=Item.WeenieClassId;S.Item.Name=Item.Name;S.Item.CopyAppearance(Item);
     Notice.Empty();Save();Refresh(true);return true;
 }
@@ -363,6 +423,7 @@ bool UACEActionDeckSubsystem::BindSpell(int32 Index,int32 Spell)
     auto* Dat=GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
     if(!Dat||!Dat->TryGetSpellInfo(uint32(Spell),Name,Icon))return false;
     auto& S=Slots[Index];S.Action=EACEDeckAction::Spell;S.Spell=Spell;S.Guid=0;
+    S.MacroText.Empty();S.MacroDelayMs=0;
     S.Item=FACESupplyEntry();S.Item.Name=Name;S.Item.Icon=int32(Icon);
     Notice.Empty();Save();Refresh(true);return true;
 }
@@ -370,6 +431,7 @@ void UACEActionDeckSubsystem::BindAttack(int32 Index,bool Missile,int32 Height)
 {
     EnsureCharacter();if(!Slots.IsValidIndex(Index))return;
     auto& S=Slots[Index];S.Action=Missile?EACEDeckAction::Missile:EACEDeckAction::Melee;S.Height=FMath::Clamp(Height,1,3);
+    S.MacroText.Empty();S.MacroDelayMs=0;
     S.Guid=S.Spell=0;S.Item=FACESupplyEntry();Notice.Empty();Save();Refresh(true);
 }
 void UACEActionDeckSubsystem::ClearSlot(int32 Index)
@@ -407,12 +469,22 @@ int32 UACEActionDeckSubsystem::HealingTarget(const FACEWorldObject& Kit,int32 Se
 bool UACEActionDeckSubsystem::Activate(int32 Index)
 {
     Refresh(true);
-    if(!Slots.IsValidIndex(Index)||!Client||Client->GetSessionState()!=EACESessionState::InWorld||!IsEnabled())return false;
+    if(IsMacroEditorOpen())return false;
+    if(Index<0||Index>=VisibleSlots()||!Client||Client->GetSessionState()!=EACESessionState::InWorld||!IsEnabled())return false;
     auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
     if(PC&&(PC->IsWorldTransitionActive()||PC->IsVRActive()))return false;
     if(!Available[Index].Ready){Notice=Available[Index].Reason;return false;}
     const auto& S=Slots[Index];auto* B=Binder();
-    if(S.Action==EACEDeckAction::Self)
+    if(S.Action==EACEDeckAction::Macro)
+    {
+        if(IsMacroRunning()){Notice=TEXT("A macro is already running. Stop it before starting another.");return false;}
+        if(!B){Notice=TEXT("The gameplay interface is not ready.");return false;}
+        if(!ParseMacro(S.MacroText,MacroSteps,Notice))return false;
+        MacroStep=0;MacroPlayer=Player;MacroServer=Server;MacroSession=Client->GetSession();
+        MacroSpacingMs=S.MacroDelayMs;RunningMacroName=S.Item.Name;MacroDue=FPlatformTime::Seconds();
+        Notice.Empty();AdvanceMacro(MacroDue);return true;
+    }
+    else if(S.Action==EACEDeckAction::Self)
     {
         if(B)B->TargetActionDeckSelf();else Client->SelectObject(Player);
     }

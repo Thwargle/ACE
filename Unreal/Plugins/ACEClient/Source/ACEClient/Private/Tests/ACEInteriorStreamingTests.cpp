@@ -105,6 +105,39 @@ namespace
     };
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEStreamingRetryBudgetTest, "ACE.RetailParity.StreamingRetryBudget",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FACEStreamingRetryBudgetTest::RunTest(const FString&)
+{
+    FInteriorTestWorld Fixture;
+    Fixture.GI->GetSubsystem<UACEDatSubsystem>()->SetWorldStreamingAllowed(true);
+    Fixture.GI->GetSubsystem<UACEDatSubsystem>()->ConsumeLandMeshReloadRequest();
+    auto* Owner=Fixture.World->SpawnActor<AActor>();
+    auto* Presenter=NewObject<UACETerrainPresenterComponent>(Owner);
+    Owner->AddInstanceComponent(Presenter);Presenter->RegisterComponent();
+    // A complete, stationary ring isolates timer dispatch from asset/IO timing.
+    // The actual retry callback decrements this burst count once per drain.
+    Presenter->bHasKnownCell=true;Presenter->LastKnownCellId=0x7D64000E;
+    Presenter->LastCenterLB=0x7D64;Presenter->bLastSyncComplete=true;
+    Presenter->LoadRadius=0;Presenter->StagedLoadRadius=0;Presenter->bEnableEnvCells=false;
+    for(bool BeginPlayPath:{true,false})
+    {
+        Fixture.World->GetTimerManager().ClearTimer(Presenter->RetryTimerHandle);
+        if(BeginPlayPath)Presenter->BeginPlay();else Presenter->EnsureTerrainStreamingSubscriptions();
+        TestEqual(TEXT("Restoring streaming retains exactly one position subscription"),
+            Fixture.GI->GetSubsystem<UACEClientSubsystem>()->OnPositionUpdate.GetAllObjects()
+                .FilterByPredicate([Presenter](UObject* Object){return Object==Presenter;}).Num(),1);
+        Presenter->LandblockLoginBurstTicks=100;
+        ++GFrameCounter;Fixture.World->GetTimerManager().Tick(0.f);
+        ++GFrameCounter;Fixture.World->GetTimerManager().Tick(.55f);
+        TestEqual(TEXT("A 550ms hitch drains streaming once, not five times in the recovery frame"),Presenter->LandblockLoginBurstTicks,99);
+        ++GFrameCounter;Fixture.World->GetTimerManager().Tick(.1f);
+        TestEqual(TEXT("Streaming continues normally after the hitch"),Presenter->LandblockLoginBurstTicks,98);
+    }
+    Fixture.World->GetTimerManager().ClearTimer(Presenter->RetryTimerHandle);
+    return !HasAnyErrors();
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEResidentTerrainCollisionTest, "ACE.RetailParity.ResidentTerrainCollision",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEResidentTerrainCollisionTest::RunTest(const FString&)

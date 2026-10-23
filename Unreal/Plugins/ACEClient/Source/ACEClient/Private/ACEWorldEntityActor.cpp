@@ -7,6 +7,7 @@
 #include "ACEScriptComponent.h"
 #include "ACEDatSubsystem.h"
 #include "ACEClientSubsystem.h"
+#include "ACEPlayerController.h"
 #include "ACEWorldPresenterComponent.h"
 #include "ACETerrainPresenterComponent.h"
 #include "ACESession.h"
@@ -1107,15 +1108,24 @@ FVector AACEWorldEntityActor::ResolvePredictedMovement(const FVector& From, cons
 	return Position - Offset;
 }
 
-bool AACEWorldEntityActor::ResolveFacingTarget(int32 TargetGuid, FVector& Location) const
+bool AACEWorldEntityActor::ResolveFacingTarget(int32 TargetGuid, FVector& Location, bool bAllowCachedPosition) const
 {
 	const auto* GI = GetGameInstance();
 	const auto* Client = GI ? GI->GetSubsystem<UACEClientSubsystem>() : nullptr;
 	if (!Client || TargetGuid == 0 || TargetGuid == ACEGuid) return false;
-	if (TargetGuid == Client->GetPlayerGuid() && Client->GetPlayerPosition().IsValid())
+	if (TargetGuid == Client->GetPlayerGuid())
 	{
-		Location = Client->GetPlayerPosition().ToUnrealLocation(WorldScale);
-		return true;
+		// A server echo can replace the session pose before the controller's
+		// packet delegate restores prediction. TargetManager reads physics, not
+		// that transient network snapshot. The helper rejects pending teleports.
+		FACEPosition Position = Client->GetPlayerPosition();
+		if (const auto* PC = Cast<AACEPlayerController>(GetWorld()->GetFirstPlayerController()))
+			PC->TryGetLocallyPredictedPosition(Position);
+		if (Position.IsValid())
+		{
+			Location = Position.ToUnrealLocation(WorldScale);
+			return true;
+		}
 	}
 	// TargetManager::SendVoyeurUpdate reads the target's current physics frame,
 	// not its last sparse F748. Using the cached packet makes melee chase/spacing
@@ -1127,6 +1137,9 @@ bool AACEWorldEntityActor::ResolveFacingTarget(int32 TargetGuid, FVector& Locati
 				Location = Target->GetActorLocation();
 				return true;
 			}
+	// TurnToObject falls back to the packet's absolute heading when GetObjectA
+	// has no physics body. Merely receiving an ObjectCreate is not sufficient.
+	if (!bAllowCachedPosition) return false;
 	FACEWorldObject Target;
 	if (!Client->GetWorldObject(TargetGuid, Target) || !Target.bHasPosition || !Target.Position.IsValid()) return false;
 	Location = Target.Position.ToUnrealLocation(WorldScale);
@@ -1492,63 +1505,9 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 
 			if (bTurnTo)
 			{
-				// TurnToObject: face frozen target direction. Never fall back to DesiredHeading=0
-				// (that faces due north). TurnToHeading uses ACE degree heading.
+				// MovementManager resolves the target once when the command arrives.
+				// Never resample a moving/late-spawned target on a later render frame.
 				FVector FaceDir = RemoteTurnFaceDir;
-				if (!bHaveRemoteTurnFace || !FaceDir.Normalize())
-				{
-					bHaveRemoteTurnFace = false;
-					if (RemoteMotion.MovementType == 8 && RemoteMotion.MoveToTargetGuid != 0)
-					{
-						if (UWorld* World = GetWorld())
-						{
-							if (UGameInstance* GI = World->GetGameInstance())
-							{
-								if (UACEClientSubsystem* Client = GI->GetSubsystem<UACEClientSubsystem>())
-								{
-									FVector TargetLoc = FVector::ZeroVector;
-									bool bHaveTarget = false;
-									FACEWorldObject TargetObj;
-									if (Client->GetWorldObject(RemoteMotion.MoveToTargetGuid, TargetObj)
-										&& TargetObj.bHasPosition && TargetObj.Position.IsValid())
-									{
-										TargetLoc = TargetObj.Position.ToUnrealLocation(WorldScale);
-										bHaveTarget = true;
-									}
-									if (RemoteMotion.MoveToTargetGuid == Client->GetPlayerGuid())
-									{
-										const FACEPosition PlayerPos = Client->GetPlayerPosition();
-										if (PlayerPos.IsValid())
-										{
-											TargetLoc = PlayerPos.ToUnrealLocation(WorldScale);
-											bHaveTarget = true;
-										}
-									}
-									if (bHaveTarget)
-									{
-										FaceDir = TargetLoc - RemotePredictLocation;
-										FaceDir.Z = 0.f;
-										FACEPosition Facing;
-										Facing.SetAceFacingFromUnrealDir2D(FaceDir);
-										FaceDir = FACEPosition::UnrealDirFromAceHeadingDegrees(
-											Facing.GetAceHeadingDegrees() + RemoteMotion.MoveToDesiredHeading);
-									}
-									else FaceDir = FACEPosition::UnrealDirFromAceHeadingDegrees(RemoteMotion.TurnToFallbackHeading);
-								}
-							}
-						}
-					}
-					else if (RemoteMotion.MovementType == 9)
-					{
-						FaceDir = FACEPosition::UnrealDirFromAceHeadingDegrees(
-							RemoteMotion.MoveToDesiredHeading);
-					}
-					if (FaceDir.Normalize())
-					{
-						RemoteTurnFaceDir = FaceDir;
-						bHaveRemoteTurnFace = true;
-					}
-				}
 				if (bHaveRemoteTurnFace && FaceDir.Normalize())
 				{
 					const FQuat Want = FACEPosition::QuatFromUnrealTravelDir2D(FaceDir);
@@ -2723,61 +2682,16 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 			RemoteAnchorLocation = RemotePredictLocation;
 			bHaveRemotePredict = true;
 		}
-		if (Motion.MovementType == 8 && Motion.MoveToTargetGuid != 0)
+		float Heading = Motion.MovementType == 8 ? Motion.TurnToFallbackHeading : Motion.MoveToDesiredHeading;
+		FVector TargetLocation;
+		if (Motion.MovementType == 8 && ResolveFacingTarget(Motion.MoveToTargetGuid, TargetLocation, false))
 		{
-			if (UWorld* World = GetWorld())
-			{
-				if (UGameInstance* GI = World->GetGameInstance())
-				{
-					if (UACEClientSubsystem* Client = GI->GetSubsystem<UACEClientSubsystem>())
-					{
-						FVector TargetLoc = FVector::ZeroVector;
-						bool bHaveTarget = false;
-						FACEWorldObject TargetObj;
-						if (Client->GetWorldObject(Motion.MoveToTargetGuid, TargetObj)
-							&& TargetObj.bHasPosition && TargetObj.Position.IsValid())
-						{
-							TargetLoc = TargetObj.Position.ToUnrealLocation(WorldScale);
-							bHaveTarget = true;
-						}
-						if (Motion.MoveToTargetGuid == Client->GetPlayerGuid())
-						{
-							const FACEPosition PlayerPos = Client->GetPlayerPosition();
-							if (PlayerPos.IsValid())
-							{
-								TargetLoc = PlayerPos.ToUnrealLocation(WorldScale);
-								bHaveTarget = true;
-							}
-						}
-						if (bHaveTarget)
-						{
-							const FVector SelfLoc = bHaveRemotePredict
-								? RemotePredictLocation
-								: GetActorLocation();
-							FVector To = TargetLoc - SelfLoc;
-							To.Z = 0.f;
-							if (To.Normalize())
-							{
-								FACEPosition Facing;
-								Facing.SetAceFacingFromUnrealDir2D(To);
-								RemoteTurnFaceDir = FACEPosition::UnrealDirFromAceHeadingDegrees(
-									Facing.GetAceHeadingDegrees() + Motion.MoveToDesiredHeading);
-								bHaveRemoteTurnFace = true;
-							}
-						}
-					}
-				}
-			}
+			FACEPosition Facing;
+			Facing.SetAceFacingFromUnrealDir2D(TargetLocation - RemotePredictLocation);
+			Heading = Facing.GetAceHeadingDegrees() + Motion.MoveToDesiredHeading;
 		}
-		else if (Motion.MovementType == 9)
-		{
-			FVector Dir = FACEPosition::UnrealDirFromAceHeadingDegrees(Motion.MoveToDesiredHeading);
-			if (Dir.Normalize())
-			{
-				RemoteTurnFaceDir = Dir;
-				bHaveRemoteTurnFace = true;
-			}
-		}
+		RemoteTurnFaceDir = FACEPosition::UnrealDirFromAceHeadingDegrees(Heading);
+		bHaveRemoteTurnFace = RemoteTurnFaceDir.Normalize();
 	}
 	RefreshActorTickEnabled();
 }

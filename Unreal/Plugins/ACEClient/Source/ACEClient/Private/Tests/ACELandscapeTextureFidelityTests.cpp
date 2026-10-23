@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "ACEDatSubsystem.h"
 #include "Dat/ACELandblockMeshBuilder.h"
 #include "Dat/ACEPCodeTileCache.h"
@@ -23,7 +24,7 @@ bool FACETerrainCompressionCostTest::RunTest(const FString&)
 {
     TStrongObjectPtr<UGameInstance> GI(NewObject<UGameInstance>());
     TStrongObjectPtr<UACEDatSubsystem> Dat(NewObject<UACEDatSubsystem>(GI.Get()));
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     const auto* Land=Dat->GetOrBuildLandblockMesh(0xDA550000,100);
     if(!Land) return false;
     TSet<const FACETerrainBlend*> Seen;

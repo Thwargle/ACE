@@ -23,6 +23,10 @@ Retail commands such as `/fps` and `/saveui`, and server commands such as
 Manager and open the gold tiles / teal spark icon. Drag inventory items or
 spellbook/spell-bar icons into its three rows of twelve slots. Click an icon
 to use it, drag between slots to swap actions, or right-click to edit a slot.
+Settings can add a fourth row above them for a total of 48 slots. Hiding that row
+keeps its assignments and releases its hotkeys until it is shown again.
+Right-clicking a pinned slot also unpins the deck, restoring its frame and gear
+so you can hide or show settings normally.
 The icon follows the pointer above other windows while dragging. Drop outside
 the Action Deck window to remove the shortcut; dropping on its toolbar or
 settings leaves it in place. Binding or removing a shortcut does not move or
@@ -35,7 +39,8 @@ preserving your combat target, like the retail backpack shortcut.
 
 Turn **Override** on to use deck hotkeys in place of the native spell and item
 hotbars. Bottom-row defaults are `1` through `=`, middle-row defaults add Ctrl,
-and top-row defaults add Shift. Empty slots fall through to the native hotbars.
+and the row above those defaults to Shift. The optional extra top row defaults
+to Alt+1 through Alt+=. Empty slots fall through to the native hotbars.
 Assigned slots keep their keys when depleted or temporarily unavailable. Typing
 and keybinding editors receive their input normally. Action Deck
 settings pause deck actions while keeping assigned slots' keys reserved, so editing cannot
@@ -43,13 +48,52 @@ accidentally use a native hotbar item. Closing the deck or disabling the plugin
 restores native bindings.
 
 The gear opens row-modifier and per-slot key settings. Individual key overrides
-keep their modifiers when a row changes. Duplicate chords are rejected.
+keep their modifiers when a row changes. Icon labels and hover hints use the
+effective shortcut immediately, including custom keys and modifier combinations.
+Duplicate chords are rejected. If enabling the extra row would duplicate an
+existing shortcut, change its modifier or the conflicting shortcut in settings.
 Settings can also assign low, medium or high melee/missile attacks, clear a slot,
 or restore default keys. **Lock** pins the position and hides the window frame;
-the Override and Lock controls disappear while pinned. The gear remains visible;
-use **Unlock window** in settings to restore the frame and controls. Window
+the Override, Lock and gear controls disappear while pinned. Hold the UI movement
+modifier to reveal them; use **Unlock window** in settings to restore the frame. Window
 placement follows the normal plugin layout, while actions, keys, Override and
 display options save separately per character/server.
+
+While pinned, the empty top toolbar collapses without shifting the hotbar slots.
+The bottom status line and Stop button appear only while a macro is running,
+including during delays, and collapse when it finishes or stops. Quick-show
+temporarily restores the top controls.
+
+To create a **chat macro**, right-click a slot (or select one in settings) and
+choose **Add macro…**. The modal lets you name it, set its hotkey and choose an
+icon from your items/known spells or the full DAT icon catalog. Search by known
+item/spell name or hexadecimal icon ID; the catalog is paged and loaded in small
+batches. Icons use the same retail cutout as inventory. **Edit macro…** reopens
+the saved script; Cancel or Escape leaves the slot unchanged.
+
+Enter one `/` or `@` command per line. `/wait 30000` waits 30 seconds locally;
+it is never sent to chat. For example:
+
+```text
+/hom
+/wait 30000
+/f I'm home.
+```
+
+Commands use the normal chat command handler, including client commands, server
+commands and fellowship/allegiance aliases. Quotes are sent exactly as typed,
+just as in native chat. **Extra delay between commands (ms)** adds spacing to
+every command, in addition to explicit waits. Blank lines are ignored. Scripts
+are validated before saving/running (8,192 characters, 128 steps, 500 characters
+per command; waits/spacing up to one hour).
+
+Saving never runs the macro. Click its slot, or use its hotkey with **Override**
+on and settings closed. Only one macro runs at a time; held keys never repeat it.
+The deck shows its name and remaining wait, with a **Stop macro** button visible
+even while pinned. Portal travel preserves the delay but postpones further sends
+until arrival. Logout, disconnect, a character/server change or disabling Action
+Deck cancels remaining commands. Macros leave unfinished chat text and focus
+alone. Moving a running macro's slot does not alter its current sequence.
 
 Settings can hide the native spell bar and melee/missile bar independently while
 Action Deck is open and enabled. Closing or disabling it restores the appropriate

@@ -1030,23 +1030,8 @@ void UACETerrainPresenterComponent::BeginPlay()
 		SetComponentTickEnabled(false);
 	}
 
-	if (UWorld* World = GetWorld())
-	{
-		if (UGameInstance* GI = World->GetGameInstance())
-		{
-			Client = GI->GetSubsystem<UACEClientSubsystem>();
-			if (Client)
-			{
-				Client->OnEnteredWorld.AddDynamic(this, &UACETerrainPresenterComponent::HandleEnteredWorld);
-				Client->OnPositionUpdate.AddDynamic(this, &UACETerrainPresenterComponent::HandlePositionUpdate);
-				Client->OnSessionStateChanged.AddDynamic(this, &UACETerrainPresenterComponent::HandleLogout);
-			}
-		}
-		// Stream landblocks off the packet path. Enter-world ObjectCreate floods used to call
-		// SyncAroundCell (and EnsureLoaded) mid-datagram — that froze the game thread before
-		// any frame could render. 0.1s drain is plenty for progressive load/unload.
-		World->GetTimerManager().SetTimer(RetryTimerHandle, this, &UACETerrainPresenterComponent::RetrySyncIfNeeded, 0.1f, true);
-	}
+	// Stream off the packet path, with one application budget per retry frame.
+	EnsureTerrainStreamingSubscriptions();
 	EnsureAmbientScripts();
 }
 
@@ -1062,14 +1047,18 @@ void UACETerrainPresenterComponent::EnsureTerrainStreamingSubscriptions()
 			}
 			if (Client)
 			{
-				Client->OnEnteredWorld.AddDynamic(this, &UACETerrainPresenterComponent::HandleEnteredWorld);
-				Client->OnPositionUpdate.AddDynamic(this, &UACETerrainPresenterComponent::HandlePositionUpdate);
-				Client->OnSessionStateChanged.AddDynamic(this, &UACETerrainPresenterComponent::HandleLogout);
+				Client->OnEnteredWorld.AddUniqueDynamic(this, &UACETerrainPresenterComponent::HandleEnteredWorld);
+				Client->OnPositionUpdate.AddUniqueDynamic(this, &UACETerrainPresenterComponent::HandlePositionUpdate);
+				Client->OnSessionStateChanged.AddUniqueDynamic(this, &UACETerrainPresenterComponent::HandleLogout);
 			}
 		}
 		if (!World->GetTimerManager().IsTimerActive(RetryTimerHandle))
 		{
-			World->GetTimerManager().SetTimer(RetryTimerHandle, this, &UACETerrainPresenterComponent::RetrySyncIfNeeded, 0.1f, true);
+			// Do not replay missed polling intervals after a hitch. LScape updates
+			// residency for the current load point; catch-up drains multiply our
+			// per-frame upload budget without discovering a new destination.
+			World->GetTimerManager().SetTimer(RetryTimerHandle, this, &UACETerrainPresenterComponent::RetrySyncIfNeeded,
+            0.1f, FTimerManagerTimerParameters{.bLoop = true, .bMaxOncePerFrame = true});
 		}
 	}
 }

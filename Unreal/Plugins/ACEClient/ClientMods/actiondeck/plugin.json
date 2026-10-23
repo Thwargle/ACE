@@ -3,8 +3,8 @@
   "id": "actiondeck",
   "name": "Action Deck",
   "short_name": "DECK",
-  "version": "1.0.0",
-  "description": "A movable 36-slot item, spell and attack bar. Optional hotkey override, per-character bindings and automatic replacement of depleted inventory items.",
+  "version": "1.1.0",
+  "description": "A movable 36-slot item, spell, attack and chat macro bar with an optional fourth row for 48 slots. Custom macro icons and delays, optional hotkey override, per-character bindings and automatic replacement of depleted inventory items.",
   "permissions": [],
   "presentation": {"controls": "none", "settings": false, "status": false, "scroll": false}
 }

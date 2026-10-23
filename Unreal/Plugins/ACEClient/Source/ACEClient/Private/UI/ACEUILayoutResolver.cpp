@@ -129,7 +129,13 @@ namespace
 		}
 		if (Obj->TryGetNumberField(TEXT("zLevel"), Num))
 		{
-			Out->ZLevel = static_cast<uint32>(Num);
+			// UIRegion::AddChild / DrawChildren paint larger retail depths first.
+			// Convert at the DAT boundary, retaining higher-is-front for runtime
+			// floaties and overlays. JSON exports signed depths as uint32 (e.g.
+			// tooltip depth -1 is 4294967295); widen before negating to avoid overflow.
+			const int64 ExportedDepth = static_cast<int64>(Num);
+			const int64 RetailDepth = ExportedDepth > MAX_int32 ? ExportedDepth - (1ll << 32) : ExportedDepth;
+			Out->ZLevel = -RetailDepth;
 		}
 		if (Obj->TryGetNumberField(TEXT("drawMode"), Num))
 		{
@@ -373,7 +379,7 @@ namespace
 				UACEUIElementManager::ApplyFloatyResizeLayout(Panel);
 			}
 		}
-		// MainChat is z=600; raise exam/panel so they are not buried under chat where they overlap.
+		// Raise exam/panel above the initial DAT window stack where they overlap.
 		if (Examination.IsValid() && Examination->ZLevel < 700)
 		{
 			Examination->ZLevel = 700;

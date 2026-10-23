@@ -32,6 +32,11 @@
 #include "Misc/Paths.h"
 #include "ProfilingDebugging/TraceAuxiliary.h"
 #include "UnrealClient.h"
+#include "Dat/ACEWorldTextureMipProvider.h"
+#include "UObject/UObjectIterator.h"
+#include "HAL/PlatformMemory.h"
+#include "RHI.h"
+#include "Scalability.h"
 
 // Retail ACE weenie 43592; the model/effect inputs are shared by the rendered
 // Frozen Valley benchmark and the lifecycle regression below.
@@ -282,6 +287,21 @@ public:
    Run->CastingSeconds>0?Run->CastingSeconds:Run->Wasps.IsEmpty()?30.f:60.f);
  }
 private:
+ void LogResources(const TCHAR* Phase) const
+ {
+  int32 Providers=0;int64 RetainedBytes=0,AllocatedBytes=0;
+  for(TObjectIterator<UACEWorldTextureMipProvider> It;It;++It)
+  {
+   if(!IsValid(*It))continue;
+   ++Providers;RetainedBytes+=It->GetRetainedBytes();AllocatedBytes+=It->GetRetainedAllocatedBytes();
+  }
+  const auto Memory=FPlatformMemory::GetStats();
+  const auto Quality=Scalability::GetQualityLevels();
+  UE_LOG(LogTemp,Display,TEXT("ACE PerfScene resources %s: mip_providers=%d payload=%.2f MiB allocated=%.2f MiB process_physical=%.2f MiB process_virtual=%.2f MiB system_available=%.2f MiB RHI_textures=%.2f MiB texture_quality=%d shadow_quality=%d effects_quality=%d"),
+   Phase,Providers,RetainedBytes/1048576.,AllocatedBytes/1048576.,Memory.UsedPhysical/1048576.,Memory.UsedVirtual/1048576.,Memory.AvailablePhysical/1048576.,
+   (GRHIGlobals.StreamingTextureMemorySizeInKB+GRHIGlobals.NonStreamingTextureMemorySizeInKB)/1024.,Quality.TextureQuality,Quality.ShadowQuality,Quality.EffectsQuality);
+  for(const auto& Line:ACEFrameDiagnostics::Describe(World.Get(),0))UE_LOG(LogTemp,Display,TEXT("ACE PerfScene diagnostics %s: %s"),Phase,*Line);
+ }
  TWeakObjectPtr<UWorld> World;
  TWeakObjectPtr<ACameraActor> Camera;
  FVector CameraOrigin=FVector::ZeroVector;
@@ -671,6 +691,7 @@ private:
     GEngine->Exec(World.Get(),*FString::Printf(TEXT("Trace.File \"%s\" cpu,gpu,frame,bookmark"),*TracePath));
    }
    UE_LOG(LogTemp,Display,TEXT("ACE PerfScene sampling %s"),*Scene);
+   LogResources(TEXT("sample_start"));
    return true;
   }
   if(bSampling)
@@ -701,6 +722,7 @@ private:
    UE_LOG(LogTemp,Display,TEXT("ACE PerfScene movement %s"),*Motion);
   }
   GEngine->Exec(World.Get(),TEXT("Trace.Stop"));
+  LogResources(TEXT("sample_end"));
   FString CSV=TEXT("frame,wall_ms\n");double Total=0;
   for(int32 I=0;I<Frames.Num();++I){Total+=Frames[I];CSV+=FString::Printf(TEXT("%d,%.6f\n"),I,Frames[I]);}
   FFileHelper::SaveStringToFile(CSV,*(Directory/TEXT("frames.csv")));

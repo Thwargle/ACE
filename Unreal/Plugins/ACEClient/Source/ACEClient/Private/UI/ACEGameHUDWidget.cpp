@@ -2933,6 +2933,7 @@ void UACEGameHUDWidget::RefreshSkillsUI()
 	{
 		Signature = HashCombine(Signature, GetTypeHash(Sk.SkillId));
 		Signature = HashCombine(Signature, GetTypeHash(Sk.Current));
+		Signature = HashCombine(Signature, GetTypeHash(Sk.GetDisplayBase()));
 		Signature = HashCombine(Signature, GetTypeHash(Sk.Ranks));
 		Signature = HashCombine(Signature, GetTypeHash(Sk.XpSpent));
 		Signature = HashCombine(Signature, GetTypeHash(Sk.AdvancementClass));
@@ -3004,7 +3005,8 @@ void UACEGameHUDWidget::RefreshSkillsUI()
 
 		UTextBlock* ValueText = WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
 		ValueText->SetText(FText::AsNumber(Sk.Current));
-		ValueText->SetColorAndOpacity(FSlateColor(GoldColor));
+		const int32 Modifier = Sk.GetDisplayModifier();
+		ValueText->SetColorAndOpacity(FSlateColor(Modifier > 0 ? FLinearColor::Green : Modifier < 0 ? FLinearColor::Red : HUDTextColor));
 		ValueText->SetVisibility(ESlateVisibility::HitTestInvisible);
 		FSlateFontInfo ValueFont = ValueText->GetFont();
 		ValueFont.Size = 10;
@@ -3018,7 +3020,7 @@ void UACEGameHUDWidget::RefreshSkillsUI()
 
 		UACEHoverTooltipWidget::SetWidgetTooltip(RowBtn, FText::FromString(FString::Printf(
 			TEXT("%s — base %d, %d ranks, %d XP spent\nClick to select, then raise with unassigned XP."),
-			!Sk.Name.IsEmpty() ? *Sk.Name : *DatName, Sk.InitLevel, Sk.Ranks, Sk.XpSpent)));
+			!Sk.Name.IsEmpty() ? *Sk.Name : *DatName, Sk.GetDisplayBase(), Sk.Ranks, Sk.XpSpent)));
 		if (UScrollBoxSlot* RowSlot = Cast<UScrollBoxSlot>(SkillsScroll->AddChild(RowBtn)))
 		{
 			RowSlot->SetPadding(FMargin(0.f, 1.f));

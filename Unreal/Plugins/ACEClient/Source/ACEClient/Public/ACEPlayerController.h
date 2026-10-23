@@ -32,6 +32,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 {
 	GENERATED_BODY()
 	friend class FACEPerformanceScene;
+	friend class FACERemoteTurnTargetsTest;
 	friend class FACEWaspNetworkLagTest;
 	friend class FACEDungeonInterfacesTest;
 	friend class FACECollisionSizingTest;

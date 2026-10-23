@@ -1,5 +1,30 @@
 # Retail parity regression tests
 
+## Toolbar icon depth (2026-10-23)
+
+Run `ACE.RetailParity.SelectionToolbar`, `ACE.RetailParity.UIScreens`,
+`ACE.RetailParity.UIInteractions`, and `ACE.RetailParity.Housing` with rendering
+and retail DATs. SelectionToolbar checks all six panel buttons above the end
+trim, compares opaque rim pixels with/without trim in normal and selected
+states at 100%, 150%, and 200% UI scale, and checks clicks on those rim pixels.
+It also verifies the unsigned JSON representation of retail tooltip depth -1.
+The other suites exercise window stacking, controls, clipping, and input after
+the common DAT-to-canvas depth conversion.
+
+## Permanent augmentation presentation (2026-10-23)
+
+Run `ACE.RetailParity.CharacterStats`, `ACE.RetailParity.AugmentationStats`,
+`ACE.RetailParity.Augmentations`, and `ACE.RetailParity.UIScreens` with the retail
+DATs and rendering enabled. AugmentationStats covers permanent gains across
+untrained, trained, and specialized skills, live property changes/removal,
+attribute-derived buffs, direct buffs/debuffs, multiplicative penalties, vitae,
+expiry, and repeated refreshes. UIScreens checks the actual neutral row colors
+and absent bonus suffix for Jack of All Trades and specialized luminance, then
+positive/negative spell and vitae indicators. Raw equipment requirement values
+and the retail post-enchantment augmentation order must remain unchanged.
+This presentation deliberately treats all permanent gains as the unbuffed
+baseline rather than reproducing retail's raw-versus-current UI comparison.
+
 ## Character-selection button masks (2026-10-21)
 
 Run `ACE.RetailParity.CharacterButtonMasks`, `ACE.RetailParity.CharacterManagement`,
@@ -48,13 +73,21 @@ Run alongside `ACE.RetailParity.TooltipWidget`. Comparison captures are saved as
 ## Action Deck display options and target timers (2026-10-21)
 
 Run `ACE.Plugins.ActionDeck` with rendering enabled. It covers pinned toolbar
-visibility, settings persistence and character isolation, independent native
+collapse without moving slots, hidden-control hit testing, Quick-show, right-click
+unpinning and settings toggling, and a macro's footer appearing only while running
+and collapsing without reserved space after completion or Stop. It also
+checks settings persistence and character isolation, independent native
 spell/combat bar suppression and restoration, and real DAT debuff/DoT durations
 through session cast and chat confirmation events with UCM disabled. It checks
 resists, fizzles, refreshes, target changes, death, expiry, object deletion and
-character changes. Render captures include `Saved/ActionDeck-Pinned.png` and
+character changes. Render captures include `Saved/ActionDeck-Pinned.png`,
+`Saved/ActionDeck-PinnedMacro.png`, `Saved/ActionDeck-RightClickSettings.png` and
 `Saved/ActionDeck-TargetTimers.png`. Existing tests still cover keyboard priority,
 inventory availability, native icon composition and foreground dragging.
+The optional fourth-row checks cover legacy three-row profiles, unique Alt
+defaults, saved hidden assignments, released hotkeys, square cells, pinned drops,
+and live custom-shortcut tooltips without moving the cursor. Captures include
+`Saved/ActionDeck-FourRowsSettings.png` and `Saved/ActionDeck-FourRowsPinned.png`.
 
 ## Apostate resonator hand-in (2026-10-20)
 
@@ -1032,3 +1065,70 @@ detects the original white halo and requires it to be absent after preparation.
 torch at those sizes. Run with `ACE.RetailParity.ItemPresentation` (structure
 meters and inventory invalidation) and `ACE.Plugins.ActionDeck` (shared item and
 spell composition). These checks use local retail DAT artwork, not a live server.
+
+### Area loading and retained world textures
+
+`ACE.Rendering.WorldTextureRetention` collects real human, creature and prop
+surfaces from the DATs. It compares runtime mip retention against the former
+LZ4HC encoder and reports CPU time and retained bytes, without asserting a
+machine-dependent timing threshold. Full mip uploads, reduced-detail tails and
+restored full-quality uploads must reproduce every RGBA byte. Tiny and
+incompressible inputs exercise raw retention. Run with `LowEndVideoSettings`,
+`ResolvedAppearanceCache` and `ACE.Packaging.TextureBudget` to check actual GPU
+detail changes, cache lifetime and UI isolation.
+
+For loading profiles, start tracing with `-trace=cpu,frame,bookmark` and an
+absolute `-tracefile` when launching `ace.PerfScene outdoor` or `facility`.
+The fixture's normal 45-second warmup intentionally excludes loading from its
+FPS summary, so use the early trace frames to measure area entry. Compare
+separate fresh `-UserDir` directories, identical scene/settings and no concurrent
+benchmarks. This fixture is offline and does not measure server response time.
+Scopes `ACE_CreateWorldTexture`, `ACE_RetainWorldTextureMip`,
+`ACE_BuildSetupAppearance` and `ACE_ApplySetupParts` separate texture retention
+from geometry and component/material installation.
+
+To isolate steady-state regressions, use `-ACEPerfResolution=2560x1440` (or the
+reported viewport size), `-ACEPerfNoCapture` and fresh per-run `-UserDir` paths.
+The development-only `-ACEPerfLegacyMipCompression` flag restores the previous
+LZ4HC encoder for a same-binary comparison; it does not exist in Shipping and
+does not persist. Resource snapshots at sample start/end include retained CPU
+payload/allocation sizes, process/system memory, RHI texture allocations and
+effective quality levels. Compare the same quality settings, not only the same
+resolution. An offline fixture cannot establish the cause of a live-session
+regression. `/acueperf` also reports effective render settings and whether the
+client is running in editor play, so logs expose overrides of saved preferences.
+
+`ACE.RetailParity.RemoteTurnTargets` replays TurnToObject packets against the
+Pumpkin Buffer's retail motion table. It distinguishes current local prediction,
+current remote physics, stale position echoes, pending teleports/forced positions,
+and targets whose physics body has not spawned. A slow orbit crosses heading
+wrap at 30/60/144/240 FPS and checks each frame against the DAT turn rate. The
+target is sampled once per command, as in retail TargetManager/MoveToManager.
+Run with `RemoteMovementReplay` for position corrections, patrols and stop/death
+transitions.
+
+`ACE.RetailParity.StreamingRetryBudget` injects a 550 ms frame into the real
+terrain retry timer, checks a single drain on recovery and normal subsequent
+progress, then restores subscriptions and checks that position callbacks are not
+duplicated. It isolates residency from asset/IO timing; it is not an FPS benchmark.
+Use `ColdTerrainLoad`, `StreamingCost`, `SpawnSupport`, `WorldEntry`,
+`LoadingTransition`, `StreamingRetirement`, `ArmorDistance`,
+`ACE.Rendering.DeferredWorldAppearance`, `ACE.Rendering.ResolvedAppearanceCache`
+and `ACE.Packaging.LandscapeTextureFidelity` for the related DAT/residency checks.
+
+`ACE.Plugins.ActionDeckMacroSyntax` checks command/wait parsing, CRLF, whitespace,
+argument preservation and validation before any execution. `ACE.Plugins.ActionDeck`
+also exercises macro persistence, hotkeys, minimum delays, portal waits,
+cancellation and single-send recovery after long frames. A private loopback socket
+verifies `/hom` emits mansion recall and `/f` emits fellowship chat; no real
+server is contacted. Rendered modal checks cover Save/Cancel/Escape, validation,
+blocked underlying drops/input, incremental catalog button visibility/identity,
+and recovery at 480×360. Screenshots are saved as
+`Saved/ActionDeck-MacroEditor.png` and `Saved/ActionDeck-MacroEditor-Small.png`.
+
+Packaged Linux DAT fixtures for deferred appearance, selection toolbar, UI
+interactions, world entry and landscape fidelity use `-RetailDatDir=` through
+`ACETestDatDirectory.h`; the Windows install directory is only a default.
+The world-entry fixture uses RGBA32f depth readback supported by Vulkan and
+D3D. Windows scan-code normalization is tested on Windows; other platforms
+feed Unreal keypad keys instead of interpreting Windows VK values as native codes.

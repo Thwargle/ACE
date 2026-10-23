@@ -10,6 +10,8 @@ class ACECLIENT_API UACEWorldTextureMipProvider : public UTextureAllMipDataProvi
     GENERATED_BODY()
 public:
     void AddMip(TConstArrayView<FColor> Pixels);
+    int64 GetRetainedBytes() const;
+    int64 GetRetainedAllocatedBytes() const;
     static void RefreshQuality();
     virtual FStreamableRenderResourceState GetResourcePostInitState(const UTexture* Owner, bool bAllowStreaming) override;
     virtual bool GetInitialMipData(int32 FirstMipToLoad, TArrayView<void*> OutMipData,

@@ -3,6 +3,7 @@
 #include "Mods/ACEPluginStyle.h"
 #include "Mods/ACEPluginIcon.h"
 #include "Mods/ACEActionDeckSubsystem.h"
+#include "Mods/ACEActionDeckLayout.h"
 #include "Mods/ACEPluginOrder.h"
 #include "Widgets/Images/SImage.h"
 #include "Mods/ACEPluginSubsystem.h"
@@ -207,10 +208,16 @@ FVector2D SACEPluginDesktop::DisplaySize(const FWindow& W) const
     }
     auto Size=W.Size;
     if(W.Id==TEXT("actiondeck")&&Host.IsValid())
-        // Three square rows, toolbar/status, frame padding and the resize grip.
+    {
+        const auto* Deck=Host->GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>();
+        const bool Hidden=Host->IsPluginWindowChromeHidden(W.Id);
+        // Square rows, toolbar, frame padding and the resize grip.
+        // Only an active macro adds the status footer.
         // The grip is outside the content area and must not cover the last row.
-        Size.Y=(Size.X-6)*.25+84+(Host->CanManipulatePluginWindow(W.Id)?24:0)
-            +(Host->GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>()->IsConfigOpen()?300:0);
+        Size.Y=(Size.X-6)*Deck->VisibleRows()/UACEActionDeckSubsystem::Columns+68+(Host->CanManipulatePluginWindow(W.Id)?24:0)
+            +(Deck->IsConfigOpen()?300:0)-(Hidden?ACEActionDeckLayout::ToolbarHeight:0)
+            +(Deck->IsMacroRunning()?ACEActionDeckLayout::StatusHeight:0);
+    }
     if(!W.PluginBar&&!W.MapOverlay&&W.Id!=TEXT("waypoint.arrow")&&Host.IsValid()&&Host->IsPluginWindowChromeHidden(W.Id))
         Size.Y=FMath::Max(1.,Size.Y-ACELedger::HeaderHeight);
     return Size;
@@ -220,7 +227,8 @@ void SACEPluginDesktop::Layout(FWindow& W)
     const FVector2D Display=DisplaySize(W);
     const bool HiddenHeader=!W.PluginBar&&!W.MapOverlay&&W.Id!=TEXT("waypoint.arrow")&&Host.IsValid()&&Host->IsPluginWindowChromeHidden(W.Id);
     const bool LockedLedger=HiddenHeader&&!W.LedgerId.IsEmpty();
-    const double HeaderOffset=HiddenHeader?ACELedger::HeaderHeight:0.;
+    const double HeaderOffset=HiddenHeader?ACELedger::HeaderHeight
+        +(W.Id==TEXT("actiondeck")?ACEActionDeckLayout::ToolbarHeight:0):0.;
     // Saved placement describes the expanded window. Remove the header above
     // the content, and clamp against that same footprint in both lock states.
     // Otherwise both collapsing the header and bottom-edge clamping move rows.

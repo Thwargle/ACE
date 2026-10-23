@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "Framework/Application/SlateApplication.h"
 #include "ACEPlayerController.h"
 #include "VR/ACEVRComponent.h"
@@ -98,7 +99,7 @@ bool FACECreatureEscapeTest::RunTest(const FString&)
 {
     FEntryWorld F;
     auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory()))return false;
     const auto Player=FCollisionShape::MakeCapsule(48,91.75);
     FCollisionQueryParams Q(SCENE_QUERY_STAT(CreatureEscape),true);
     for(uint32 Setup:{0x02000964u,0x02000041u,0x02001121u})
@@ -157,7 +158,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPortalPlacementTest,"ACE.RetailParity.Porta
 bool FACEPortalPlacementTest::RunTest(const FString&)
 {
     FEntryWorld F;auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory()))return false;
     auto* Client=F.GI->GetSubsystem<UACEClientSubsystem>();
     auto* PC=F.World->SpawnActor<AACEPlayerController>();PC->Client=Client;F.World->AddController(PC);
     auto* Pawn=F.World->SpawnActor<APawn>();auto* Capsule=NewObject<UCapsuleComponent>(Pawn);
@@ -233,7 +234,7 @@ bool FACEPortalMotionTest::RunTest(const FString&)
 {
     FEntryWorld F;
     auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!TestTrue(TEXT("Retail DAT opens"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+    if(!TestTrue(TEXT("Retail DAT opens"),Dat->LoadDatDirectory(ACETestDatDirectory())))return false;
     auto* Client=F.GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
     auto* PC=F.World->SpawnActor<AACEPlayerController>();PC->Client=Client;F.World->AddController(PC);
     auto* Pawn=F.World->SpawnActor<APawn>();auto* Root=NewObject<USceneComponent>(Pawn);
@@ -329,7 +330,7 @@ bool FACEPortalDropTest::RunTest(const FString&)
     {
         FEntryWorld F;
         auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
-        if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+        if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
         auto AddWaterArrivals=[&](uint32 Block,float X,float Y,const TCHAR* GroundName,const TCHAR* DropName)
         {
             Dat->GetOrBuildLandblockMesh(Block,100);
@@ -365,7 +366,7 @@ bool FACEPortalDropTest::RunTest(const FString&)
     {
         FEntryWorld F;
         auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
-        if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+        if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
         auto* Client=F.GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
         F.World->SetGameMode(FURL(nullptr,TEXT("/Game/Test?game=/Script/Engine.GameModeBase"),TRAVEL_Absolute));
         auto* GM=F.World->GetAuthGameMode();
@@ -505,7 +506,7 @@ bool FACEShoushiGapTest::RunTest(const FString&)
 {
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     auto Spawn=[&](uint32 Guid,uint32 Setup,FVector Location,FQuat Rotation,uint32 Type) {
         FACEWorldObject O;O.Guid=Guid;O.SetupId=Setup;O.ItemType=Type;
         O.bHasPosition=true;O.Position.CellId=0xDA55001D;O.Position.Location=Location;
@@ -554,7 +555,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERadarArtTest,"ACE.RetailParity.RadarArt",
 bool FACERadarArtTest::RunTest(const FString&)
 {
     FEntryWorld Fixture;auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     auto* Resources=Dat->GetUiResources();
     for(uint32 Image=1;Image<=12;++Image) {
         const uint32 Id=Resources->ResolveTargetIndicatorId(Image);
@@ -593,7 +594,7 @@ bool FACEStreamingRetirementTest::RunTest(const FString&)
 {
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     Dat->EnsureLoaded();
     auto* Client=Fixture.GI->GetSubsystem<UACEClientSubsystem>();
     auto Session=Client->GetSession();
@@ -651,7 +652,7 @@ bool FACEPortalRetirementTest::RunTest(const FString&)
 {
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     Dat->EnsureLoaded();Dat->SetWorldStreamingAllowed(false);
     auto* Client=Fixture.GI->GetSubsystem<UACEClientSubsystem>();
     Fixture.World->SetGameMode(FURL(nullptr,TEXT("/Game/Test?game=/Script/Engine.GameModeBase"),TRAVEL_Absolute));
@@ -826,7 +827,7 @@ bool FACELoadingTransitionTest::RunTest(const FString&)
 {
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     Dat->EnsureLoaded();
     auto* Client=Fixture.GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
     auto* PC=Fixture.World->SpawnActor<AACEPlayerController>();PC->Client=Client;
@@ -1011,7 +1012,7 @@ bool FACETerrainPortalRevealTest::RunTest(const FString&)
 {
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if(!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     Dat->EnsureLoaded();
     auto* Owner=Fixture.World->SpawnActor<AActor>();
     auto* Terrain=NewObject<UACETerrainPresenterComponent>(Owner);
@@ -1068,7 +1069,7 @@ bool FACETerrainArrivalTest::RunTest(const FString& Parameters)
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
     const double Start=FPlatformTime::Seconds();
-    if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     Dat->EnsureLoaded();
     // A unique test fingerprint exercises cold disk misses without removing the
     // user's cache. No maintenance is run with this synthetic fingerprint.
@@ -1136,7 +1137,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
 {
     FEntryWorld Fixture;
     auto* Dat = Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if (!Dat || !Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat || !Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     auto* Client = Fixture.GI->GetSubsystem<UACEClientSubsystem>();
     auto Session = Client->GetSession();
     auto* Controller = Fixture.World->SpawnActor<AACEPlayerController>();
@@ -1449,9 +1450,16 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
         // must never turn an orbit key into forward/backward/turn movement.
         for (bool NumLockOn : {false,true}) for (int32 Direction=0;Direction<4;++Direction)
         {
+#if PLATFORM_WINDOWS
             const uint32 Scans[]={0x4B,0x4D,0x48,0x50}, Navigation[]={0x25,0x27,0x26,0x28}, Numpad[]={0x64,0x66,0x68,0x62};
             const uint32 Mapped=FACEKeyboardRouter::NumpadVirtualKey(NumLockOn?Numpad[Direction]:Navigation[Direction],Scans[Direction],false);
             const FKey PhysicalKey=FInputKeyManager::Get().GetKeyFromCodes(Mapped,0);
+#else
+            // Other platform backends already produce Unreal keypad keys.
+            // Windows VK values are unrelated to SDL's native key codes.
+            const FKey KeypadKeys[]={EKeys::NumPadFour,EKeys::NumPadSix,EKeys::NumPadEight,EKeys::NumPadTwo};
+            const FKey PhysicalKey=KeypadKeys[Direction];
+#endif
             Controller->PlayerInput->FlushPressedKeys();PressKey(PhysicalKey);
             Controller->PlayerInput->ProcessInputStack({},.016f,false);
             Pawn->SetActorTransform(StartTransform);Controller->PredictedPose=StartPose;Controller->bHavePredictedPose=true;
@@ -1866,7 +1874,9 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
     auto* DepthCapture=NewObject<USceneCaptureComponent2D>(DepthOwner);
     DepthOwner->SetRootComponent(DepthCapture); DepthCapture->RegisterComponent();
     auto* DepthTarget=NewObject<UTextureRenderTarget2D>(DepthCapture);
-    DepthTarget->RenderTargetFormat=RTF_R32f; DepthTarget->InitAutoFormat(32,32);
+    // Vulkan's FLinearColor readback supports RGBA32f, but not single-channel
+    // R32f. Preserve 32-bit depth precision on both Vulkan and D3D fixtures.
+    DepthTarget->RenderTargetFormat=RTF_RGBA32f; DepthTarget->InitAutoFormat(32,32);
     DepthCapture->TextureTarget=DepthTarget; DepthCapture->CaptureSource=SCS_SceneDepth;
     DepthCapture->bCaptureEveryFrame=false; DepthCapture->bCaptureOnMovement=false; DepthCapture->FOVAngle=10;
     DepthCapture->PrimitiveRenderMode=ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
@@ -1979,7 +1989,7 @@ bool FACERetailPortalSpaceTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Retail UIGlobals fixed-point curve sample"), GetAnimLevel(Pair.Key), Pair.Value);
     FEntryWorld Fixture;
     auto* Dat = Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if (!Dat || !Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat || !Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     auto* Tunnel = Fixture.World->SpawnActor<AACELoadingScreenActor>();
     Tunnel->BeginTunnel();
     const double Deadline = FPlatformTime::Seconds() + 20;

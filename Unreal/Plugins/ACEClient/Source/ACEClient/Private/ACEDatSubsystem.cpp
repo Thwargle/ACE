@@ -4621,6 +4621,7 @@ namespace
 TSharedPtr<const FACEBuiltSetupMesh> UACEDatSubsystem::GetOrBuildSetupAppearanceShared(uint32 SetupId,
  const FACEObjDesc& Appearance, float WorldScale, int32 PlacementId, bool bDistanceLevels)
 {
+ TRACE_CPUPROFILER_EVENT_SCOPE(ACE_BuildSetupAppearance);
  if (!EnsureLoaded() || !Builder || SetupId == 0) return nullptr;
  if (!bDistanceLevels && !Appearance.HasVisualOverrides()) return GetOrBuildSetupMeshShared(SetupId, WorldScale, PlacementId);
  // ObjDesc hashes are accelerators, not identity: compare every field on a hit.
@@ -5032,6 +5033,7 @@ bool UACEDatSubsystem::ApplySetupToProceduralMeshInternal(UProceduralMeshCompone
 
 bool UACEDatSubsystem::ApplySetupParts(const TArray<UProceduralMeshComponent*>& PartMeshes, int32 SetupId, const FACEObjDesc& Appearance, float WorldScale, TArray<FTransform>& OutBindTransforms, uint32& OutDefaultMotionTableId, int32 PlacementId, bool bEnableCollision, float ObjectTranslucency, const FACEBuiltSetupMesh* Prebuilt)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_ApplySetupParts);
 	OutBindTransforms.Reset();
 	OutDefaultMotionTableId = 0;
 

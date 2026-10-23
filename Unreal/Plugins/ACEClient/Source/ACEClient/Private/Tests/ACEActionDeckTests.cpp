@@ -34,14 +34,19 @@
 #include "Components/Border.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
+#include "Components/TextBlock.h"
+#include "Blueprint/WidgetTree.h"
+#include "Slate/SObjectWidget.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Application/IInputProcessor.h"
 #include "Widgets/SVirtualWindow.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Input/SMultiLineEditableTextBox.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SInputKeySelector.h"
+#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/SOverlay.h"
 #include "Slate/WidgetRenderer.h"
 #include "Input/HittestGrid.h"
@@ -113,6 +118,39 @@ bool FACEActionDeckTest::RunTest(const FString&)
     TestTrue(TEXT("Individual key supports a modifier combination"),Deck->SetKey(0,FInputChord(EKeys::F8,true,true,false,false)));
     TestTrue(TEXT("Row modifier changes"),Deck->SetRowModifier(0,4));
     TestEqual(TEXT("Individual chord survives row changes"),Deck->EffectiveKey(0),FInputChord(EKeys::F8,true,true,false,false));
+    TestEqual(TEXT("Custom icon label retains the complete override"),Deck->KeyLabel(0),FString(TEXT("C+S+F8")));
+    {
+        // Load a pre-fourth-row profile, including customized row modifiers.
+        auto Legacy=Deck->ExportState();Legacy->RemoveField(TEXT("fourth_row"));
+        auto LegacyRows=Legacy->GetArrayField(TEXT("rows"));LegacyRows.SetNum(3);Legacy->SetArrayField(TEXT("rows"),LegacyRows);
+        auto LegacySlots=Legacy->GetArrayField(TEXT("slots"));LegacySlots.SetNum(36);Legacy->SetArrayField(TEXT("slots"),LegacySlots);
+        Deck->Reset();Deck->Deserialize(Legacy);
+        TestEqual(TEXT("Legacy profile retains its three-row layout"),Deck->VisibleRows(),3);
+        TestEqual(TEXT("Legacy custom row modifier survives"),Deck->RowModifiers[0],uint8(4));
+        TestEqual(TEXT("Legacy custom key survives"),Deck->KeyLabel(0),FString(TEXT("C+S+F8")));
+        TestFalse(TEXT("Enabling extra row does not steal an existing Alt shortcut"),Deck->SetFourthRowEnabled(true));
+        TestFalse(TEXT("Conflicting optional row stays disabled"),Deck->IsFourthRowEnabled());
+        TestTrue(TEXT("Existing row can free Alt shortcuts"),Deck->SetRowModifier(0,1));
+        TestTrue(TEXT("Fourth row can be enabled"),Deck->SetFourthRowEnabled(true));
+        TestEqual(TEXT("Fourth row defaults to Alt+1"),Deck->KeyLabel(36),FString(TEXT("A+1")));
+        TestEqual(TEXT("Fourth row defaults through Alt+="),Deck->KeyLabel(47),FString(TEXT("A+=")));
+        TestEqual(TEXT("Extra row is drawn above existing rows"),Deck->DisplayRow(36),0);
+        TestEqual(TEXT("Unmodified row remains on the bottom"),Deck->DisplayRow(24),3);
+        for(int32 I=0;I<48;++I)TestEqual(TEXT("All four rows have distinct usable keys"),Deck->MatchKey(Deck->EffectiveKey(I)),I);
+        Deck->BindAttack(47,false,3);
+        TestTrue(TEXT("Extra slot supports a custom chord"),Deck->SetKey(47,FInputChord(EKeys::F10,false,true,true,false)));
+        auto Expanded=Deck->ExportState();Deck->Reset();Deck->Deserialize(Expanded);
+        TestTrue(TEXT("Fourth row setting survives save/load"),Deck->IsFourthRowEnabled());
+        TestEqual(TEXT("Fourth row custom hint survives save/load"),Deck->KeyLabel(47),FString(TEXT("C+A+F10")));
+        TestTrue(TEXT("Fourth row action survives save/load"),Deck->Slot(47).Action==EACEDeckAction::Melee);
+        Deck->SetFourthRowEnabled(false);
+        TestEqual(TEXT("Hidden row cannot match input"),Deck->MatchKey(Deck->EffectiveKey(47)),INDEX_NONE);
+        TestFalse(TEXT("Hidden row cannot activate"),Deck->Activate(47));
+        auto Hidden=Deck->ExportState();Deck->Reset();Deck->Deserialize(Hidden);Deck->SetFourthRowEnabled(true);
+        TestEqual(TEXT("Hiding and restoring retains extra-row shortcuts"),Deck->KeyLabel(47),FString(TEXT("C+A+F10")));
+        TestTrue(TEXT("Hiding and restoring retains extra-row actions"),Deck->Slot(47).Action==EACEDeckAction::Melee);
+        Deck->Reset();Deck->Deserialize(Legacy);Deck->Save();
+    }
     TestFalse(TEXT("Escape remains available to dismiss UI"),Deck->SetKey(1,FInputChord(EKeys::Escape)));
     TestFalse(TEXT("Mouse/gamepad keys are not accepted as keyboard shortcuts"),UACEActionDeckSubsystem::ValidKey(EKeys::LeftMouseButton));
     FACEWorldObject Self;Self.Guid=1234;Self.bIsPlayer=true;Self.ItemType=ACEItemType::Creature;S.WorldObjects.Add(Self.Guid,Self);
@@ -284,7 +322,7 @@ bool FACEActionDeckTest::RunTest(const FString&)
     };
     auto Grid=Find(Content,TEXT("ActionDeck.Grid"));
     if(!TestTrue(TEXT("Deck grid exists"),Grid.IsValid()))return false;
-    auto Point=[&](int32 I){const auto& G=Grid->GetCachedGeometry();return G.LocalToAbsolute(FVector2D((I%12+.5)*G.GetLocalSize().X/12,(I/12+.5)*G.GetLocalSize().Y/3));};
+    auto Point=[&](int32 I){const auto& G=Grid->GetCachedGeometry();return G.LocalToAbsolute(FVector2D((I%12+.5)*G.GetLocalSize().X/12,(Deck->DisplayRow(I)+.5)*G.GetLocalSize().Y/Deck->VisibleRows()));};
     {
         auto ReadPixels=[&]
         {
@@ -626,6 +664,137 @@ bool FACEActionDeckTest::RunTest(const FString&)
         FImageUtils::PNGCompressImageArray(900,700,Pixels,PNG);
         FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/Name));
     };
+    {
+        const auto BeforeMacros=Deck->ExportState();
+        const FString Script=TEXT("/hom\n/wait 30000\n/f \"I'm home.\"");
+        auto CountAction=[&](uint32 Opcode)
+        {
+            int32 Count=0;
+            for(const auto& Pair:S.CachedC2SPackets)
+            {FACEBinaryReader R(Pair.Value.Payload);R.Skip(16);
+                if(R.ReadUInt32()!=ACEOpcode::GameAction)continue;R.ReadUInt32();
+                if(R.ReadUInt32()==Opcode)++Count;}
+            return Count;
+        };
+        S.CachedC2SPackets.Reset();
+        TestTrue(TEXT("Macro can replace a slot and keep its current hotkey"),Deck->BindMacro(24,TEXT("Home"),0x06004CF7,Script,0,Deck->EffectiveKey(24)));
+        TestEqual(TEXT("Saving a macro never executes it"),S.CachedC2SPackets.Num(),0);
+        auto Saved=Deck->ExportState();Deck->ClearSlot(24);Deck->Deserialize(Saved);
+        TestEqual(TEXT("Multiline script survives persistence"),Deck->Slot(24).MacroText,Script);
+        TestEqual(TEXT("Chosen icon survives persistence"),Deck->Slot(24).Item.Icon,0x06004CF7);
+        TestEqual(TEXT("Macro keeps default-key inheritance"),Deck->Slot(24).CustomKey,false);
+        TestFalse(TEXT("Invalid edit leaves saved macro intact"),Deck->BindMacro(24,TEXT("Bad"),0x06004CF7,TEXT("/hom\n/wait no"),0,Deck->EffectiveKey(24)));
+        TestEqual(TEXT("Failed validation did not alter the macro"),Deck->Slot(24).MacroText,Script);
+        TestFalse(TEXT("Macro editor rejects another slot's key"),Deck->BindMacro(24,TEXT("Home"),0x06004CF7,Script,0,Deck->EffectiveKey(25)));
+        Deck->ConfigOpen=false;Slate.ClearKeyboardFocus();
+        S.bUseBusy=true; // Chat macros do not require a combat stance or idle equipment.
+        TestTrue(TEXT("Macro hotkey dispatches"),Deck->HandleKey(Deck->EffectiveKey(24),false));
+        TestEqual(TEXT("/hom uses native mansion recall action"),CountAction(ACEGameAction::TeleToMansion),1);
+        TestEqual(TEXT("Fellowship message is initially withheld"),CountAction(ACEGameAction::ChatChannel),0);
+        Frame();Frame();
+        TestTrue(TEXT("Running macro shows its status row"),Find(Content,TEXT("ActionDeck.Status"))->GetVisibility().IsVisible());
+        const double Due=Deck->MacroDue;
+        TestTrue(TEXT("30,000 milliseconds schedules approximately 30 seconds"),Due-FPlatformTime::Seconds()>29.8&&Due-FPlatformTime::Seconds()<=30.);
+        TestTrue(TEXT("Held hotkey is consumed"),Deck->HandleKey(Deck->EffectiveKey(24),true));
+        TestEqual(TEXT("Held hotkey does not repeat recall"),CountAction(ACEGameAction::TeleToMansion),1);
+        TestFalse(TEXT("Second activation cannot interleave another macro"),Deck->Activate(24));
+        Deck->AdvanceMacro(Due-.001);
+        TestEqual(TEXT("Delay does not send early"),CountAction(ACEGameAction::ChatChannel),0);
+        PC->bWorldRevealActive=true;Deck->AdvanceMacro(Due+1);
+        TestTrue(TEXT("Recall portal space preserves pending macro"),Deck->IsMacroRunning());
+        TestEqual(TEXT("No chat send during portal loading"),CountAction(ACEGameAction::ChatChannel),0);
+        PC->bWorldRevealActive=false;
+        Entry->SetText(FText::FromString(TEXT("Unfinished player message")));Slate.SetKeyboardFocus(Entry);
+        const auto TypingFocus=Slate.GetKeyboardFocusedWidget();
+        TestTrue(TEXT("Macro fixture has active text entry"),ACEInputBindings::IsTextEntryFocused());
+        Deck->AdvanceMacro(Due+1);
+        TestFalse(TEXT("Macro completes after delay and portal arrival"),Deck->IsMacroRunning());
+        Frame();Frame();
+        TestTrue(TEXT("Completed macro collapses its status row"),Find(Content,TEXT("ActionDeck.Status"))->GetVisibility()==EVisibility::Collapsed);
+        TestEqual(TEXT("Exactly one fellowship message sent"),CountAction(ACEGameAction::ChatChannel),1);
+        for(const auto& Pair:S.CachedC2SPackets)
+        {
+            FACEBinaryReader R(Pair.Value.Payload);R.Skip(16);
+            if(R.ReadUInt32()!=ACEOpcode::GameAction)continue;R.ReadUInt32();
+            if(R.ReadUInt32()!=ACEGameAction::ChatChannel)continue;
+            TestEqual(TEXT("/f routes to fellowship, not local speech"),R.ReadUInt32(),ACEChatChannel::Fellow);
+            TestEqual(TEXT("Fellowship receives exactly the native command arguments"),R.ReadString16L(),FString(TEXT("\"I'm home.\"")));
+        }
+        TestEqual(TEXT("Timed command preserves unfinished typed chat"),Entry->GetText().ToString(),FString(TEXT("Unfinished player message")));
+        TestTrue(TEXT("Timed command does not steal typing focus"),Slate.GetKeyboardFocusedWidget()==TypingFocus);
+        Slate.ClearKeyboardFocus();
+        for(int32 StopReason=0;StopReason<4;++StopReason)
+        {
+            TestTrue(TEXT("Macro restarts explicitly"),Deck->Activate(24));
+            S.CachedC2SPackets.Reset();const double Deadline=Deck->MacroDue;
+            if(StopReason==0)Deck->StopMacro();
+            if(StopReason==1)(*Plugin)->Enabled=false;
+            if(StopReason==2)S.State=EACESessionState::CharacterSelect;
+            if(StopReason==3)S.PlayerGuid=5678;
+            Deck->AdvanceMacro(Deadline+60);
+            TestFalse(TEXT("Stop, disable, logout and character changes cancel pending sends"),Deck->IsMacroRunning());
+            TestEqual(TEXT("Cancelled macros send no delayed messages"),S.CachedC2SPackets.Num(),0);
+            (*Plugin)->Enabled=true;S.State=EACESessionState::InWorld;S.PlayerGuid=Self.Guid;
+        }
+        TestTrue(TEXT("Command spacing can be configured"),Deck->BindMacro(24,TEXT("Paced"),0x06004CF7,TEXT("/f one\n/f two\n/f three"),1000,Deck->EffectiveKey(24)));
+        S.CachedC2SPackets.Reset();Deck->Activate(24);const double Spaced=Deck->MacroDue;
+        Deck->AdvanceMacro(Spaced-.001);TestEqual(TEXT("Spacing keeps adjacent sends apart"),CountAction(ACEGameAction::ChatChannel),1);
+        Deck->AdvanceMacro(Spaced+100);TestEqual(TEXT("Long frames never burst every queued send"),CountAction(ACEGameAction::ChatChannel),2);
+        Deck->StopMacro();
+
+        // Exercise the actual modal through its controls, and render its layout.
+        Deck->BindMacro(24,TEXT("Home"),0x06004CF7,Script,0,Deck->EffectiveKey(24));
+        S.CachedC2SPackets.Reset();Deck->OpenMacroEditor(24);Frame();Frame();
+        auto Modal=Find(Content,TEXT("ActionDeck.Macro.Editor"));
+        if(!TestTrue(TEXT("Macro editor opens above the viewport"),Modal.IsValid()))return false;
+        auto MacroName=StaticCastSharedPtr<SEditableTextBox>(Find(Content,TEXT("ActionDeck.Macro.Name")));
+        auto MacroCommands=StaticCastSharedPtr<SMultiLineEditableTextBox>(Find(Content,TEXT("ActionDeck.Macro.Commands")));
+        TestEqual(TEXT("Editing loads multiline commands"),MacroCommands->GetText().ToString(),Script);
+        TestFalse(TEXT("Modal prevents direct deck activation"),Deck->Activate(24));
+        TestFalse(TEXT("Modal lets its key selector receive shortcuts"),Deck->HandleKey(Deck->EffectiveKey(24),false));
+        TestFalse(TEXT("Modal blocks inventory drops into the deck"),Deck->DropAt(Point(35),Spare.Guid));
+        MacroName->SetText(FText::FromString(TEXT("Unsaved name")));
+        StaticCastSharedPtr<SButton>(Find(Content,TEXT("ActionDeck.Macro.Cancel")))->SimulateClick();Frame();
+        TestFalse(TEXT("Cancel dismisses the editor"),Deck->IsMacroEditorOpen());
+        TestEqual(TEXT("Cancel preserves the stored macro"),Deck->Slot(24).Item.Name,FString(TEXT("Home")));
+        Deck->OpenMacroEditor(24);Frame();Frame();
+        MacroCommands=StaticCastSharedPtr<SMultiLineEditableTextBox>(Find(Content,TEXT("ActionDeck.Macro.Commands")));
+        MacroCommands->SetText(FText::FromString(TEXT("/hom\n/wait typo")));
+        StaticCastSharedPtr<SButton>(Find(Content,TEXT("ActionDeck.Macro.Save")))->SimulateClick();Frame();
+        TestTrue(TEXT("Invalid script stays open with a validation message"),Deck->IsMacroEditorOpen());
+        MacroCommands->SetText(FText::FromString(Script));
+        StaticCastSharedPtr<SButton>(Find(Content,TEXT("ActionDeck.Macro.AllIcons")))->SimulateClick();
+        for(int32 I=0;I<8;++I)Frame();
+        auto IconGrid=Find(Content,TEXT("ActionDeck.Macro.IconGrid"));
+        auto FirstIcon=IconGrid->GetChildren()->GetChildAt(0)->GetChildren()->GetChildAt(0);
+        TestTrue(TEXT("Catalog exposes an icon button"),FirstIcon->GetTag().ToString().StartsWith(TEXT("ActionDeck.Macro.Icon.")));
+        TestTrue(TEXT("Catalog icons are laid out and visible"),FirstIcon->GetCachedGeometry().GetLocalSize().X>30&&FirstIcon->GetCachedGeometry().GetLocalSize().Y>30);
+        for(int32 I=0;I<6;++I)Frame();
+        TestTrue(TEXT("Catalog growth preserves visible icon buttons"),FirstIcon==IconGrid->GetChildren()->GetChildAt(0)->GetChildren()->GetChildAt(0));
+        StaticCastSharedRef<SButton>(FirstIcon)->SimulateClick();Frame();Frame();
+        const uint32 PickedIcon=FCString::Strtoui64(*FirstIcon->GetTag().ToString().Right(8),nullptr,16);
+        Screenshot(TEXT("ActionDeck-MacroEditor.png"));
+        // The modal scales down independently of the user's deck size.
+        Window->Resize(FVector2D(480,360));
+        for(int32 I=0;I<3;++I){++GFrameCounter;Renderer.DrawWindow(Target,Window->GetHittestGrid(),Window,1.f,FVector2D(480,360),.016f);FlushRenderingCommands();}
+        auto SaveButton=Find(Content,TEXT("ActionDeck.Macro.Save"));
+        const auto& SaveGeometry=SaveButton->GetCachedGeometry();
+        const FVector2D Bottom=SaveGeometry.GetAbsolutePosition()+SaveGeometry.GetAbsoluteSize();
+        TestTrue(TEXT("Save remains on-screen at a small resolution"),Bottom.X<=480&&Bottom.Y<=360&&SaveGeometry.GetAbsoluteSize().Y>10);
+        Screenshot(TEXT("ActionDeck-MacroEditor-Small.png"));
+        Window->Resize(FVector2D(900,700));Frame();Frame();
+        StaticCastSharedPtr<SEditableTextBox>(Find(Content,TEXT("ActionDeck.Macro.Name")))->SetText(FText::FromString(TEXT("Home recall")));
+        StaticCastSharedPtr<SButton>(Find(Content,TEXT("ActionDeck.Macro.Save")))->SimulateClick();Frame();
+        TestFalse(TEXT("Valid Save closes the modal"),Deck->IsMacroEditorOpen());
+        TestEqual(TEXT("Save updates the chosen slot"),Deck->Slot(24).Item.Name,FString(TEXT("Home recall")));
+        TestEqual(TEXT("Save retains the icon picked from the catalog"),uint32(Deck->Slot(24).Item.Icon),PickedIcon);
+        TestEqual(TEXT("Opening, editing and saving never sends a command"),S.CachedC2SPackets.Num(),0);
+        Deck->OpenMacroEditor(24);Frame();
+        Modal=Find(Content,TEXT("ActionDeck.Macro.Editor"));
+        Modal->OnPreviewKeyDown(Modal->GetCachedGeometry(),FKeyEvent(EKeys::Escape,FModifierKeysState(),0,false,0,0));
+        TestFalse(TEXT("Escape cancels the modal"),Deck->IsMacroEditorOpen());
+        Deck->Deserialize(BeforeMacros);Deck->Notice.Empty();Deck->Save();Deck->Refresh(true);S.bUseBusy=false;Frame();Frame();
+    }
     Screenshot(TEXT("ActionDeck-Bar.png"));
     {
         TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);
@@ -635,6 +804,16 @@ bool FACEActionDeckTest::RunTest(const FString&)
     }
     const auto Gear=StaticCastSharedPtr<SButton>(Find(Content,TEXT("ActionDeck.Settings")));
     if(!TestTrue(TEXT("Settings gear exists"),Gear.IsValid()))return false;
+    // Collapsing the toolbar suppresses child visibility updates in Slate.
+    // Test the effective hit path, not a child's cached visibility attribute.
+    auto ControlIsHitTestable=[&](const TSharedPtr<SWidget>& Control)
+    {
+        const auto& Geometry=Control->GetCachedGeometry();
+        const auto At=Geometry.LocalToAbsolute(Geometry.GetLocalSize()*.5f);
+        const auto Path=Slate.LocateWindowUnderMouse(At,{Window},false,0);
+        for(int32 I=0;I<Path.Widgets.Num();++I)if(Path.Widgets[I].Widget==Control)return true;
+        return false;
+    };
     Gear->SimulateClick();Frame();Frame();Screenshot(TEXT("ActionDeck-Settings.png"));
     const auto Selector=StaticCastSharedPtr<SInputKeySelector>(Find(Content,TEXT("ActionDeck.Key")));
     if(!TestTrue(TEXT("Per-slot key selector exists"),Selector.IsValid()))return false;
@@ -668,34 +847,124 @@ bool FACEActionDeckTest::RunTest(const FString&)
     Dock->Move(TEXT("actiondeck"),FVector2D(25,35),true);Frame();Frame();
     TestTrue(TEXT("Moving the window moves the slot hit targets"),Point(35).Equals(BeforeMove+FVector2D(25,35),.1f));
     TestTrue(TEXT("Moved grid accepts drops"),Deck->DropAt(Point(35),Spare.Guid));
+    const FVector2D BeforePin=Point(35);
     Host->SetPluginWindowPinned(TEXT("actiondeck"),true);Frame();Frame();
     TestTrue(TEXT("Pin locks the window"),Host->IsPluginWindowPinned(TEXT("actiondeck")));
+    TestTrue(TEXT("Collapsing pinned chrome preserves slot positions"),Point(35).Equals(BeforePin,.1f));
     TestTrue(TEXT("Pinned frame hides but bar still occupies three rows"),Grid->GetCachedGeometry().GetLocalSize().Y>0);
     const FVector2D LockedPoint=Point(35);
     Dock->Move(TEXT("actiondeck"),FVector2D(100,100),true);
     Dock->Resize(TEXT("actiondeck"),FVector2D(100,100),true);Frame();Frame();
     TestTrue(TEXT("Locked deck cannot move or resize"),Point(35).Equals(LockedPoint,.1f));
     TestTrue(TEXT("Locked deck still accepts item assignments"),Deck->DropAt(Point(35),Spare.Guid));
-    TestTrue(TEXT("Pinned deck hides override and lock controls"),Find(Content,TEXT("ActionDeck.Override"))->GetVisibility()==EVisibility::Collapsed
-        &&Find(Content,TEXT("ActionDeck.Lock"))->GetVisibility()==EVisibility::Collapsed);
-    TestTrue(TEXT("Pinned deck hides its settings gear"),Gear->GetVisibility()==EVisibility::Collapsed);
+    TestFalse(TEXT("Pinned override cannot receive clicks"),ControlIsHitTestable(Find(Content,TEXT("ActionDeck.Override"))));
+    TestFalse(TEXT("Pinned lock cannot receive clicks"),ControlIsHitTestable(Find(Content,TEXT("ActionDeck.Lock"))));
+    TestFalse(TEXT("Pinned settings gear cannot receive clicks"),ControlIsHitTestable(Gear));
+    auto Toolbar=Find(Content,TEXT("ActionDeck.Toolbar"));
+    auto Status=Find(Content,TEXT("ActionDeck.Status"));
+    TestTrue(TEXT("Pinned deck collapses the whole empty toolbar"),Toolbar->GetVisibility()==EVisibility::Collapsed);
+    TestTrue(TEXT("Idle pinned deck collapses the bottom information line"),Status->GetVisibility()==EVisibility::Collapsed);
+    TestFalse(TEXT("Idle macro Stop button cannot receive clicks"),ControlIsHitTestable(Find(Content,TEXT("ActionDeck.StopMacro"))));
     Screenshot(TEXT("ActionDeck-Pinned.png"));
+    {
+        const auto BeforeMacro=Deck->ExportState();
+        const auto IdleSize=Dock->DisplaySize(Dock->Windows[TEXT("actiondeck")]);
+        Deck->BindMacro(0,TEXT("Pinned macro"),0x06004CF7,TEXT("/wait 60000\n/f done"),0,Deck->EffectiveKey(0));
+        TestTrue(TEXT("Pinned macro can start"),Deck->Activate(0));Frame();Frame();
+        auto Stop=StaticCastSharedPtr<SButton>(Find(Content,TEXT("ActionDeck.StopMacro")));
+        TestTrue(TEXT("Pinned macro shows its status row"),Status->GetVisibility().IsVisible());
+        TestTrue(TEXT("Running macro adds only the footer height"),FMath::IsNearlyEqual(
+            Dock->DisplaySize(Dock->Windows[TEXT("actiondeck")]).Y-IdleSize.Y,Status->GetCachedGeometry().GetLocalSize().Y,.1));
+        TestTrue(TEXT("Running macro keeps the pinned top strip collapsed"),Toolbar->GetVisibility()==EVisibility::Collapsed);
+        TestTrue(TEXT("Stop macro remains visible below the grid"),Stop->GetVisibility().IsVisible()
+            &&Stop->GetCachedGeometry().GetAbsolutePosition().Y>=Grid->GetCachedGeometry().GetAbsolutePosition().Y+Grid->GetCachedGeometry().GetAbsoluteSize().Y);
+        Screenshot(TEXT("ActionDeck-PinnedMacro.png"));
+        Stop->SimulateClick();TestFalse(TEXT("Bottom control stops a pinned macro"),Deck->IsMacroRunning());
+        Frame();Frame();
+        TestTrue(TEXT("Stopping collapses the whole footer"),Status->GetVisibility()==EVisibility::Collapsed);
+        TestFalse(TEXT("Stopped macro leaves no clickable Stop button"),ControlIsHitTestable(Stop));
+        TestTrue(TEXT("Stopping removes the footer's reserved space"),Dock->DisplaySize(Dock->Windows[TEXT("actiondeck")]).Equals(IdleSize,.1));
+        Deck->Deserialize(BeforeMacro);Deck->Save();Deck->Refresh(true);Frame();Frame();
+    }
+    {
+        const auto At=Point(3);
+        const auto Path=Slate.LocateWindowUnderMouse(At,{Window},false,0);
+        Slate.RoutePointerDownEvent(Path,FPointerEvent(0,At,At,{EKeys::RightMouseButton},EKeys::RightMouseButton,0,FModifierKeysState()));
+        Slate.RoutePointerUpEvent(Path,FPointerEvent(0,At,At,{},EKeys::RightMouseButton,0,FModifierKeysState()));
+        Frame();Frame();
+        TestFalse(TEXT("Right-click editing unpins the deck"),Host->IsPluginWindowPinned(TEXT("actiondeck")));
+        TestTrue(TEXT("Right-click restores toolbar and settings without Quick-show"),Deck->IsConfigOpen()&&Toolbar->GetVisibility().IsVisible()&&Gear->GetVisibility().IsVisible());
+        auto SlotKey=StaticCastSharedPtr<SInputKeySelector>(Find(Content,TEXT("ActionDeck.Key")));
+        TestEqual(TEXT("Right-click edits the clicked slot"),SlotKey->GetSelectedKey(),Deck->EffectiveKey(3));
+        Screenshot(TEXT("ActionDeck-RightClickSettings.png"));
+        Gear->SimulateClick();Frame();TestFalse(TEXT("Restored gear hides settings"),Deck->IsConfigOpen());
+        Gear->SimulateClick();Frame();TestTrue(TEXT("Restored gear shows settings again"),Deck->IsConfigOpen());
+        Gear->SimulateClick();Host->SetPluginWindowPinned(TEXT("actiondeck"),true);Frame();Frame();
+    }
     C->GetUIElementManager()->SetQuickShowUi(true);Frame();Frame();
-    TestTrue(TEXT("Quick-show reveals all three pinned deck controls"),Gear->GetVisibility().IsVisible()
-        &&Find(Content,TEXT("ActionDeck.Override"))->GetVisibility().IsVisible()
-        &&Find(Content,TEXT("ActionDeck.Lock"))->GetVisibility().IsVisible());
+    TestTrue(TEXT("Quick-show restores the collapsed toolbar"),Toolbar->GetVisibility().IsVisible());
+    TestTrue(TEXT("Quick-show reveals all three pinned deck controls"),ControlIsHitTestable(Gear)
+        &&ControlIsHitTestable(Find(Content,TEXT("ActionDeck.Override")))
+        &&ControlIsHitTestable(Find(Content,TEXT("ActionDeck.Lock"))));
     TestTrue(TEXT("Quick-show does not unpin the deck"),Host->IsPluginWindowPinned(TEXT("actiondeck")));
     Gear->SimulateClick();Frame();Frame();
     TestTrue(TEXT("Revealed settings gear opens configuration while pinned"),Deck->IsConfigOpen());
     Gear->SimulateClick();Frame();Frame();
     C->GetUIElementManager()->SetQuickShowUi(false);Frame();Frame();
-    TestTrue(TEXT("Releasing quick-show hides all pinned deck controls again"),Gear->GetVisibility()==EVisibility::Collapsed
-        &&Find(Content,TEXT("ActionDeck.Override"))->GetVisibility()==EVisibility::Collapsed
-        &&Find(Content,TEXT("ActionDeck.Lock"))->GetVisibility()==EVisibility::Collapsed);
+    TestTrue(TEXT("Releasing quick-show hides all pinned deck controls again"),!ControlIsHitTestable(Gear)
+        &&!ControlIsHitTestable(Find(Content,TEXT("ActionDeck.Override")))
+        &&!ControlIsHitTestable(Find(Content,TEXT("ActionDeck.Lock"))));
     Host->SetPluginWindowPinned(TEXT("actiondeck"),false);Frame();Frame();
     TestTrue(TEXT("Unpin restores the settings gear"),Gear->GetVisibility().IsVisible());
     TestTrue(TEXT("Unpin restores override and lock controls"),Find(Content,TEXT("ActionDeck.Override"))->GetVisibility().IsVisible()
         &&Find(Content,TEXT("ActionDeck.Lock"))->GetVisibility().IsVisible());
+
+    {
+        const auto BeforeExtraRow=Deck->ExportState();
+        Gear->SimulateClick();Frame();Frame();
+        StaticCastSharedPtr<SCheckBox>(Find(Content,TEXT("ActionDeck.FourthRow")))->ToggleCheckedState();
+        Frame();Frame();Frame();
+        TestEqual(TEXT("Settings checkbox enables the fourth row"),Deck->VisibleRows(),4);
+        TestTrue(TEXT("Four-row cells remain square"),FMath::IsNearlyEqual(
+            Grid->GetCachedGeometry().GetAbsoluteSize().X/12,Grid->GetCachedGeometry().GetAbsoluteSize().Y/4,.1));
+        TestTrue(TEXT("Extra top-left slot accepts a backpack"),Deck->DropAt(Point(36),Self.Guid));
+        TestTrue(TEXT("Extra top-right slot accepts an inventory item"),Deck->DropAt(Point(47),Spare.Guid));
+        TestTrue(TEXT("Top-left drop targets the extra row"),Deck->Slot(36).Action==EACEDeckAction::Self);
+        TestEqual(TEXT("Top-right drop targets the extra row"),Deck->Slot(47).Guid,Spare.Guid);
+        // Read the actual native tooltip text; change the binding without moving
+        // the mouse to catch stale hover-text caches, not just label formatting.
+        const auto At=Point(36);
+        Grid->OnMouseMove(Grid->GetCachedGeometry(),FPointerEvent(0,At,At,{},EKeys::Invalid,0,FModifierKeysState()));
+        auto HoverText=[&]()
+        {
+            const auto TipContent=Grid->GetToolTip()->GetContentWidget();
+            if(TipContent->GetTypeAsString()!=TEXT("SObjectWidget"))return FString();
+            auto* Object=StaticCastSharedRef<SObjectWidget>(TipContent)->GetWidgetObject();
+            TArray<UWidget*> Widgets;Object->WidgetTree->GetAllWidgets(Widgets);
+            FString Result;for(auto* Widget:Widgets)if(auto* Label=Cast<UTextBlock>(Widget))Result+=Label->GetText().ToString();
+            return Result;
+        };
+        TestTrue(TEXT("Default Alt chord appears in the hovered icon hint"),HoverText().Contains(Deck->EffectiveKey(36).GetInputText().ToString()));
+        const FInputChord OverrideKey(EKeys::F10,false,true,true,false);
+        TestTrue(TEXT("Extra slot accepts a user-defined override"),Deck->SetKey(36,OverrideKey));
+        TestEqual(TEXT("Icon overlay displays the user-defined key"),Deck->KeyLabel(36),FString(TEXT("C+A+F10")));
+        TestTrue(TEXT("Hovered hint updates without another mouse move"),HoverText().Contains(OverrideKey.GetInputText().ToString()));
+        TestTrue(TEXT("Extra row modifier can change"),Deck->SetRowModifier(3,8));
+        TestTrue(TEXT("Row changes retain custom hover hint"),HoverText().Contains(OverrideKey.GetInputText().ToString()));
+        Deck->SetRowModifier(3,4);Frame();Frame();
+        Screenshot(TEXT("ActionDeck-FourRowsSettings.png"));
+        Gear->SimulateClick();Slate.ClearKeyboardFocus();Frame();Frame();
+        TestTrue(TEXT("Active extra-row assignment reserves its override"),Deck->ReservesKey(OverrideKey));
+        Host->SetPluginWindowPinned(TEXT("actiondeck"),true);Frame();Frame();
+        Screenshot(TEXT("ActionDeck-FourRowsPinned.png"));
+        TestTrue(TEXT("Pinned fourth row accepts drops into its last column"),Deck->DropAt(Point(47),Spare.Guid));
+        Host->SetPluginWindowPinned(TEXT("actiondeck"),false);Frame();Frame();Gear->SimulateClick();Frame();Frame();
+        StaticCastSharedPtr<SCheckBox>(Find(Content,TEXT("ActionDeck.FourthRow")))->ToggleCheckedState();Frame();Frame();
+        TestEqual(TEXT("Settings can return to three rows"),Deck->VisibleRows(),3);
+        TestFalse(TEXT("Hidden extra row releases overridden input"),Deck->ReservesKey(OverrideKey));
+        TestEqual(TEXT("Hiding the fourth row preserves its custom hint"),Deck->KeyLabel(36),FString(TEXT("C+A+F10")));
+        Gear->SimulateClick();Deck->Deserialize(BeforeExtraRow);Deck->Save();Deck->Refresh(true);Frame();Frame();
+    }
 
     // Real DAT layout and binder visibility, including live changes and restore.
     auto* Layout=NewObject<UACEUILayoutResolver>();Layout->Initialize(Dat,Binder->Manager);

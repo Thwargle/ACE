@@ -22,6 +22,7 @@ class ACECLIENT_API AACEWorldEntityActor : public AActor
 	friend class FACEMovementReviewTest;
 	friend class FACERemoteSupportTest;
 	friend class FACERemoteMovementReplayTest;
+	friend class FACERemoteTurnTargetsTest;
 	friend class FACESpawnSupportTest;
 
 public:
@@ -281,7 +282,7 @@ public:
 
 protected:
 	/** Local player position is live; its world-object network echo can be stale. */
-	bool ResolveFacingTarget(int32 TargetGuid, FVector& Location) const;
+	bool ResolveFacingTarget(int32 TargetGuid, FVector& Location, bool bAllowCachedPosition = true) const;
 	bool ResolveMovementTarget(int32 TargetGuid, FVector& Location, float& Radius, float& Height);
 	FVector AdvanceRemoteMoveTo(float Seconds);
 	void SetRemoteLocomotion(float Forward, float Strafe, bool bRunning, float Rate);
