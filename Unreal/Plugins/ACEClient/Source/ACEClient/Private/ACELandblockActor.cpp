@@ -352,6 +352,16 @@ bool AACELandblockActor::IsLandblockReady() const
 	return true;
 }
 
+bool AACELandblockActor::IsPlacementCollisionReady() const
+{
+	if (!IsLandblockReady() || PendingScenery.ContainsByPredicate(
+		[](const FPendingScenery& Item) { return !Item.bRegionDesc; })) return false;
+	TInlineComponentArray<UProceduralMeshComponent*> Meshes(this);
+	for (const auto* Mesh : Meshes)
+		if (Mesh->IsCollisionEnabled() && Mesh->IsCollisionCookPending()) return false;
+	return true;
+}
+
 void AACELandblockActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);

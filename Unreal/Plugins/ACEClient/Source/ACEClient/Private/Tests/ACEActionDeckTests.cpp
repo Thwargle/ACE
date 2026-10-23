@@ -119,7 +119,7 @@ bool FACEActionDeckTest::RunTest(const FString&)
     FACEWorldObject Pack;Pack.Guid=200;Pack.ContainerId=Self.Guid;Pack.ItemType=ACEItemType::Container;S.WorldObjects.Add(Pack.Guid,Pack);
     FACEWorldObject Kit;Kit.Guid=300;Kit.ContainerId=Pack.Guid;Kit.Name=TEXT("Treated Healing Kit");Kit.WeenieClassId=777;
     Kit.ItemType=ACEItemType::Misc;Kit.IconId=0x060013B8;Kit.ObjectDescriptionFlags=0x10000;
-    Kit.Structure=10;Kit.MaxStructure=50;Kit.ItemUseable=0x00300008;Kit.TargetType=ACEItemType::Creature;
+    Kit.Structure=10;Kit.MaxStructure=50;Kit.TargetType=ACEItemType::Creature;
     // Source-owned, target remote-or-self (0x20 | 0x02).
     Kit.ItemUseable=0x00220008;
     S.WorldObjects.Add(Kit.Guid,Kit);
@@ -148,6 +148,17 @@ bool FACEActionDeckTest::RunTest(const FString&)
     S.WorldObjects[Friend.Guid].bDying=true;
     TestEqual(TEXT("Dead player is not a valid heal target"),UACEActionDeckSubsystem::HealingTarget(Spare,Friend.Guid,Self.Guid,S.WorldObjects),Self.Guid);
     S.WorldObjects[Friend.Guid].bDying=false;
+    S.WorldObjects[Friend.Guid].ObjectDescriptionFlags=ACEObjectDescFlag::PlayerKiller;
+    TestEqual(TEXT("Incompatible PK target falls back to self"),UACEActionDeckSubsystem::HealingTarget(Spare,Friend.Guid,Self.Guid,S.WorldObjects),Self.Guid);
+    S.WorldObjects[Friend.Guid]=Friend;
+    S.WorldObjects.Remove(Self.Guid);
+    TestEqual(TEXT("Self heal works while the player's world descriptor is absent"),UACEActionDeckSubsystem::HealingTarget(Spare,0,Self.Guid,S.WorldObjects),Self.Guid);
+    S.WorldObjects.Add(Self.Guid,Self);
+    auto OtherOnly=Spare;OtherOnly.ItemUseable=0x00200008;
+    TestEqual(TEXT("An item that forbids self use does not get a self target"),UACEActionDeckSubsystem::HealingTarget(OtherOnly,0,Self.Guid,S.WorldObjects),0);
+    TestTrue(TEXT("The main backpack binds as a self action"),Deck->BindItem(23,Self.Guid));
+    TestTrue(TEXT("Self selection is ready without a combat stance"),Deck->Availability(23).Ready);
+    TestEqual(TEXT("Self action uses the retail closed backpack icon"),Deck->Slot(23).Item.Icon,0x06004CF7);
 
     auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
     FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");
@@ -198,6 +209,7 @@ bool FACEActionDeckTest::RunTest(const FString&)
     TestTrue(TEXT("Override survives save/load"),Deck->Override);
     TestTrue(TEXT("Hotbar and target timer options survive save/load"),Deck->HideSpellBar&&Deck->HideCombatBar&&Deck->ShowTargetTimers);
     TestEqual(TEXT("Item survives save/load"),Deck->Slot(24).Item.Name,Kit.Name);
+    TestTrue(TEXT("Backpack self action survives save/load"),Deck->Slot(23).Action==EACEDeckAction::Self);
     TestEqual(TEXT("Custom key survives save/load"),Deck->EffectiveKey(0),FInputChord(EKeys::F8,true,true,false,false));
     TestEqual(TEXT("Row modifiers survive save/load"),Deck->RowModifiers[0],uint8(4));
     TestTrue(TEXT("Atomic state save succeeds"),Deck->Save());
@@ -246,10 +258,10 @@ bool FACEActionDeckTest::RunTest(const FString&)
     auto Probe=MakeShared<FDeckInputProbe>();Slate.RegisterInputPreProcessor(Probe);
     ON_SCOPE_EXIT{Slate.UnregisterInputPreProcessor(Probe);};
     Slate.ProcessKeyDownEvent(FKeyEvent(EKeys::Nine,FModifierKeysState(),0,false,0,0));
-    TestEqual(TEXT("Registered deck processor consumes keys before downstream input"),Probe->Keys,0);
+    TestEqual(TEXT("Empty deck binding reaches downstream input"),Probe->Keys,1);
     Deck->Override=false;Slate.ProcessKeyDownEvent(FKeyEvent(EKeys::Nine,FModifierKeysState(),0,false,0,0));
-    TestEqual(TEXT("Override off lets the original input pipeline receive keys"),Probe->Keys,1);Deck->Override=true;
-    TestTrue(TEXT("Empty slot consumes native hotbar shortcut"),Deck->HandleKey(Deck->EffectiveKey(34),false));
+    TestEqual(TEXT("Override off lets the original input pipeline receive keys"),Probe->Keys,2);Deck->Override=true;
+    TestFalse(TEXT("Empty slot leaves native hotbar shortcut available"),Deck->HandleKey(Deck->EffectiveKey(34),false));
     TestTrue(TEXT("Repeated key is consumed without a second action"),Deck->HandleKey(Deck->EffectiveKey(24),true));
     TestFalse(TEXT("Extra modifier cannot trigger a plain binding"),Deck->HandleKey(FInputChord(EKeys::One,true,true,true,false),false));
     Slate.SetKeyboardFocus(Entry);
@@ -437,6 +449,9 @@ bool FACEActionDeckTest::RunTest(const FString&)
     Binder->SpellDragId=1;Binder->SpellDragSourceBarSlot=INDEX_NONE;Binder->bSpellDragActive=Binder->bSpellDragPending=true;
     TestTrue(TEXT("Native spellbook drop is consumed"),Binder->TryFinishSpellDrag(Canvas->GetCachedGeometry().AbsoluteToLocal(Point(33))));
     TestEqual(TEXT("Native spellbook drop binds the spell"),Deck->Slot(33).Spell,1);
+    Binder->InvDragGuid=Self.Guid;Binder->bInvDragActive=Binder->bInvDragPending=true;
+    TestTrue(TEXT("Native main backpack drop is consumed"),Binder->TryFinishInventoryDrag(Canvas->GetCachedGeometry().AbsoluteToLocal(Point(23))));
+    TestTrue(TEXT("Native backpack drop binds self selection"),Deck->Slot(23).Action==EACEDeckAction::Self);
     // Exercise network dispatch against a private loopback socket, never a game server.
     auto* Sockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);auto Address=Sockets->CreateInternetAddr();
     bool IPValid=false;Address->SetIp(TEXT("127.0.0.1"),IPValid);Address->SetPort(0);
@@ -462,6 +477,33 @@ bool FACEActionDeckTest::RunTest(const FString&)
     S.SelectedObject.Guid=Friend.Guid;S.bUseBusy=false;S.CachedC2SPackets.Reset();
     TestTrue(TEXT("Healing kit dispatches on another player"),Deck->Activate(24));
     TestEqual(TEXT("Heal packet targets selected player"),UseTarget(),Friend.Guid);
+    auto ClickSlot=[&](int32 Index)
+    {
+        Frame();const auto At=Point(Index);
+        auto Path=Slate.LocateWindowUnderMouse(At,{Window},false,0);
+        Slate.RoutePointerDownEvent(Path,FPointerEvent(0,At,At,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
+        Slate.RoutePointerUpEvent(Path,FPointerEvent(0,At,At,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
+    };
+    for(int32 Selected:{0,Monster.Guid,Friend.Guid,Spare.Guid,Self.Guid})
+    {
+        S.SelectedObject.Guid=Selected;S.bUseBusy=false;S.CachedC2SPackets.Reset();
+        ClickSlot(24);
+        TestEqual(TEXT("Single kit click sends healing to a friendly player or defaults to self"),UseTarget(),Selected==Friend.Guid?Friend.Guid:Self.Guid);
+        TestEqual(TEXT("Single kit click preserves the selected object"),S.SelectedObject.Guid,Selected);
+        TestEqual(TEXT("Single kit click does not leave a targeting cursor"),Binder->PendingUseWithSourceGuid,0);
+    }
+    S.SelectedObject.Guid=Monster.Guid;S.bUseBusy=true;S.CachedC2SPackets.Reset();
+    ClickSlot(23);
+    TestEqual(TEXT("Backpack click selects self even while busy"),S.SelectedObject.Guid,Self.Guid);
+    TestEqual(TEXT("Selecting self does not use a kit"),UseTarget(),0);
+    S.SelectedObject.Guid=Monster.Guid;S.bUseBusy=false;S.CachedC2SPackets.Reset();
+    Binder->PendingUseWithSourceGuid=Spare.Guid;
+    ClickSlot(23);
+    TestEqual(TEXT("Backpack click completes pending kit use on self"),UseTarget(),Self.Guid);
+    TestEqual(TEXT("Completing pending kit use preserves combat selection"),S.SelectedObject.Guid,Monster.Guid);
+    S.bUseBusy=false;S.CachedC2SPackets.Reset();
+    TestTrue(TEXT("Backpack hotkey is handled"),Deck->HandleKey(Deck->EffectiveKey(23),false));
+    TestEqual(TEXT("Backpack hotkey selects self"),S.SelectedObject.Guid,Self.Guid);
     {
         // Real controller events and native polling must agree with Slate.
         // A downstream probe alone cannot detect a native item being used.
@@ -540,7 +582,8 @@ bool FACEActionDeckTest::RunTest(const FString&)
             BeginInput();S.WorldObjects[Spare.Guid].Structure=0;
             if(Empty)Deck->ClearSlot(24);
             PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::One,IE_Pressed,1.f));Poll();
-            TestTrue(TEXT("Empty or depleted deck slot cannot fall through"),S.CachedC2SPackets.IsEmpty());
+            TestEqual(TEXT("Only empty slots fall through to the native item"),CountAction(ACEGameAction::Use,NativeItem.Guid),Empty?1:0);
+            TestEqual(TEXT("Empty or depleted slot cannot dispatch a heal"),CountAction(ACEGameAction::UseWithTarget,Spare.Guid),0);
         }
         S.WorldObjects[Spare.Guid]=Spare;Deck->BindItem(24,Spare.Guid);
         Deck->SetKey(24,FInputChord(EKeys::F7));

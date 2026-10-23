@@ -8,6 +8,7 @@
 #include "ACEDatSubsystem.h"
 #include "ACEClientSubsystem.h"
 #include "ACEWorldPresenterComponent.h"
+#include "ACETerrainPresenterComponent.h"
 #include "ACESession.h"
 #include "ACEOpcodes.h"
 #include "ACELandblockActor.h"
@@ -303,7 +304,7 @@ void AACEWorldEntityActor::InitializeFromObject(const FACEWorldObject& Object, f
 			SpawnPosition.bHasVelocity = true;
 			SpawnPosition.Velocity = Object.Velocity;
 		}
-		ApplyACEPosition(SpawnPosition);
+		ApplyACEPosition(SpawnPosition, false);
 	}
 	else if (ParentGuid != 0)
 	{
@@ -1379,6 +1380,11 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			const bool bMissile = (PhysicsState & ACEPhysicsState::Missile) != 0;
 			const bool bProp = !bMissile && !bIsPlayer && !(ItemType & ACEItemType::Creature) && !IsCorpse();
 			const bool bNeedsFloor = bProp && (PhysicsState & ACEPhysicsState::Gravity);
+			// Retail enters physics only after SetPosition resolves the resident
+			// cell. A terrain-height fallback is insufficient while an outdoor
+			// pedestal/table or indoor furniture is still being installed.
+			if (bNeedsFloor && PlacementTerrain.IsValid()
+				&& !PlacementTerrain->IsObjectCellCollisionReady(LastAceCellId)) return;
 			float PropGroundZ = 0.f;
 			const bool bPropSupport = bNeedsFloor && TraceGroundZ(RemotePredictLocation, PropGroundZ, true);
 			// Wait for an unloaded room, not for a floor hit. A loaded room may
@@ -1661,9 +1667,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 				// fixed while the body catches it, including after a stop/death.
 				// CMotionInterp::get_adjusted_max_speed is 4 * run rate; it is
 				// independent of the model's walk-cycle velocity and object scale.
-				const float RunRate = uint16(RemoteMotion.ForwardCommand)==7
-					? RemoteMotion.AnimPlayRate : RemoteMotion.MoveToRunRate;
-				const float Speed = 8.f * FMath::Max(0.f,RunRate);
+				const float Speed = 8.f * FMath::Max(0.f,RemoteRunRate);
 				const float Limit = (Speed>.0002f?Speed:7.5f)*WorldScale*Step;
 				RemotePredictLocation = PredictionStart+(RemoteAnchorLocation-PredictionStart).GetClampedToMaxSize(Limit);
 				// Retail replaces the complete animation offset, including rotation.
@@ -1675,17 +1679,18 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			// A swing's live target spacing owns the final displacement.
 			if (StickyDestination.IsSet()) RemotePredictLocation=StickyDestination.GetValue();
 
-			// Clamp runaway drift if UpdateMotion stalls without a correcting F748.
-			const float MaxDriftCm = RemoteMaxExtrapolate * FMath::Max(
-				FMath::Abs(RemoteMotion.ForwardUnitsPerSecond),
-				FMath::Abs(RemoteMotion.StrafeUnitsPerSecond) > KINDA_SMALL_NUMBER
-					? FMath::Abs(RemoteMotion.StrafeUnitsPerSecond)
-					: 4.f) * WorldScale * GetActorScale3D().GetAbsMax();
-			const FVector Drift = RemotePredictLocation - RemoteAnchorLocation;
-			if (!Correcting && !bMoveTo && RemoteMotion.bMoving && !RemoteMotion.IsDeathMotion() && Drift.SizeSquared() > FMath::Square(FMath::Max(MaxDriftCm, 50.f)))
+			// PositionManager applies ConstraintManager after interpolation and
+			// sticky offsets, before collision. It counts requested travel since
+			// the last accepted position, then progressively scales translation.
+			// A radius of "two seconds at this speed" is not retail's constraint:
+			// it freezes slow movers too early and mishandles changes in direction.
+			if (Creature && bRemoteConstrained)
 			{
-				RemotePredictLocation = RemoteAnchorLocation
-					+ Drift.GetSafeNormal() * FMath::Max(MaxDriftCm, 50.f);
+				const float Factor = FMath::Clamp((RemoteConstraintMaxAc-RemoteConstraintTravelAc)
+					/ (RemoteConstraintMaxAc-RemoteConstraintStartAc),0.f,1.f);
+				const FVector Offset = (RemotePredictLocation-PredictionStart)*Factor;
+				RemotePredictLocation = PredictionStart+Offset;
+				RemoteConstraintTravelAc += Offset.Size()/WorldScale;
 			}
 
 			// Grounded packet corrections and locomotion share one collision body.
@@ -2335,7 +2340,7 @@ void AACEWorldEntityActor::ApplyPositionPlacement(int32 PlacementId)
 	}
 }
 
-void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position)
+void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position, bool bPositionEvent)
 {
 	if (bAttachedToParent || ParentGuid != 0)
 	{
@@ -2384,6 +2389,18 @@ void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position)
 		}
 		PendingRemoteLanding.Reset();
 	}
+	// SmartBox::HandleReceivedPosition constrains remote bodies from their
+	// current frame after an accepted MoveOrTeleport, with zero accumulated
+	// travel. CreateObject/appearance descriptors are not new position events.
+	if (Creature && bPositionEvent && Position.bHasContactState)
+	{
+		bRemoteConstrained = true;
+		RemoteConstraintTravelAc = 0.f;
+		const bool Indoor = (uint32(Position.CellId)&0xffffu) >= 0x100u;
+		RemoteConstraintStartAc = Indoor ? 5.f : 10.f;
+		RemoteConstraintMaxAc = Indoor ? 20.f : 50.f;
+	}
+	else if (bSnap) bRemoteConstrained = false;
 	LastRemotePositionAt = FPlatformTime::Seconds();
 	if (bHaveRemotePredict && (NewRotation | RemotePredictRotation) < 0.f)
 	{
@@ -2514,6 +2531,12 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
     else if (!bDeath && RemoteMotion.CurrentStyle != Motion.CurrentStyle)
         RemoteWalkingMotion.Reset();
 	RemoteMotion = Motion;
+	// CMotionInterp::apply_interpreted_movement remembers my_run_rate. Ready,
+	// walking, turning and death do not reset the speed used by interpolation.
+	if (Motion.MovementType == 0 && uint16(Motion.ForwardCommand) == 7)
+		RemoteRunRate = Motion.AnimPlayRate;
+	else if (Motion.MovementType == 6 || Motion.MovementType == 7)
+		RemoteRunRate = Motion.MoveToRunRate;
 	RemoteMoveToPhase = ERemoteMoveToPhase::Begin;
 	// Movement commands queue turning before walking. Do not briefly start a
 	// walk pose (and its entry link) merely because a MoveTo packet arrived.

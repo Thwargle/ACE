@@ -1512,7 +1512,7 @@ struct ACECLIENT_API FACEWorldObject
 	bool IsWieldOnUse() const { return (ObjectDescriptionFlags & ACEObjectDescFlag::WieldOnUse) != 0; }
 	/** Server DropItem rejects Attuned >= Attuned (incl. Sticky). */
 	bool CanDropToWorld() const { return Attuned < 1; }
-	/** Loose world loot — retail hand/F sends PutItemInContainer into the player, not Use. */
+	/** Portable ground object eligible for pickup; containers may also be opened with Use. */
 	bool IsWorldLootable() const
 	{
 		if (Guid == 0 || bIsPlayer || !bHasPosition)

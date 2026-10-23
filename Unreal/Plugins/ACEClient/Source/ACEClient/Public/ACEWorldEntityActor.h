@@ -12,6 +12,7 @@ class UCapsuleComponent;
 class UTextRenderComponent;
 class UACECharacterAppearanceComponent;
 class UACEScriptComponent;
+class UACETerrainPresenterComponent;
 
 /** Visual for an ACE world object — Setup + ObjDesc appearance when DAT files are present. */
 UCLASS()
@@ -21,9 +22,12 @@ class ACECLIENT_API AACEWorldEntityActor : public AActor
 	friend class FACEMovementReviewTest;
 	friend class FACERemoteSupportTest;
 	friend class FACERemoteMovementReplayTest;
+	friend class FACESpawnSupportTest;
 
 public:
 	AACEWorldEntityActor();
+	/** Streaming source that owns the collision needed before gravity can advance. */
+	TWeakObjectPtr<UACETerrainPresenterComponent> PlacementTerrain;
 
 	virtual void Tick(float DeltaTime) override;
 
@@ -35,7 +39,7 @@ public:
 	bool ApplyDatAppearanceFromObject(const FACEWorldObject& Object);
 
 	UFUNCTION(BlueprintCallable, Category = "ACE")
-	void ApplyACEPosition(const FACEPosition& Position);
+	void ApplyACEPosition(const FACEPosition& Position, bool bPositionEvent = true);
 	/** Apply a server placement pose before resolving world contact and selection bounds. */
 	void ApplyPositionPlacement(int32 PlacementId);
 
@@ -242,16 +246,16 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "5.0", ClampMax = "192.0"))
 	float RemoteSnapDistance = 40.f;
 
-	/** Max seconds of free integration away from the last F748 before clamping drift. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "0.0", ClampMax = "2.0"))
-	float RemoteMaxExtrapolate = 2.f;
-
 	/** Signed AC-space degrees/sec at TurnSpeed=1, from the DAT turn modifier. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "-360.0", ClampMax = "360.0"))
 	// UpdateMotion supplies the interpreted multiplier, including Run's 1.5.
 	float RemoteTurnRateDegrees = FMath::RadiansToDegrees(-1.5f);
 	float RemoteWalkSpeedAc = 3.1199999f;
 	float RemoteRunSpeedAc = 4.f;
+	float RemoteRunRate = 1.f; // Last interpreted run rate, retained across stops like retail.
+	bool bRemoteConstrained = false;
+	float RemoteConstraintTravelAc = 0.f;
+	float RemoteConstraintStartAc = 10.f, RemoteConstraintMaxAc = 50.f;
 	float RemoteBackSpeedAc = 1.56f;
 	float RemoteStickySeconds = 0.f;
 	uint32 ApproachTargetSetup = 0;

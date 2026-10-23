@@ -53,6 +53,12 @@ bool UProceduralMeshComponent::UpdateResidentVisibility()
 	if (!bPreferCachedDraws || !GetWorld() || !GetWorld()->IsGameWorld()
 		|| !SceneProxy || IsRenderStateDirty()) return false;
 	const bool bDraw = IsVisible() && !bHiddenInGame && (!GetOwner() || !GetOwner()->IsHidden());
+	// UPrimitiveComponent::SendRenderTransform_Concurrent consumes transform
+	// dirtiness without uploading while hidden. The normal reveal rebuilds the
+	// proxy; this resident path must explicitly resend its current transform and
+	// bounds. Otherwise stationary parts stay at the pre-hide position until
+	// their next animation change, splitting an idle character after a teleport.
+	if (bDraw) MarkRenderTransformDirty();
 	FPrimitiveSceneProxy* Proxy = SceneProxy;
 	ENQUEUE_RENDER_COMMAND(ACEUpdateResidentVisibility)([Proxy, bDraw](FRHICommandListImmediate&)
 	{
@@ -731,6 +737,7 @@ void UProceduralMeshComponent::CreateMeshSection(int32 SectionIndex, const TArra
 
 	// Reset this section (in case it already existed)
 	FProcMeshSection& NewSection = ProcMeshSections[SectionIndex];
+	const bool bHadCollision = NewSection.bEnableCollision;
 	NewSection.Reset();
 
 	// Copy data to vertex buffer
@@ -805,7 +812,9 @@ void UProceduralMeshComponent::CreateMeshSection(int32 SectionIndex, const TArra
 	NewSection.bEnableCollision = bCreateCollision;
 
 	UpdateLocalBounds(); // Update overall bounds
-	UpdateCollision(); // Mark collision as dirty
+	// Visual-only character parts/LODs do not change the physics mesh. Avoid
+	// cooking and recreating a body for every clothing surface during login.
+	if (bHadCollision || bCreateCollision) UpdateCollision();
 	MarkRenderStateDirty(); // New section requires recreating scene proxy
 }
 
@@ -992,19 +1001,22 @@ void UProceduralMeshComponent::ClearMeshSection(int32 SectionIndex)
 {
 	if (SectionIndex < ProcMeshSections.Num())
 	{
+		const bool bHadCollision = ProcMeshSections[SectionIndex].bEnableCollision;
 		ProcMeshSections[SectionIndex].Reset();
 		UpdateLocalBounds();
-		UpdateCollision();
+		if (bHadCollision) UpdateCollision();
 		MarkRenderStateDirty();
 	}
 }
 
 void UProceduralMeshComponent::ClearAllMeshSections()
 {
+	const bool bHadCollision = ProcMeshSections.ContainsByPredicate(
+		[](const FProcMeshSection& Section) { return Section.bEnableCollision; });
 	DistanceLevels.Reset();
 	ProcMeshSections.Empty();
 	UpdateLocalBounds();
-	UpdateCollision();
+	if (bHadCollision) UpdateCollision();
 	MarkRenderStateDirty();
 }
 

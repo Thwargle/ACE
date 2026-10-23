@@ -537,6 +537,33 @@ bool UACETerrainPresenterComponent::IsPlayerCellCollisionReady() const
 
 }
 
+bool UACETerrainPresenterComponent::IsObjectCellCollisionReady(uint32 CellId) const
+{
+	if (!CellId) return false;
+	if (IsIndoorCell(CellId))
+	{
+		const AACEEnvCellActor* Room = SpawnedEnvCells.FindRef(static_cast<int32>(CellId));
+		if (!Room || !Room->IsCollisionCooked() || Room->HasPendingStaticObjects()) return false;
+		TInlineComponentArray<UProceduralMeshComponent*> Meshes(Room);
+		for (const auto* Mesh : Meshes)
+			if (Mesh->IsCollisionEnabled() && Mesh->IsCollisionCookPending()) return false;
+		return true;
+	}
+	const int32 Key = static_cast<int32>(CellId & 0xFFFF0000u);
+	if (TerrainChunkSize > 1)
+	{
+		for (const auto& Pair : SpawnedChunks)
+			if (Pair.Value && Pair.Value->ContainsLandblock(Key) && Pair.Value->IsChunkTerrainReady())
+			{
+				const auto* Land = Pair.Value->FindChildLandblock(Key);
+				return Land && Land->IsPlacementCollisionReady();
+			}
+		return false;
+	}
+	const AACELandblockActor* Land = Spawned.FindRef(Key);
+	return Land && Land->IsPlacementCollisionReady();
+}
+
 bool UACETerrainPresenterComponent::IsPortalPlacementGeometryReady(uint32 DestinationCell, uint32 CandidateCell) const
 {
 	if (!bHasKnownCell || LastKnownCellId != DestinationCell || !IsPlayerCellCollisionReady()) return false;

@@ -11,6 +11,7 @@
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "ACEClientSubsystem.h"
+#include "ACESession.h"
 #include "ACEAppraisalFormatting.h"
 #include "ACEDatSubsystem.h"
 #include "Components/Border.h"
@@ -27,6 +28,8 @@ bool UACEUIGameplayBinder::InspectSpellAt(FVector2D Point)
     auto* Dat = Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr;
     FString Name; uint32 Icon=0;
     if (!Spell || !Dat || !Dat->TryGetSpellInfo(Spell, Name, Icon)) return false;
+    // Retail ExamineSpell ends the outstanding object appraisal cursor wait.
+    if (auto Session=Client->GetSession()) Session->CancelCursorAppraisal();
     ExaminedSpellId = Spell; bExaminationDismissed = false;
     if (ExamScroll) ExamScroll->SetScrollOffset(0.f);
     ShowExamination(true); RefreshExaminationOverlay();

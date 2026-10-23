@@ -5,6 +5,7 @@
 #include "Engine/UserInterfaceSettings.h"
 #include "Engine/World.h"
 #include "ACEEnvCellActor.h"
+#include "Dat/ACEWorldTextureMipProvider.h"
 #include "UObject/UObjectIterator.h"
 namespace ACERuntimeOptions
 {
@@ -53,7 +54,10 @@ void Set(const TCHAR* Key,float Value)
 void Apply()
 {
  SoundSettingsFrame=MAX_uint64;
+ UACEWorldTextureMipProvider::RefreshQuality();
  const int32 LightingQuality=FMath::RoundToInt(Get(TEXT("DynamicLightingQuality")));
+ if (auto* C=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.FXLightBudget")))
+  C->Set(FMath::RoundToInt(Get(TEXT("EffectLightLimit"))),ECVF_SetByGameSetting);
  if(AppliedDynamicLightingQuality!=LightingQuality)
  {
   AppliedDynamicLightingQuality=LightingQuality;
@@ -100,6 +104,10 @@ uint32 ChatFontId()
 float DesktopUIScale(FIntPoint Size,bool bVR)
 {
  if (bVR || Size.X<=0 || Size.Y<=0) return 1.f;
+ // A small/unsupported display mode must still expose the complete interface
+ // so Escape -> Options can recover it. Do not persist this emergency scale.
+ const float MinimumFit=FMath::Min(Size.X/800.f,Size.Y/600.f);
+ if (MinimumFit<1.f) return FMath::Max(.01f,MinimumFit);
  // Whole quarter steps, with room for the complete native 800x600 interface.
  const float Fit=FMath::Max(1.f,FMath::FloorToFloat(FMath::Min(Size.X/800.f,Size.Y/600.f)*4.f)/4.f);
  return FMath::Min(FMath::RoundToFloat(Get(TEXT("DesktopUIScale"))*4.f)/4.f,Fit);

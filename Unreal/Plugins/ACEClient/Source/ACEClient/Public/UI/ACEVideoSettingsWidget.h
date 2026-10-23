@@ -35,16 +35,20 @@ public:
  bool HasPendingChanges() const;
  float GetPreviewFieldOfView() const;
  UFUNCTION() void ChangeFieldOfView(float Value);
+ UFUNCTION() void ChangeQuality(FString Value, ESelectInfo::Type SelectionType);
  UFUNCTION() UWidget* GenerateOption(FString Option);
  UFUNCTION() void ChangeMouseTurnSpeed(float Value);
  UFUNCTION() void ResetMouseTurnSpeed();
  UFUNCTION() void ChangeCursorScale(float Value);
+ UFUNCTION() void ChangeObjectGlow(bool bEnabled);
  UFUNCTION() void ChangeScreenBrightness(float Value);
+ UFUNCTION() void ChangeEffectLightLimit(float Value);
  UFUNCTION() void ChangeScreenContrast(float Value);
  float GetScrollOffset() const;
  float GetScrollEnd() const;
  void SetScrollOffset(float Offset);
 private:
+ bool LoadingSettings=false;
  int32 InitialQuality = 0;
  int32 ObservedWindowMode = -1;
  FIntPoint ObservedResolution = FIntPoint::ZeroValue;
@@ -72,6 +76,7 @@ private:
  UPROPERTY() TObjectPtr<UTextBlock> CursorScaleLabel;
  UPROPERTY() TObjectPtr<UTextBlock> FieldOfViewLabel;
  UPROPERTY() TObjectPtr<UTextBlock> ScreenBrightnessLabel;
+ UPROPERTY() TObjectPtr<UTextBlock> EffectLightLimitLabel;
  UPROPERTY() TObjectPtr<UTextBlock> ScreenContrastLabel;
  UPROPERTY() TObjectPtr<UComboBoxString> ChatFontFace;
  UPROPERTY() TObjectPtr<UComboBoxString> ChatFontSize;

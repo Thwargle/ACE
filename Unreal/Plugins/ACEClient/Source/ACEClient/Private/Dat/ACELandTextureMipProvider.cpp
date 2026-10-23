@@ -34,16 +34,6 @@ UTexture2D* UACELandTextureMipProvider::CreateTexture(UObject* Outer, FACETerrai
     return Texture;
 }
 
-FStreamableRenderResourceState UACELandTextureMipProvider::GetResourcePostInitState(const UTexture*, bool)
-{
-    FStreamableRenderResourceState State;
-    if (!Blend) return State;
-    const int32 Count=LandMipCount(Blend->Width,Blend->Height);
-    State.MaxNumLODs=State.NumNonStreamingLODs=State.NumNonOptionalLODs=Count;
-    State.NumResidentLODs=State.NumRequestedLODs=Count;
-    return State;
-}
-
 bool UACELandTextureMipProvider::GetInitialMipData(int32 FirstMipToLoad, TArrayView<void*> OutMipData,
     TArrayView<int64> OutMipSize, FStringView)
 {

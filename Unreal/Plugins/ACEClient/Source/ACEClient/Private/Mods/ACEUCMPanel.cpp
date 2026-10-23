@@ -589,6 +589,7 @@ namespace ACEUCMPanelPrivate
                 Add(Toggle(TEXT("fast_cast_buffs"),TEXT("Fast buff movement"),TEXT("Shorten eligible buff recoil with a backward press-and-release in one update. The tap does not move your character or wait for a server reply to release."),true));
                 Add(Toggle(TEXT("auto_buffs"),TEXT("Choose buffs automatically"),TEXT("Turn off only when using a manually authored buff list."),true));
                 BuffDifficultyControls();
+                Add(Toggle(TEXT("item_buffs_enabled"),TEXT("Item enchantment buffs"),TEXT("Maintain item-magic buffs, including armor banes and weapon auras. Turning this off also excludes manually selected item spells."),true));
                 Slider(TEXT("refresh_seconds"),TEXT("Rebuff before expiry"),10,300,300,Accent,TEXT(" sec"));
                 Add(Text(TEXT("Refreshes before timers expire; nearby expirations are grouped during a buff cycle. Saved refresh settings are preserved."),14,Muted));
                 Add(Toggle(TEXT("idle_buff_topoff"),TEXT("Refresh buffs while idle"),TEXT("Tops up buffs after combat and looting when no target is nearby.")));

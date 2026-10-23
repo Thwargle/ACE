@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Components/PointLightComponent.h"
 #include "Misc/ScopeExit.h"
 #include "HAL/IConsoleManager.h"
 #include "Engine/Engine.h"
@@ -194,6 +195,16 @@ bool FACESceneryParticleLightingTest::RunTest(const FString&)
         if (FX->ActiveEmitters[0].Particles.IsEmpty()) FX->SpawnParticle(FX->ActiveEmitters[0]);
         FX->TickParticleLights(); Lights->RefreshLights(.05f); FX->TickParticleLights(true);
         TestTrue(TEXT("Spell and portal control illumination survives"), CountLights(Owner) > 0);
+        if(Setup==0x020001B3u)
+        {
+            auto* Light=Lights->FindParticleLight(FX,FX->ActiveEmitters[0].InstanceId);
+            if(TestNotNull(TEXT("Portal has an environmental light"),Light))
+            {
+                TestEqual(TEXT("Portal illumination extends nine metres"),Light->AttenuationRadius,900.f);
+                const auto Color=Light->GetLightColor();
+                TestTrue(TEXT("Portal hue is not dimmed by transparent texture padding"),FMath::Max3(Color.R,Color.G,Color.B)>.98f);
+            }
+        }
         // Switching an existing component to an excluded environment must also hide pooled lights.
         FX->InitializeForEnvironment(100); FX->TickParticleLights(); FX->TickParticleLights(true);
         TestFalse(TEXT("Environment initialization disables effect illumination"), FX->bAllowInferredParticleLights);

@@ -1045,9 +1045,19 @@ bool UACEUIGameplayBinder::TryHandleModalPopupClick(FVector2D Absolute)
 		}
 		return true;
 	}
-	if (!bChatTargetPopupOpen) return false;
-	TryHandleChatTargetPopupClick(Absolute);
-	return true; // The dismissing click also belongs to the popup.
+	if (bChatTargetPopupOpen)
+	{
+		TryHandleChatTargetPopupClick(Absolute);
+		return true; // The dismissing click also belongs to the popup.
+	}
+	if (bVendorFilterDropdownOpen)
+	{
+		// Match the popup's paint priority before the canvas starts any underlying
+		// scrollbar/item drag. Outside clicks dismiss without activating controls.
+		TryHandleVendorFilterDropdownClick(Absolute);
+		return true;
+	}
+	return false;
 }
 
 bool UACEUIGameplayBinder::TryHandleChatTargetPopupClick(FVector2D Absolute)

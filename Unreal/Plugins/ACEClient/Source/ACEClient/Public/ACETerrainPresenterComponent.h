@@ -24,6 +24,7 @@ UCLASS(ClassGroup = (ACE), meta = (BlueprintSpawnableComponent))
 class ACECLIENT_API UACETerrainPresenterComponent : public UActorComponent
 {
 	GENERATED_BODY()
+	friend class FACESpawnSupportTest;
 	friend class FACERetailInteriorStreamingTest;
 	friend class FACEFortTethStairsTest;
 	friend class FACEMansionEdgesTest;
@@ -161,6 +162,8 @@ public:
 	 */
 	UFUNCTION(BlueprintPure, Category = "ACE")
 	bool IsPlayerCellCollisionReady() const;
+	/** Physics entry waits for this cell's terrain, room and authored supporting props. */
+	bool IsObjectCellCollisionReady(uint32 CellId) const;
 	/** Confirms the requested destination (not the previous cell) and its placement geometry. */
 	bool IsPortalPlacementGeometryReady(uint32 DestinationCell, uint32 CandidateCell = 0) const;
 	/** Current indoor cell draw + stab scenery (portal reveal / enter-world). */

@@ -7,6 +7,7 @@
 #include "ACESpellbookFilters.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIResourceResolver.h"
+#include "UI/ACEUIElementManager.h"
 
 void UACEUIGameplayBinder::HandleSpellLearned(int32 SpellId)
 {
@@ -116,6 +117,11 @@ void UACEUIGameplayBinder::SetCombatSpellBar(int32 Tab)
 	if (!Client || Tab < 0 || Tab >= 8) return;
 	SyncSpellTabSelection();
 	Client->SetActiveSpellBar(Tab);
+	// Tab selection is presentation only; reapplying magic stance here sends
+	// ChangeCombatMode and interrupts the server's current spell.
+	if (Manager) for (int32 I = 0; I < 8; ++I)
+		Manager->SetElementVisibleByName(FString::Printf(TEXT("Spellcasting_Bank%d"), I + 1),
+			CombatMode == int32(ACECombatMode::Magic) && I == Tab);
 	SyncSpellTabSelection();
 	SyncSpellcastTabChrome();
 	RefreshSpellHotbarOverlays();

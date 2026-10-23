@@ -32,7 +32,7 @@ namespace
     {
         const auto Effect=Ready?ESlateDrawEffect::None:ESlateDrawEffect::DisabledEffect;
         const FLinearColor Tint=Ready?FLinearColor::White:FLinearColor(.36f,.36f,.36f,1);
-        if(Slot.Action==EACEDeckAction::Item)
+        if(Slot.Action==EACEDeckAction::Item||Slot.Action==EACEDeckAction::Self)
         {
             FSlateDrawElement::MakeBox(Out,Layer,G.ToPaintGeometry(),Theme.ItemImage(Slot.Item,false),Effect,Tint);
             FSlateDrawElement::MakeBox(Out,Layer+1,G.ToPaintGeometry(),Theme.ItemImage(Slot.Item,true),Effect,Tint);
@@ -280,7 +280,7 @@ public:
             .Visibility_Lambda([this]{return Host->IsPluginWindowChromeHidden(TEXT("actiondeck"))?EVisibility::Collapsed:EVisibility::Visible;})
             .Selected_Lambda([this]{return Deck->Override;})
             .Text_Lambda([this]{return FText::FromString(Deck->Override?TEXT("Override: On"):TEXT("Override: Off"));})
-            .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Reserve deck keys while this window is open. Empty and disabled slots also block native hotbars. Typing always takes priority."))))
+            .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Reserve keys for assigned slots while this window is open. Empty slots use native hotbars; depleted or disabled assignments keep their keys. Typing always takes priority."))))
             .OnClicked_Lambda([this]{Deck->Override=!Deck->Override;Deck->Save();return FReply::Handled();})];
         Toolbar->AddSlot().AutoWidth().Padding(4,0)[SNew(SACEPluginTab).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).Tag(TEXT("ActionDeck.Lock")).FontSize(12)
             .Visibility_Lambda([this]{return Host->IsPluginWindowChromeHidden(TEXT("actiondeck"))?EVisibility::Collapsed:EVisibility::Visible;})
@@ -411,7 +411,7 @@ private:
             Body->AddSlot().AutoHeight()[Attacks];
         }
         Body->AddSlot().AutoHeight().Padding(0,4)[SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",12))
-            .AutoWrapText(true).Text(FText::FromString(TEXT("Click a slot above to edit it. Drag items from inventory and spells from the spellbook or spell bar. Drag between deck slots to swap. Settings pause deck actions; Override still blocks native hotbars.")))];
+            .AutoWrapText(true).Text(FText::FromString(TEXT("Click a slot above to edit it. Drag inventory items, your main backpack to target self, or spells from the spellbook or spell bar. Drag between deck slots to swap. Settings pause deck actions; Override reserves assigned slots only.")))];
         Body->AddSlot().AutoHeight()[Button(TEXT("Restore default keys"),[this]
         {
             Deck->RowModifiers[0]=1;Deck->RowModifiers[1]=2;Deck->RowModifiers[2]=0;

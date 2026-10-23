@@ -51,19 +51,31 @@ bool FACEParticleBlendTest::RunTest(const FString&)
         UTexture* Texture=nullptr; Material->GetTextureParameterValue(TEXT("ACETexture"),Texture);
         auto* Image=Cast<UTexture2D>(Texture);
         if(!TestNotNull(TEXT("Reported glow has DAT pixels"),Image)) return false;
-        const auto* Pixels=static_cast<const FColor*>(Image->GetPlatformData()->Mips[0].BulkData.LockReadOnly());
+        TArray<void*> Uploads;Uploads.SetNumZeroed(Image->GetNumMips());
+        TArray<int64> UploadSizes;UploadSizes.SetNumZeroed(Uploads.Num());
+        ON_SCOPE_EXIT {for(void* Upload:Uploads)FMemory::Free(Upload);};
+        if(!TestTrue(TEXT("Runtime sprite source can be uploaded again"),Image->GetInitialMipData(0,Uploads,UploadSizes)))return false;
+        const auto* Pixels=static_cast<const FColor*>(Uploads[0]);
         int32 NonOpaque=0, AlphaMismatches=0;
         for(int32 I=0;I<Surface.Width*Surface.Height;++I)
         {
             NonOpaque+=Pixels[I].A!=255;
             AlphaMismatches+=Pixels[I].A!=Surface.Pixels[I].A;
         }
-        Image->GetPlatformData()->Mips[0].BulkData.Unlock();
         if(Id==0x08000990 || Id==0x08000992)
             TestEqual(TEXT("Retail ONE/ONE sword sprite does not multiply unused file alpha"),NonOpaque,0);
         else TestEqual(TEXT("Retail SRCALPHA/ONE portal and Emissary preserve authored alpha"),AlphaMismatches,0);
     }
     if(!FApp::CanEverRender()) { AddInfo(TEXT("GPU blend checks require RenderOffscreen")); return true; }
+
+    // The numerical oracle needs full HDR precision. Medium effects quality
+    // uses a packed scene buffer whose additive rounding accumulates over
+    // four layers, even when the capture target itself is FloatRGBA.
+    auto* SceneFormat=IConsoleManager::Get().FindConsoleVariable(TEXT("r.SceneColorFormat"));
+    const int32 PreviousFormat=SceneFormat->GetInt();
+    const auto PreviousFormatPriority=static_cast<EConsoleVariableFlags>(SceneFormat->GetFlags()&ECVF_SetByMask);
+    SceneFormat->Set(4,ECVF_SetByCode);
+    ON_SCOPE_EXIT {SceneFormat->ClearFlags(ECVF_SetByMask);SceneFormat->Set(PreviousFormat,PreviousFormatPriority);};
 
     auto* Owner=World->SpawnActor<AActor>();
     auto* Capture=NewObject<USceneCaptureComponent2D>(Owner); Capture->RegisterComponent();

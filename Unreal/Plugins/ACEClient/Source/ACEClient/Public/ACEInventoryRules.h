@@ -101,6 +101,13 @@ namespace ACEInventoryRules
         return Object.IsOpenable() || Object.ItemsCapacity != 0 || Object.ContainersCapacity != 0;
     }
 
+    // ItemHolder::DetermineUseResult opens portable containers on Use. Being
+    // eligible for an explicit pickup does not make pickup their default action.
+    inline bool IsWorldPickupOnUse(const FACEWorldObject& Object)
+    {
+        return Object.IsWorldLootable() && !IsContainer(Object);
+    }
+
     inline EACEOwnedItemUse DetermineOwnedUse(const FACEWorldObject& Object, int32 PlayerGuid)
     {
         // Own equipped objects fall through the outer test to PlaceInBackpack.

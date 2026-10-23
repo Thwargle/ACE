@@ -19,9 +19,10 @@ inline constexpr FOption Values[] = {
  {TEXT("ChatFontFace"),TEXT("Chat Font"),2,0,4},
  {TEXT("ChatFontSize"),TEXT("Chat Font Size"),1,0,4},
  {TEXT("CursorScale"),TEXT("Cursor size"),1,.5f,3},
- {TEXT("ObjectGlow"),TEXT("Highlight selected and hovered objects"),1,0,1},
+ {TEXT("ObjectGlow"),TEXT("Custom object highlighting"),1,0,1},
  {TEXT("ConstrainUIWindows"),TEXT("Keep UI windows on screen"),1,0,1},
- {TEXT("DynamicLightingQuality"),TEXT("Dynamic lights"),2,0,2}
+ {TEXT("DynamicLightingQuality"),TEXT("Dynamic lights"),2,0,2},
+ {TEXT("EffectLightLimit"),TEXT("Effect light limit"),8,0,64}
 };
 ACECLIENT_API float Get(const TCHAR* Key);
 ACECLIENT_API void Set(const TCHAR* Key, float Value);

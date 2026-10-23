@@ -1207,9 +1207,10 @@ void UACECharacterAppearanceComponent::SetLocomotionInput(float Forward, float S
 	// CMotionTable replaces the previous cyclic sequence at its starting frame.
 	// This applies to forward movement as well as sidesteps: repeated short nav
 	// segments otherwise spend most of their travel blending out of idle.
-	auto Direction = [](float F, float R) -> int8
+	auto Direction = [bInterpretedRate](float F, float R) -> int8
 	{
 		if (FMath::IsNearlyZero(F) && FMath::IsNearlyZero(R)) return 0;
+		if (bInterpretedRate && !FMath::IsNearlyZero(F)) return F > 0.f ? 1 : -1;
 		return FMath::Abs(R) > FMath::Abs(F) ? (R > 0.f ? 2 : -2) : (F > 0.f ? 1 : -1);
 	};
 	const int8 NewDirection = Direction(Forward, Strafe);
@@ -2473,7 +2474,11 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 	{
 		bWasLocomotionMoving = true;
 	}
-	const bool bForwardDominant = FMath::Abs(LocomotionForward) + KINDA_SMALL_NUMBER >= FMath::Abs(LocomotionStrafe);
+	// A received forward substate owns the cyclic animation. Retail's sidestep
+	// modifier adds velocity; its magnitude does not replace that forward pose.
+	const bool bForwardDominant = bLocomotionInterpretedRate
+		? !FMath::IsNearlyZero(LocomotionForward)
+		: FMath::Abs(LocomotionForward) + KINDA_SMALL_NUMBER >= FMath::Abs(LocomotionStrafe);
 	const float TargetRunBlend = bMoving && bForwardDominant && LocomotionForward > 0.f && bLocomotionRunning ? 1.f : 0.f;
 	RunBlend = FMath::FInterpTo(RunBlend, TargetRunBlend, DeltaTime, 5.f);
 

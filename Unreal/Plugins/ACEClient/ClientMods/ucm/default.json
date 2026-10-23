@@ -24,6 +24,7 @@
     }
   ],
   "auto_buffs": true,
+  "item_buffs_enabled": true,
   "recovery": true,
   "health_threshold": 65,
   "stamina_threshold": 50,

@@ -516,12 +516,19 @@ bool FACERetailRuntimeRegressionTest::RunTest(const FString& Parameters)
     EffectProxy->ApplyPhysicsState(EffectOnly.PhysicsState);
     TestFalse(TEXT("Physics refresh cannot expose an effect-only fallback body"),EffectProxy->Mesh->IsVisible());
     EffectProxy->Destroy();
-    // Prediction must cover a whole second at either 10 FPS or 60 FPS.
+    // Isolate fallback velocity integration from authored DAT start/cycle
+    // tracks (covered by RemoteMovementReplay). Do not discard elapsed time
+    // below 20 FPS, and apply the retail outdoor constraint after a real F748.
     FVector SlowResult, FastResult;
     for (const int32 Frames : {10, 60})
     {
         auto* Walker=World->SpawnActor<AACEWorldEntityActor>();
-        Walker->InitializeFromObject(RemotePlayer,100,false);
+        FACEWorldObject Probe=RemotePlayer; Probe.MotionTableId=0;
+        Walker->InitializeFromObject(Probe,100,false);
+        Walker->bClampToGround=false;
+        Walker->SetActorEnableCollision(false);
+        FACEPosition Position=Probe.Position; Position.bHasContactState=true; Position.bIsGrounded=true;
+        Walker->ApplyACEPosition(Position);
         Walker->RemotePositionSmoothing=100000.f;
         FACEObjectMotionState Walk; Walk.bMoving=true; Walk.Forward=1.f;
         Walk.ForwardUnitsPerSecond=3.f; Walk.ForwardCommand=0x45000005;
@@ -532,18 +539,29 @@ bool FACERetailRuntimeRegressionTest::RunTest(const FString& Parameters)
         FVector Travel=Walker->GetActorLocation()-Start; Travel.Z=0;
         TestTrue(TEXT("Network movement consumes the complete elapsed second"),FMath::IsNearlyEqual(Travel.Size(),300.,1.));
         if (Frames==10) SlowResult=Travel; else FastResult=Travel;
-        for (int32 Frame=0; Frame<Frames*4; ++Frame) Walker->Tick(1.f/Frames);
-        TestTrue(TEXT("Missing motion updates cannot extrapolate a remote fifty metres away"),
-            FVector::Dist2D(Walker->GetActorLocation(),Start)<=801.);
-        FACEPosition Correction=RemotePlayer.Position; Correction.Location.X+=2; Correction.Location.Y+=1;
+        double ExpectedTravelAc=3.;
+        for (int32 Frame=0; Frame<Frames*4; ++Frame)
+        {
+            ExpectedTravelAc += 3./Frames*FMath::Clamp((50.-ExpectedTravelAc)/40.,0.,1.);
+            Walker->Tick(1.f/Frames);
+        }
+        TestTrue(TEXT("Missing positions progressively constrain travel at retail outdoor distances"),
+            FMath::IsNearlyEqual(FVector::Dist2D(Walker->GetActorLocation(),Start),ExpectedTravelAc*100.,.1));
+        FACEPosition Correction=Position; Correction.Location.X+=2; Correction.Location.Y+=1;
         Walker->ApplyACEPosition(Correction);
         Walker->ApplyMotionState(FACEObjectMotionState());
+        const FVector BeforeCorrection=Walker->GetActorLocation();
         Walker->Tick(.1f);
         // Corrections have a retail speed limit independent of the smoothing
         // coefficient. A large correction must converge, not snap in 100 ms.
-        for(int32 I=0; I<Frames; ++I) Walker->Tick(1.f/Frames);
-        TestTrue(TEXT("Stop and authoritative correction settle on the remote wire position"),
-            FVector::Dist2D(Walker->GetActorLocation(),Correction.ToUnrealLocation(100))<.1);
+        TestTrue(TEXT("Correction starts at the retail speed bound without snapping"),
+            FMath::IsNearlyEqual(FVector::Dist(BeforeCorrection,Walker->GetActorLocation()),80.,.1));
+        for(int32 I=0; I<Frames*3; ++I) Walker->Tick(1.f/Frames);
+        const double CorrectionError=FVector::Dist2D(Walker->GetActorLocation(),Correction.ToUnrealLocation(100));
+        AddInfo(FString::Printf(TEXT("%d FPS final position correction error: %.4f cm"),Frames,CorrectionError));
+        // InterpolationManager completes within 0.05 AC units, not bit-exactly
+        // at the packet position. Enforce the same 5 cm completion tolerance.
+        TestTrue(TEXT("Stop and authoritative correction settle within retail position tolerance"),CorrectionError<=5.);
         Walker->Destroy();
     }
     TestTrue(TEXT("Remote movement agrees across slow and fast rendering"),SlowResult.Equals(FastResult,1.));
@@ -618,12 +636,25 @@ bool FACERetailRuntimeRegressionTest::RunTest(const FString& Parameters)
             if (TestNotNull(TEXT("Creature texture"),Image))
             {
                 TestEqual(TEXT("Appearance patch edges clamp instead of sampling opposite face edge"),int32(Image->AddressX),int32(TA_Clamp));
-                auto& Bulk=Image->GetPlatformData()->Mips[0].BulkData;
-                const FColor* Pixels=static_cast<const FColor*>(Bulk.LockReadOnly());
-                uint8 MaximumAlpha=0;
-                for (int32 I=0;I<Image->GetSizeX()*Image->GetSizeY();++I) MaximumAlpha=FMath::Max(MaximumAlpha,Pixels[I].A);
-                Bulk.Unlock();
-                TestEqual(TEXT("Half-transparent creature retains opaque source texels"),int32(MaximumAlpha),255);
+                // Runtime world textures retain compressed mip data in their
+                // provider; platform BulkData is empty after upload. Read the
+                // same source used by the renderer instead of dereferencing it.
+                auto* Provider=Image->GetAllMipProvider();
+                if (TestNotNull(TEXT("Creature texture retains its mip source"),Provider))
+                {
+                    TArray<void*> Data;Data.Init(nullptr,Image->GetNumMips());
+                    TArray<int64> Sizes;Sizes.Init(0,Data.Num());
+                    if (TestTrue(TEXT("Read creature source mip data"),Provider->GetInitialMipData(0,Data,Sizes,TEXT("RetailParity"))))
+                    {
+                        if (TestTrue(TEXT("Full source mip has RGBA pixels"),Data.Num()>0 && Data[0] && Sizes[0]==int64(Image->GetSizeX())*Image->GetSizeY()*sizeof(FColor)))
+                        {
+                            const auto* Pixels=static_cast<const FColor*>(Data[0]);uint8 MaximumAlpha=0;
+                            for (int64 I=0;I<Sizes[0]/int64(sizeof(FColor));++I)MaximumAlpha=FMath::Max(MaximumAlpha,Pixels[I].A);
+                            TestEqual(TEXT("Half-transparent creature retains opaque source texels"),int32(MaximumAlpha),255);
+                        }
+                    }
+                    for(void* Mip:Data)FMemory::Free(Mip);
+                }
             }
         }
     }

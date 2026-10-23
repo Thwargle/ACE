@@ -47,11 +47,6 @@ bool FACERemoteMovementReplayTest::RunTest(const FString&)
   O.PhysicsState=ACEPhysicsState::Gravity;O.bHasPosition=true;O.Position=P;
   auto* A=World->SpawnActor<AACEWorldEntityActor>();A->InitializeFromObject(O,100,false);return A;
  };
- // Retail's Ready/Walk links contain position frames. Compare each physics
- // step with independently decoded DAT clips, including a stop during entry.
- for(int FPS:{30,60,144,240})for(int Direction:{1,-1})for(bool Tap:{false,true})for(bool Visible:{false,true})for(bool Strafing:{false,true})
- {
-  const float Dt=1.f/FPS,Rate=Direction>0?1.f:.65f;
   auto ReadRoot=[&](uint32 Id,float Speed,float FrameRate=30.f,bool Loop=false)
   {
    TArray<uint8> Bytes;Dat->GetPortalDat()->ReadFile(Id,Bytes);
@@ -70,6 +65,12 @@ bool FACERemoteMovementReplayTest::RunTest(const FString&)
    }
    return Track;
   };
+
+ // Retail's Ready/Walk links contain position frames. Compare each physics
+ // step with independently decoded DAT clips, including a stop during entry.
+ for(int FPS:{30,60,144,240})for(int Direction:{1,-1})for(bool Tap:{false,true})for(bool Visible:{false,true})for(bool Strafing:{false,true})
+ {
+  const float Dt=1.f/FPS,Rate=Direction>0?1.f:.65f;
   auto Entry=ReadRoot(Direction>0?0x03000006:0x03000009,Direction*Rate);
   auto Exit=ReadRoot(Direction>0?0x03000009:0x03000006,float(Direction));
   auto Cycle=ReadRoot(0x03000003,Direction*Rate,66.9f,true);float CycleElapsed=0;
@@ -144,6 +145,118 @@ bool FACERemoteMovementReplayTest::RunTest(const FString&)
   TestTrue(*FString::Printf(TEXT("Remote entry/exit/cycle poses share the physics clock %s"),*Case),MaxPoseError<.05);
   TestTrue(TEXT("A stop packet keeps physics ticking until the authored exit finishes"),ExitWasTicking);
   TestFalse(TEXT("Completed walk links release the actor tick"),A->IsActorTickEnabled());
+  A->Destroy();
+ }
+ // Autonomous retail-player packets: replay the human DAT start/cycle/stop
+ // independently of the actor's motion lookup, with and without sparse F748s.
+ for(int FPS:{30,60,144})for(bool Running:{false,true})for(bool Positions:{false,true})
+ {
+  const float Dt=1.f/FPS,Rate=Running?2.f:.25f,SideRate=Running?0.f:2.f;
+  auto Entry=ReadRoot(Running?0x03000005:0x03000006,Rate);
+  auto Cycle=ReadRoot(Running?0x03000002:0x03000003,Rate,Running?30.f:66.9f,true);
+  auto Exit=ReadRoot(Running?0x03000007:0x03000009,1.f);Cycle.bApplyEntry=true;
+  auto* A=Spawn();A->bClampToGround=false;A->SetActorEnableCollision(false);A->MotionTableId=0x09000001;
+  FACEPosition CasePosition=P;CasePosition.CellId=0xAAB30004;CasePosition.bHasContactState=false;
+  A->ApplyACEPosition(CasePosition); // CreateObject does not start a position constraint.
+  FACESession Session;FACEWorldObject O;O.Guid=0x70004202;O.bIsPlayer=true;
+  O.SetupId=0x02000001;O.MotionTableId=0x09000001;O.ItemType=ACEItemType::Creature;
+  const bool Visible=FPS==60;
+  if(Visible){TestTrue(TEXT("Retail replay player has a visible DAT body"),A->ApplyDatAppearanceFromObject(O));A->Appearance->SetPreviewCapture(true);}
+  Session.WorldObjects.Add(O.Guid,O);uint16 MotionSeq=0,PositionSeq=0;
+  Session.OnMotionUpdate.AddLambda([&](int32,const FACEObjectMotionState& M){A->ApplyMotionState(M);});
+  Session.OnPositionUpdate.AddLambda([&](int32,const FACEPosition& V){A->ApplyACEPosition(V);});
+  auto Motion=[&](bool Move)
+  {
+   FACEBinaryWriter W;W.WriteUInt32(O.Guid);W.WriteUInt16(0);W.WriteUInt16(++MotionSeq);
+   W.WriteUInt16(0);W.WriteUInt8(1);W.Align(); // autonomous retail player, not the local player
+   W.WriteUInt8(0);W.WriteUInt8(0);W.WriteUInt16(0x3d);
+   W.WriteUInt32(Move?(SideRate?0x1e:0x06):0);
+   if(Move){W.WriteUInt16(Running?7:5);if(SideRate)W.WriteUInt16(0xf);W.WriteFloat(Rate);if(SideRate)W.WriteFloat(SideRate);}
+   W.Align();FACEBinaryReader R(W.GetData());Session.HandleUpdateMotion(R);
+  };
+  FVector Reference=A->GetActorLocation();double Worst=0,WorstPose=0;float CycleTime=0;Motion(true);
+  const int Stop=FPS*4;
+  for(int I=0;I<Stop+FPS;++I)
+  {
+   if(Positions && I && I%FPS==0)
+   {
+    FACEPosition Pos=CasePosition;Pos.SetLocationFromUnreal(Reference,100);
+    FACEBinaryWriter W;W.WriteUInt32(O.Guid);W.WriteUInt32(4);W.WriteUInt32(Pos.CellId);
+    W.WriteFloat(Pos.Location.X);W.WriteFloat(Pos.Location.Y);W.WriteFloat(Pos.Location.Z);
+    W.WriteFloat(1);W.WriteFloat(0);W.WriteFloat(0);W.WriteFloat(0);
+    W.WriteUInt16(0);W.WriteUInt16(++PositionSeq);W.WriteUInt16(0);W.WriteUInt16(0);
+    FACEBinaryReader R(W.GetData());Session.HandleUpdatePosition(R);
+   }
+   if(I==Stop){Exit.bApplyEntry=Entry.IsActive();Motion(false);}
+   float Remaining=Dt;
+   for(auto* Track:{&Entry,&Exit})
+   {
+    if(Track==&Exit && I<Stop)break;
+    if(!Track->IsActive())continue;
+    const float Use=FMath::Min(Remaining,Track->Keys.Last().Time-Track->Time);
+    Reference+=FACEPosition::AceVectorToUnreal(Track->Advance(Use).GetTranslation(),100);Remaining-=Use;
+   }
+   if(I<Stop)
+   {
+    Reference+=FACEPosition::AceVectorToUnreal(Cycle.AdvanceLooping(Remaining).GetTranslation(),100);
+    Reference.X-=1.25f*SideRate*100*Dt;CycleTime+=Remaining*Rate;
+   }
+   A->Tick(Dt);Worst=FMath::Max(Worst,FVector::Distance(Reference,A->GetActorLocation()));
+   if(Visible)
+   {
+    A->Appearance->TickComponent(Dt,LEVELTICK_All,nullptr);
+    if(I>=FPS*3 && I<Stop)
+    {
+     TArray<FTransform> Expected;int32 Count=0;
+     Dat->EvaluateMotionCommand(O.MotionTableId,Running?0x44000007u:0x45000005u,CycleTime,
+      A->Appearance->GetPartCount(),Expected,100,Count,nullptr,nullptr,ACEMotion::StanceNonCombat);
+     for(int Part=0;Part<Count;++Part)
+     {
+      const FTransform Actual=A->Appearance->GetPartMesh(Part)->GetRelativeTransform();
+      WorstPose=FMath::Max(WorstPose,FVector::Distance(Actual.GetTranslation(),Expected[Part].GetTranslation()));
+      WorstPose=FMath::Max(WorstPose,Actual.GetRotation().AngularDistance(Expected[Part].GetRotation()));
+     }
+    }
+   }
+  }
+  const FString Case=FString::Printf(TEXT("%d FPS run=%d F748=%d"),FPS,Running,Positions);
+  AddInfo(FString::Printf(TEXT("Autonomous player %s: maximum error %.6f cm"),*Case,Worst));
+  TestTrue(*FString::Printf(TEXT("Autonomous motion follows independent retail DAT timeline %s"),*Case),Worst<.1);
+  TestTrue(TEXT("A stronger sidestep preserves the forward cycle and its own cadence"),WorstPose<.05);
+  if(Running)
+  {
+   // A delayed final position arrives after Ready. Retail keeps my_run_rate,
+   // so the correction does not degrade into a slow backward slide.
+   const FVector Before=A->GetActorLocation();FACEPosition Final=CasePosition;Final.bHasContactState=true;
+   Final.SetLocationFromUnreal(Before-FVector(0,500,0),100);A->ApplyACEPosition(Final);A->Tick(Dt);
+   TestTrue(TEXT("Stopping preserves the retail run-rate correction bound"),
+    FMath::IsNearlyEqual(Before.Y-A->GetActorLocation().Y,8.*Rate*100*Dt,.01));
+  }
+  A->Destroy();
+ }
+ // ConstraintManager::adjust_offset from retail: count requested path
+ // length (not distance from a packet), dampen only past the cell threshold,
+ // and reset that budget on the next accepted grounded position.
+ for(int FPS:{30,144})for(bool Indoor:{false,true})
+ {
+  auto* A=Spawn();A->bClampToGround=false;A->SetActorEnableCollision(false);
+  FACEPosition Start=P;Start.CellId=Indoor?0x016C0101:0xAAB30004;A->ApplyACEPosition(Start);
+  A->RemoteMotion.bMoving=true;A->RemoteMotion.Forward=1;A->RemoteMotion.ForwardUnitsPerSecond=4;
+  FVector Reference=A->GetActorLocation();double Budget=0,Worst=0;
+  const double Begin=Indoor?5:10,End=Indoor?20:50,Dt=1./FPS;
+  for(int I=0;I<FPS*12;++I)
+  {
+   if(I==FPS*6)
+   {
+    FACEPosition Update=Start;Update.SetLocationFromUnreal(Reference,100);A->ApplyACEPosition(Update);Budget=0;
+   }
+   // Changing heading must not reset the distance traveled since F748.
+   if(I==FPS*4){A->RemoteMotion.Forward=-1;A->RemoteMotion.ForwardUnitsPerSecond=-4;}
+   const double Travel=4*Dt*FMath::Clamp((End-Budget)/(End-Begin),0.,1.);
+   Reference.Y+=(I<FPS*4?1:-1)*Travel*100;Budget+=Travel;
+   A->Tick(Dt);Worst=FMath::Max(Worst,FVector::Distance(Reference,A->GetActorLocation()));
+  }
+  TestTrue(TEXT("Remote missing-update slowdown follows retail's accumulated distance constraint"),Worst<.1);
   A->Destroy();
  }
  // Replay actual movement/position payloads through the session, including
@@ -226,7 +339,13 @@ bool FACERemoteMovementReplayTest::RunTest(const FString&)
   for(int I=0;I<FPS/2;++I)A->Tick(Dt);
   TestTrue(TEXT("Patrol turns before translating, rather than getting ahead of the server"),A->GetActorLocation().Equals(PatrolStart,.01));
   TestTrue(TEXT("Patrol turns at the authored rate"),FMath::IsNearlyEqual(PatrolFacing.AngularDistance(A->GetActorQuat()),.75,.0001));
-  for(int I=0;I<FPS*6;++I)A->Tick(Dt);
+  for(int I=0;I<FPS*6;++I)
+  {
+   // Keep normal position cadence here; the separate loss replay above
+   // tests ConstraintManager's slowdown when those updates are absent.
+   if(I%FPS==0){FACEPosition Update=Start;Update.SetLocationFromUnreal(A->GetActorLocation(),100);Position(Update);}
+   A->Tick(Dt);
+  }
   const FVector Arrived=A->GetActorLocation();
   ACEWalkingMotion::FLink PatrolExit;Dat->BuildWalkingLink(A->MotionTableId,1,0,ACEMotion::StanceNonCombat,PatrolExit);
   const float ExitDistance=PatrolExit.Root.Keys.Last().Transform.GetTranslation().Y*100;

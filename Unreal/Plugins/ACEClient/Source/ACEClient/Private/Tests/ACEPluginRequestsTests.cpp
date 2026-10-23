@@ -893,7 +893,8 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
     }
     {
         auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
-        if(!TestTrue(TEXT("Retail DAT loads for redirected bane confirmations"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+        FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+        if(!TestTrue(TEXT("Retail DAT loads for redirected bane confirmations"),Dat->LoadDatDirectory(DatDirectory)))return false;
         {
             const auto SavedSkills=Session.PlayerVitals.Skills;
             FACEWorldObject Scroll;Scroll.Guid=0x71009f00;Scroll.ItemType=ACEItemType::Writable;Scroll.ContainerId=Session.PlayerGuid;
@@ -1018,7 +1019,11 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             if(H->ItemBuffs.Num())TestTrue(TEXT("Relog retains remaining time without extending the spell"),
                 FMath::Abs(H->ItemBuffs[0]->AsObject()->GetNumberField(TEXT("expires"))-OriginalExpiry)<.01);
             auto NewArmor=Armor;NewArmor.Guid=979;Session.WorldObjects.Add(NewArmor.Guid,NewArmor);
-            H->ValidateItemBuffTimers();TestTrue(TEXT("Newly equipped armor needs its own banes"),H->ItemBuffs.IsEmpty());
+            H->ValidateItemBuffTimers();TestEqual(TEXT("New armor preserves the already buffed equipment"),H->ItemBuffs.Num(),1);
+            TestEqual(TEXT("Only new armor is queued for a direct item buff"),H->ItemBuffs[0]->AsObject()->GetArrayField(TEXT("missing_equipment"))[0]->AsNumber(),double(NewArmor.Guid));
+            Session.WorldObjects[NewArmor.Guid].WielderId=0;Session.WorldObjects[NewArmor.Guid].ContainerId=Session.PlayerGuid;
+            H->ValidateItemBuffTimers();
+            TestEqual(TEXT("Equipping a wand cannot forget the uncovered shield or armor"),H->ItemBuffs[0]->AsObject()->GetArrayField(TEXT("missing_equipment")).Num(),1);
             Session.WorldObjects.Remove(NewArmor.Guid);
             H->LoadItemBuffTimers();++Session.PlayerVitals.NumDeaths;H->ValidateItemBuffTimers();
             TestTrue(TEXT("Death invalidates saved item-buff estimates"),H->ItemBuffs.IsEmpty());

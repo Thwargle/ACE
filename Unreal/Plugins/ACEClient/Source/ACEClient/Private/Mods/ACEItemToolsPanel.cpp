@@ -64,11 +64,11 @@ public:
                         if(Mode==TEXT("give")||Mode==TEXT("profile"))
                         {
                             const double Done=Number(Host->ItemToolsProgress,TEXT("completed")),Total=Number(Host->ItemToolsProgress,TEXT("total"));
-                            Progress=Total>0?FString::Printf(TEXT("  |  %.0f / %.0f items given"),Done,Total):FString::Printf(TEXT("  |  %.0f items given"),Done);
+                            Progress=Total>0?FString::Printf(TEXT("%.0f / %.0f items given"),Done,Total):FString::Printf(TEXT("%.0f items given"),Done);
                         }
-                        else Progress=FString::Printf(TEXT("  |  %.0f confirmed actions"),Number(Host->ItemToolsProgress,TEXT("operations")));
+                        else Progress=FString::Printf(TEXT("%.0f confirmed actions"),Number(Host->ItemToolsProgress,TEXT("operations")));
                     }
-                    return FText::FromString(Plugin->Status+Progress);
+                    return FText::FromString(Progress.IsEmpty()?Plugin->Status:Progress+TEXT("\n")+Plugin->Status);
                 })]
             +SVerticalBox::Slot().AutoHeight().Padding(0,0,0,12)[Tabs]
             +SVerticalBox::Slot().FillHeight(1)[SAssignNew(Scroll,SScrollBox)+SScrollBox::Slot()

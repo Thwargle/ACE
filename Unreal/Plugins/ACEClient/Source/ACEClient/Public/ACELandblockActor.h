@@ -40,6 +40,7 @@ class ACECLIENT_API AACELandblockActor : public AActor
 	friend class FACERetailInteriorStreamingTest;
 	friend class FACEEntranceTransitionTest;
 	friend class FACECameraEdgeTest;
+	friend class FACESpawnSupportTest;
 	friend class FACERetailRuntimeRegressionTest;
 
 public:
@@ -77,6 +78,8 @@ public:
 	/** True once terrain collision exists and pending building meshes are drained. */
 	UFUNCTION(BlueprintPure, Category = "ACE|Terrain")
 	bool IsLandblockReady() const;
+	/** Includes authored static props (tables/pedestals), but not decorative RegionDesc flora. */
+	bool IsPlacementCollisionReady() const;
 	void CollectSceneryShadowCandidates(const FVector& CameraWorld, float MaxDistCm, TArray<FACESceneryShadowCand>& Out) const;
 	void ApplySceneryShadowWinners(
 		const TArray<UProceduralMeshComponent*>& WinningProcs,

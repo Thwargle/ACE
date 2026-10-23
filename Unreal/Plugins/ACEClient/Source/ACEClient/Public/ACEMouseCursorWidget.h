@@ -17,6 +17,19 @@ class ACECLIENT_API UACEMouseCursorWidget : public UUserWidget
 public:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 
+	// ClientUISystem::UpdateCursorState (00564630), DidMapper category 6.
+	// Target modes: 0 normal, 1 use, 2 examine, 3 use item on a target.
+	static int32 RetailCursorEnum(bool Busy, int32 TargetMode, int32 CombatMode, bool Hover, bool Compatible=true)
+	{
+		if (Busy) return Hover ? 15 : 14;
+		if (TargetMode==1) return Hover ? 13 : 12;
+		if (TargetMode==2) return Hover ? 11 : 10;
+		if (TargetMode==3) return !Hover ? 39 : Compatible ? 40 : 41;
+		if (CombatMode==2 || CombatMode==4) return Hover ? 4 : 3;
+		if (CombatMode==8) return Hover ? 6 : 5;
+		return Hover ? 2 : 1;
+	}
+
 	/** Tip / click point is the top-left of the 15x28 retail pointer texture. */
 	void SetCursorTexture(UTexture2D* Texture, int32 HotX, int32 HotY);
 	void SetCursorScale(float Scale);

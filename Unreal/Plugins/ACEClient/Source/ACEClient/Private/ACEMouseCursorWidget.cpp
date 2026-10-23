@@ -46,6 +46,11 @@ void UACEMouseCursorWidget::SetCursorScale(float Scale)
 
 void UACEMouseCursorWidget::SetCursorTexture(UTexture2D* Texture, int32 HotX, int32 HotY)
 {
+	// Cursor state is checked every frame, including when the pointer is still.
+	// Avoid rebuilding the Slate brush/layout until its art, scale or hotspot changes.
+	if (CursorImage && Texture && CursorImage->GetBrush().GetResourceObject()==Texture
+		&& HotspotX==HotX && HotspotY==HotY
+		&& CursorImage->GetBrush().ImageSize.Equals(FVector2f(Texture->GetSizeX()*CursorScale,Texture->GetSizeY()*CursorScale))) return;
 	EnsureLayout();
 	HotspotX = FMath::Max(0, HotX);
 	HotspotY = FMath::Max(0, HotY);

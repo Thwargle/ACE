@@ -367,6 +367,9 @@ public:
 	UE_API virtual FBoxSphereBounds CalcBounds(const FTransform& LocalToWorld) const override;
 	//~ Begin USceneComponent Interface.
 
+	/** True until the latest asynchronous collision mesh has been installed. */
+	bool IsCollisionCookPending() const { return !AsyncBodySetupQueue.IsEmpty(); }
+
 private:
 	UE_API bool UpdateResidentVisibility();
 

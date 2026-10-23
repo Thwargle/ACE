@@ -29,13 +29,16 @@ settings leaves it in place. Binding or removing a shortcut does not move or
 destroy the inventory item. Keys stay with their slots when actions move.
 Icons use the retail item/spell compositor, including item underlays and
 enchantment effects, spell power backgrounds and target badges, without raw
-white mask outlines.
+white mask outlines. Drag the main backpack icon onto the deck to add a **Target
+self** shortcut. It also completes a pending targeted-item use on yourself while
+preserving your combat target, like the retail backpack shortcut.
 
 Turn **Override** on to use deck hotkeys in place of the native spell and item
 hotbars. Bottom-row defaults are `1` through `=`, middle-row defaults add Ctrl,
-and top-row defaults add Shift. Empty and unavailable slots reserve their keys
-too. Typing and keybinding editors receive their input normally. Action Deck
-settings pause deck actions while keeping its keys reserved, so editing cannot
+and top-row defaults add Shift. Empty slots fall through to the native hotbars.
+Assigned slots keep their keys when depleted or temporarily unavailable. Typing
+and keybinding editors receive their input normally. Action Deck
+settings pause deck actions while keeping assigned slots' keys reserved, so editing cannot
 accidentally use a native hotbar item. Closing the deck or disabling the plugin
 restores native bindings.
 

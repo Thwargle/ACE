@@ -13,7 +13,7 @@ class FACEActionDeckInput;
 class SACEActionDeck;
 class FJsonObject;
 
-enum class EACEDeckAction : uint8 { Empty, Item, Spell, Melee, Missile };
+enum class EACEDeckAction : uint8 { Empty, Item, Spell, Melee, Missile, Self };
 
 struct FACEDeckSlot
 {

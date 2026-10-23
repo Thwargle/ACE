@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "UI/ACEUICharSelectBinder.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "ACECharacterCreation.h"
@@ -489,10 +490,20 @@ bool FACERetailCharacterCreationScreenTest::RunTest(const FString& Parameters)
             const auto SubmittedSequence=Session->NextFragmentSequence;
             RetryName->SetTextFromVirtualKeyboard(FText::FromString(TEXT("Duplicate")),ETextEntryType::TextEntryAccepted);
             TestEqual(TEXT("Duplicate native Done cannot send a second creation request"),Session->NextFragmentSequence,SubmittedSequence);
+            FACECharacterInfo Existing;Existing.CharacterId=0x50000002;Existing.Name=TEXT("Existing Hero");
+            Session->Characters.Add(Existing);Session->SetPreferredCharacterId(Existing.CharacterId);
             FACEBinaryWriter Accepted;Accepted.WriteUInt32(1);Accepted.WriteUInt32(0x50000001);Accepted.WriteString16L(TEXT("Retry Hero"));Accepted.WriteUInt32(0);
             FACEBinaryReader Success(Accepted.GetData());Session->HandleCharacterCreated(Success);
+            TestEqual(TEXT("Successful creation prefers the server-assigned new character"),Session->GetPreferredCharacterId(),int32(0x50000001));
             TestTrue(TEXT("Accepted character returns UI to character selection"),Binder->bReturn);
-            if(TestTrue(TEXT("Successful Finish adds an account entry"),Session->Characters.Num()==1))TestEqual(TEXT("Server identity added to account roster"),Session->Characters.Last().CharacterId,int32(0x50000001));
+            if(TestTrue(TEXT("Successful Finish adds an account entry"),Session->Characters.Num()==2))TestEqual(TEXT("Server identity added to account roster"),Session->Characters.Last().CharacterId,int32(0x50000001));
+            auto* Selection=NewObject<UACEUICharSelectBinder>(GI);
+            Selection->Initialize(Client,nullptr,nullptr,nullptr,Session->Characters,TEXT("Fixture"));
+            TestEqual(TEXT("Returning roster selects the new character, not its first row"),Selection->SelectedIndex,1);
+            Selection->SelectCharacterIndex(0);
+            Selection->Initialize(Client,nullptr,nullptr,nullptr,Session->Characters,TEXT("Fixture"));
+            TestEqual(TEXT("A later manual selection remains selected"),Selection->SelectedCharacterId,Existing.CharacterId);
+            Selection->Shutdown();
         }
         Receiver->Close();Sockets->DestroySocket(Receiver);
     }

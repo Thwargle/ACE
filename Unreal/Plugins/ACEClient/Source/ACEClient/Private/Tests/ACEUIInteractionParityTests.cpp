@@ -92,6 +92,17 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
             TestEqual(TEXT("Fullscreen and borderless each toggle back to windowed repeatedly"),Mode,I%2==0?EWindowMode::Windowed:Preferred);
         }
     }
+    for(FIntPoint Desktop:{FIntPoint(1920,1080),FIntPoint(3440,1440),FIntPoint(3840,2160)})
+    {
+        TestEqual(TEXT("Mode-only fullscreen uses the monitor instead of the saved small window"),
+            FACEDesktopDisplay::ResolveResolution(EWindowMode::Windowed,EWindowMode::Fullscreen,FIntPoint(1024,768),Desktop,false),Desktop);
+        TestEqual(TEXT("Explicit lower fullscreen resolution remains available for performance"),
+            FACEDesktopDisplay::ResolveResolution(EWindowMode::Windowed,EWindowMode::Fullscreen,FIntPoint(1280,720),Desktop,true),FIntPoint(1280,720));
+        TestEqual(TEXT("Borderless always follows native monitor resolution"),
+            FACEDesktopDisplay::ResolveResolution(EWindowMode::Fullscreen,EWindowMode::WindowedFullscreen,FIntPoint(800,600),Desktop,true),Desktop);
+        TestEqual(TEXT("Invalid saved resolution recovers to the monitor"),
+            FACEDesktopDisplay::ResolveResolution(EWindowMode::Windowed,EWindowMode::Fullscreen,FIntPoint(0,0),Desktop,true),Desktop);
+    }
 
     ON_SCOPE_EXIT { Binder->Shutdown(); Canvas->SetGameplayBinder(nullptr); Manager->Shutdown(); Dat->Deinitialize(); TGuardValue<FString> Restore(GGameUserSettingsIni,OriginalSettings); ACEInputBindings::Reload(); };
     FWidgetRenderer Renderer(true,true);
@@ -623,9 +634,12 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     if(TestNotNull(TEXT("Graphics options exposes object glow"),Glow))
     {
         TestTrue(TEXT("Glow defaults checked"),Glow->IsChecked());
-        Glow->SetIsChecked(false);Video->ApplyInterfaceOptions();Video->ResetVideo();
+        Glow->SetIsChecked(false);Glow->OnCheckStateChanged.Broadcast(false);
+        TestEqual(TEXT("Disabling glow takes effect without Apply"),ACERuntimeOptions::Get(TEXT("ObjectGlow")),0.f);
+        Video->ResetVideo();
         TestFalse(TEXT("Glow preference survives UI reload"),Glow->IsChecked());
-        Glow->SetIsChecked(true);Video->ApplyInterfaceOptions();
+        Glow->SetIsChecked(true);Glow->OnCheckStateChanged.Broadcast(true);
+        TestEqual(TEXT("Re-enabling glow takes effect without Apply"),ACERuntimeOptions::Get(TEXT("ObjectGlow")),1.f);
     }
     auto* ScreenshotFolder=Video?Cast<UEditableTextBox>(Video->WidgetTree->FindWidget(TEXT("ScreenshotDirectory"))):nullptr;
     if(TestNotNull(TEXT("Config exposes screenshot save folder"),ScreenshotFolder))

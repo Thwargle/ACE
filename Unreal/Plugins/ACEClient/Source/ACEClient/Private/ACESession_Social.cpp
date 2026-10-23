@@ -127,6 +127,7 @@ void FACESession::SendSwearAllegiance(int32 TargetGuid)
 	FACEBinaryWriter W;
 	W.WriteUInt32(static_cast<uint32>(TargetGuid));
 	SendGameAction(ACEGameAction::SwearAllegiance, W.GetData(), ACEQueue::WeenieQueue);
+	CursorAllegianceUntil=FPlatformTime::Seconds()+30.;
 }
 
 void FACESession::SendBreakAllegiance(int32 TargetGuid)
@@ -138,6 +139,7 @@ void FACESession::SendBreakAllegiance(int32 TargetGuid)
 	FACEBinaryWriter W;
 	W.WriteUInt32(static_cast<uint32>(TargetGuid));
 	SendGameAction(ACEGameAction::BreakAllegiance, W.GetData(), ACEQueue::WeenieQueue);
+	CursorAllegianceUntil=FPlatformTime::Seconds()+30.;
 }
 
 void FACESession::SendAllegianceUpdateRequest(bool bPanelOpen)
@@ -149,6 +151,7 @@ void FACESession::SendAllegianceUpdateRequest(bool bPanelOpen)
 	FACEBinaryWriter W;
 	W.WriteUInt32(bPanelOpen ? 1u : 0u);
 	SendGameAction(ACEGameAction::AllegianceUpdateRequest, W.GetData(), ACEQueue::WeenieQueue);
+	CursorAllegianceUntil=bPanelOpen ? FPlatformTime::Seconds()+30. : 0.;
 }
 
 void FACESession::SendAddFriend(const FString& Name)
@@ -394,6 +397,7 @@ void FACESession::HandleAllegianceLoginNotification(FACEBinaryReader& Reader)
 
 void FACESession::HandleAllegianceUpdate(FACEBinaryReader& Reader)
 {
+	CursorAllegianceUntil=0.;
 	Allegiance = FACEAllegianceInfo();
 	if (!Reader.CanRead(12))
 	{

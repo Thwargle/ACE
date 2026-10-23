@@ -108,6 +108,7 @@ void FACESession::Disconnect()
 	bHasServerTime = false;
 	PortalYearTicksAtConnect = PortalYearTicksRealtime = 0.0;
 	bLogOffPending = false;
+	LogOffPortalStartTime = 0.;
 	LogOffTimeout = 0.f;
 	LogOffRetransmitTimer = 0.f;
 	CloseSockets();
@@ -115,6 +116,7 @@ void FACESession::Disconnect()
 	IssacClient.Reset();
 	IssacServer.Reset();
 	Characters.Reset();
+	PreferredCharacterId = 0;
 	ResetReceivedMessages();
 	ChessBoardGuid = 0; ChessJoinPendingUntil = 0.0;
 	WorldObjects.Reset();
@@ -138,6 +140,7 @@ void FACESession::Disconnect()
 	TradeSelfItems.Reset();
 	TradePartnerItems.Reset();
 	bUseBusy = false;
+	ResetCursorWaits();
 	CancelEquipmentSwap();
 	CombatEventRevision = 0;
 	bServerAttackInProgress = false;
@@ -239,6 +242,11 @@ void FACESession::RequestLogOff()
 		SendStopMovement();
 		FlushAutonomousPosition(bAutoPosContact);
 		bLogOffPending = true;
+		// CPlayerSystem::RequestLogOff / gmSmartBoxUI::UseTime. The server
+		// drives the character motion; the client drives the portal viewport.
+		const auto* Self = WorldObjects.Find(PlayerGuid);
+		const bool bPK = Self ? Self->IsPkOrPkLite() : ACEPlayerKillerStatus::BlocksPlayers(PlayerVitals.PlayerKillerStatus);
+		LogOffPortalStartTime = FPlatformTime::Seconds() + 3. + (bPK ? 20. : 0.);
 		LogOffTimeout = 45.f; // logout anim + landblock remove + 6s SendFinalLogOffMessages
 		LogOffRetransmitTimer = 0.f;
 		SendCharacterLogOff();
@@ -287,6 +295,7 @@ void FACESession::ClearWorldState()
 	TradeSelfItems.Reset();
 	TradePartnerItems.Reset();
 	bUseBusy = false;
+	ResetCursorWaits();
 	CancelEquipmentSwap();
 	CombatEventRevision = 0;
 	bServerAttackInProgress = false;
@@ -1551,6 +1560,16 @@ void FACESession::SendGameAction(uint32 ActionType, const TArray<uint8>& ActionP
 	Inner.WriteUInt32(ActionType);
 	Inner.WriteBytes(ActionPayload);
 	SendGameMessage(ACEOpcode::GameAction, Inner.GetData(), Queue, true);
+	// These retail requests increment ClientUISystem's busy count until UseDone.
+	// Keep this separate from IsUseBusy: casting/shopping must not change action gates.
+	if (State==EACESessionState::InWorld && (ActionType==ACEGameAction::Use || ActionType==ACEGameAction::UseWithTarget
+		|| ActionType==ACEGameAction::CastTargetedSpell || ActionType==ACEGameAction::CastUntargetedSpell
+		|| ActionType==ACEGameAction::Buy || ActionType==ACEGameAction::Sell))
+	{
+		const double Now=FPlatformTime::Seconds();
+		CursorUseWaits.RemoveAll([Now](const auto& Wait){return Wait.Value<=Now;});
+		CursorUseWaits.Emplace(ActionType,Now+30.);
+	}
 }
 
 void FACESession::SendAckIfNeeded()
@@ -1833,6 +1852,7 @@ void FACESession::HandleCharacterList(FACEBinaryReader& Reader)
 	{
 		ClearWorldState();
 		bLogOffPending = false;
+		LogOffPortalStartTime = 0.;
 		LogOffTimeout = 0.f;
 		LogOffRetransmitTimer = 0.f;
 		Log(TEXT("Logged off — returned to character select"));
@@ -2981,12 +3001,14 @@ void FACESession::HandleGameEvent(FACEBinaryReader& Reader)
 		HandleCombatAttackerNotification(Reader);
 		break;
 	case ACEGameEvent::CombatCommenceAttack:
+		CursorAttackUntil = FPlatformTime::Seconds()+30.;
 		bServerAttackInProgress = true;
 		LastAttackError = 0;
 		++CombatEventRevision;
 		break;
 	case ACEGameEvent::AttackDone:
 		if (!Reader.CanRead(4)) break;
+		CursorAttackUntil = 0.;
 		bServerAttackInProgress = false;
 		LastAttackError = Reader.ReadUInt32();
 		++CombatEventRevision;
@@ -3129,6 +3151,7 @@ void FACESession::HandleWeenieError(FACEBinaryReader& Reader)
 			Log(FString::Printf(TEXT("World use rejected: error=0x%04X source=0x%08X combat=%d age=%.2fs"),
 				Code, UseSourceGuid, PlayerVitals.CombatMode, FPlatformTime::Seconds()-UseStartedAt));
 			ClearPendingUse();
+			ReleaseCursorUse(true);
 			OnUseDone.Broadcast(Code);
 		}
 	}
@@ -4389,6 +4412,8 @@ void FACESession::SendIdentifyObject(int32 ObjectGuid, bool bBackground)
 		// target here: this request supersedes it.
 		if (bBackgroundAppraisalContext) SendGameActionU32(ACEGameAction::IdentifyObject, 0);
 		ManualAppraisalGuid = ObjectGuid;
+		CursorAppraisalGuid = ObjectGuid;
+		CursorAppraisalUntil = FPlatformTime::Seconds()+30.;
 		bBackgroundAppraisalContext = false;
 	}
 	FACEBinaryWriter W;
@@ -5888,6 +5913,7 @@ void FACESession::HandleIdentifyObjectResponse(FACEBinaryReader& Reader)
 	}
 	FACEAppraisalInfo Info;
 	Info.ObjectGuid = static_cast<int32>(Reader.ReadUInt32());
+	if (Info.ObjectGuid==CursorAppraisalGuid) { CursorAppraisalGuid=0; CursorAppraisalUntil=0.; }
 	const uint32 Flags = Reader.ReadUInt32();
 	Info.bSuccess = Reader.ReadUInt32() != 0;
 
@@ -6632,6 +6658,28 @@ void FACESession::HandleUpdateTitle(FACEBinaryReader& Reader)
 	OnCharacterTitlesChanged.Broadcast();
 }
 
+bool FACESession::IsCursorBusy() const
+{
+	if (State!=EACESessionState::InWorld) return false;
+	const double Now=FPlatformTime::Seconds();
+	return CursorAttackUntil>Now || CursorAppraisalUntil>Now || CursorAllegianceUntil>Now
+		|| CursorUseWaits.ContainsByPredicate([Now](const auto& Wait){return Wait.Value>Now;});
+}
+
+void FACESession::ReleaseCursorUse(bool ItemOnly)
+{
+	const int32 Index=CursorUseWaits.IndexOfByPredicate([ItemOnly](const auto& Wait)
+		{return !ItemOnly||Wait.Key==ACEGameAction::Use||Wait.Key==ACEGameAction::UseWithTarget;});
+	if (Index!=INDEX_NONE) CursorUseWaits.RemoveAt(Index);
+}
+
+void FACESession::ResetCursorWaits()
+{
+	CursorUseWaits.Reset();
+	CursorAttackUntil=CursorAppraisalUntil=CursorAllegianceUntil=0.;
+	CursorAppraisalGuid=0;
+}
+
 void FACESession::BeginPendingUse(int32 Source, int32 Target)
 {
 	bUseBusy = true;
@@ -6650,6 +6698,7 @@ void FACESession::ClearPendingUse()
 void FACESession::CancelPendingUse(const TCHAR* Reason)
 {
 	if (!bUseBusy) return;
+	ReleaseCursorUse(true);
 	Log(FString::Printf(TEXT("Release pending use (%s) source=0x%08X target=0x%08X age=%.1fs"),
 		Reason, UseSourceGuid, UseTargetGuid, FPlatformTime::Seconds()-UseStartedAt));
 	ClearPendingUse();
@@ -6679,6 +6728,7 @@ void FACESession::HandleUseDone(FACEBinaryReader& Reader)
 {
 	if (!Reader.CanRead(4)) return;
 	const uint32 Err = Reader.ReadUInt32();
+	ReleaseCursorUse();
 	ClearPendingUse();
 	OnUseDone.Broadcast(Err);
 	if (Err != 0)
@@ -8417,8 +8467,9 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 		{
 			Motion.Forward = Motion.ForwardUnitsPerSecond / DominantSpeed;
 			Motion.Strafe = Motion.StrafeUnitsPerSecond / DominantSpeed;
-			if (FMath::Abs(Motion.StrafeUnitsPerSecond) > FMath::Abs(Motion.ForwardUnitsPerSecond))
-				Motion.AnimPlayRate = FMath::Max(.05f, FMath::Abs(SideStepSpeed));
+			// CMotionInterp applies the forward cycle and sidestep modifier at
+			// independent rates. A faster strafe must not accelerate the forward
+			// animation/root motion (and make every F748 pull the player back).
 		}
 		if (TurnCommand == 0x000d || TurnCommand == 0x000e)
 		{
@@ -8770,6 +8821,7 @@ void FACESession::HandleCharacterCreated(FACEBinaryReader& Reader)
         if (!Info.CharacterId || Info.Name.IsEmpty()) return;
         Characters.RemoveAll([&](const FACECharacterInfo& C) { return C.CharacterId == Info.CharacterId; });
         Characters.Add(Info);
+        PreferredCharacterId = Info.CharacterId;
     }
     bCharacterCreationPending = false;
     OnCharacterCreated.Broadcast(Result, Info);

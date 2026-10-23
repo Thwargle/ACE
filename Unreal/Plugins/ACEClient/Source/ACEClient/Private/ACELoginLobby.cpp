@@ -1,4 +1,6 @@
 #include "ACELoginWidget.h"
+#include "ACEDesktopDisplay.h"
+#include "ACEPlayerController.h"
 #include "UI/ACERetailTextBlock.h"
 #include "UI/ACEUIFontStyles.h"
 #include "UI/ACEUIResourceResolver.h"
@@ -198,6 +200,13 @@ void UACELoginWidget::EnsureDefaultLayout()
 	auto* Brand = Label(TEXT("AC:Unreal"), 34);
 #endif
 	Heading->AddChildToHorizontalBox(Brand)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+#if !PLATFORM_ANDROID
+	if (!UHeadMountedDisplayFunctionLibrary::IsHeadMountedDisplayEnabled())
+	{
+		auto* ResetSlot=Heading->AddChildToHorizontalBox(ActionButton(TEXT("Reset graphics"),TEXT("resetgraphics")));
+		ResetSlot->SetPadding(FMargin(0,0,8,0)); ResetSlot->SetVerticalAlignment(VAlign_Top);
+	}
+#endif
 	auto* QuitSlot=Heading->AddChildToHorizontalBox(ActionButton(TEXT("Quit"),TEXT("quit")));
 	QuitSlot->SetHorizontalAlignment(HAlign_Right); QuitSlot->SetVerticalAlignment(VAlign_Top);
 	auto* Header = WidgetTree->ConstructWidget<UWrapBox>(); Header->SetInnerSlotPadding(FVector2D(8,8)); AddLine(Root, Header, 18);
@@ -776,6 +785,11 @@ void UACELoginWidget::SetPasswordVisible(bool bVisible)
 
 void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 {
+	if(Action==TEXT("resetgraphics"))
+	{
+		FACEDesktopDisplay::ResetGraphics(Cast<AACEPlayerController>(GetOwningPlayer()));
+		SetStatus(TEXT("Graphics reset. Windowed mode and default graphics restored."));return;
+	}
 	if(Action==TEXT("togglepassword")){SetPasswordVisible(PasswordBox&&PasswordBox->GetIsPassword());return;}
 	// Reveal is temporary UI state, never a saved account preference.
 	if(Action==TEXT("play")||Action==TEXT("plugins")||Action==TEXT("updates")||Action==TEXT("files")||Action==TEXT("browser")||Action==TEXT("launch")||Action==TEXT("newaccount"))SetPasswordVisible(false);

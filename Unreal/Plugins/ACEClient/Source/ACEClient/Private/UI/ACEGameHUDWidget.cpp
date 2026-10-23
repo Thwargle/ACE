@@ -7,6 +7,7 @@
 #include "UI/ACERetailObjectNames.h"
 #include "UI/ACEAppraisalFormatting.h"
 #include "ACEClientSubsystem.h"
+#include "ACEInventoryRules.h"
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
 #include "ACEOpcodes.h"
@@ -2551,7 +2552,7 @@ void UACEGameHUDWidget::OnUseSelectedClicked()
 	}
 
 	FACEWorldObject Obj;
-	if (Client->GetWorldObject(Sel.Guid, Obj) && Obj.IsWorldLootable())
+	if (Client->GetWorldObject(Sel.Guid, Obj) && ACEInventoryRules::IsWorldPickupOnUse(Obj))
 	{
 		Client->SendPutItemInContainer(Sel.Guid, Client->ResolvePickupContainer(Sel.Guid, SelectedPackGuid), 0);
 	}

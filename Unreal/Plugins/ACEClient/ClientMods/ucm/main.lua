@@ -212,6 +212,7 @@ local function stronger_spell(v,other)
  return v.power>other.power
 end
 local function buff_tier(v,p)
+ if v.school==3 and p.item_buffs_enabled==false then return false end
  local key=v.school==4 and 'creature_buff_level' or v.school==2 and 'life_buff_level' or v.school==3 and 'item_buff_level'
  local level=key and (p[key] or 0) or 0
  return level==0 or v.level==level
@@ -264,7 +265,7 @@ local function compute_buff(s,p)
     else item_best[v.category]=v end
    end
   end
-  if v.known~=false and (v.self_buff or (v.beneficial and v.school==3 and (v.duration or 0)>0
+  if v.known~=false and (v.school~=3 or p.item_buffs_enabled~=false) and (v.self_buff or (v.beneficial and v.school==3 and (v.duration or 0)>0
    and (v.caster_target or band(v.target_type,0x8107)~=0))) then
   local eligible=eligibility[v.category]
   if eligible==nil then
@@ -305,11 +306,23 @@ local function compute_buff(s,p)
  -- the same family on every carried weapon or armor piece. Other-player banes
  -- intentionally retain their separate equipment targeting below.
  local id=s.player or 0
+ local missing={}
+ for _,e in ipairs(s.item_buffs or {}) do
+  local v=best[e.category] or item_best[e.category]
+  if v and e.target==id and confirmed[tostring(id)..':'..e.category] then
+   for _,item in ipairs(e.missing_equipment or {}) do
+    if (confirmed[tostring(item)..':'..e.category] or -1)<v.power and not buff_skipped(s,item,e.category) then
+     missing[e.category]=missing[e.category] or item
+    end
+   end
+  end
+ end
  for _,category in ipairs(order) do local v=best[category]
   if not buff_skipped(s,id,category) then
   local refreshed=forced_buff and (forced_buff.done[tostring(id)..':'..v.category] or -1)>=v.power
   if forced_buff and not refreshed then return v,id end
   if not forced_buff and not ((active[v.category] or -1)>=v.power or (confirmed[tostring(id)..':'..v.category] or -1)>=v.power) then return v,id end
+  if not forced_buff and missing[category] and not buff_skipped(s,missing[category],category) then return v,missing[category] end
   end
  end
  local owned,usable_names,current_weapon={},{},nil
@@ -325,6 +338,7 @@ local function compute_buff(s,p)
     local key=tostring(target)..':'..v.category
     if forced_buff and (forced_buff.done[key] or -1)<v.power then return v,target end
     if not forced_buff and (confirmed[key] or -1)<v.power and (target~=id or (active[v.category] or -1)<v.power) then return v,target end
+    if not forced_buff and target==id and missing[v.category] then return v,missing[v.category] end
    end
   elseif item and exemplar and item_blocked[exemplar.category] then blocked[exemplar.category]=exemplar
   end
@@ -336,7 +350,7 @@ local function compute_buff(s,p)
  for _,expires in pairs(buff_skips) do if s.time<expires then incomplete=true;break end end
  for _,b in ipairs(p.buff_items or {}) do
   local v=by_id[b.spell]
-  if v and (band(v.flags,0x2000)==0 or s.in_fellowship) and (active[v.category] or -1)<v.power then
+  if v and (v.school~=3 or p.item_buffs_enabled~=false) and (band(v.flags,0x2000)==0 or s.in_fellowship) and (active[v.category] or -1)<v.power then
    if usable_names[b.name] and (item_attempts['buffitem'..b.name] or 0)<3 then return nil,nil,incomplete,true end
   end
  end
@@ -347,7 +361,7 @@ end
 -- or inventory across ticks.
 local buff_plan
 local function next_buff(s,p)
- local keys={'auto_buffs','buffs','excluded_buffs','excluded_buff_spells','item_buff_targets','buff_items','skill_margin','buff_skill_margin','refresh_seconds','creature_buff_level','life_buff_level','item_buff_level','protection_profile','bane_profile','protection_custom','bane_custom'}
+ local keys={'auto_buffs','item_buffs_enabled','buffs','excluded_buffs','excluded_buff_spells','item_buff_targets','buff_items','skill_margin','buff_skill_margin','refresh_seconds','creature_buff_level','life_buff_level','item_buff_level','protection_profile','bane_profile','protection_custom','bane_custom'}
  local same=buff_plan and buff_plan.snapshot==s
  if same then for _,k in ipairs(keys) do if buff_plan.options[k]~=p[k] then same=false;break end end end
  if not same then
@@ -1952,7 +1966,7 @@ local function tick(s,p)
   end
   for _,b in ipairs(p.buff_items or {}) do
    local spell=by_id[b.spell];local item=usable_names[b.name]
-   if spell and item and (band(spell.flags,0x2000)==0 or s.in_fellowship) then
+   if spell and item and (spell.school~=3 or p.item_buffs_enabled~=false) and (band(spell.flags,0x2000)==0 or s.in_fellowship) then
     local active,before=false,0;for _,e in ipairs(s.enchantments or {}) do if timed_buff(e) and e.category==spell.category and e.power>=spell.power then before=math.max(before,e.remaining);if e.remaining>buff_refresh_window(s,settings,e.duration or spell.duration) then active=true end end end
     local needed=forced_buff and not forced_buff.done['item'..b.name] or (not forced_buff and not active)
     if needed and (item_attempts['buffitem'..b.name] or 0)<3 then

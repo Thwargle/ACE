@@ -74,7 +74,8 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     const auto Health = Manager->FindElementByName(TEXT("ToolbarHealthMeter"));
     const auto Mana = Manager->FindElementByName(TEXT("ToolbarManaMeter"));
     const auto Stack = Manager->FindElementByName(TEXT("StackSizeSlider"));
-    if (!TestTrue(TEXT("Authored toolbar controls exist"), Text && Field && Health && Mana && Stack)) return false;
+    const auto Frame = Manager->FindElementByName(TEXT("SelectionBlinkField"));
+    if (!TestTrue(TEXT("Authored toolbar controls exist"), Text && Field && Health && Mana && Stack && Frame)) return false;
 
     FWidgetRenderer Renderer(true, true);
     auto* Target = FWidgetRenderer::CreateTargetFor(FVector2D(1600, 900), TF_Bilinear, true);
@@ -100,6 +101,8 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     TestFalse(TEXT("Jewelry never opens a health vial"), bool(Health->bVisible));
     TestFalse(TEXT("One item hides split controls"), bool(Stack->bVisible));
     TestEqual(TEXT("Selected field uses retail ObjectSelected state"), Field->DefaultState, 0x1000000Bu);
+    const double RemainingFlash = Binder->ToolbarSelectionFlashUntil - FPlatformTime::Seconds();
+    TestTrue(TEXT("Toolbar flash uses the DAT quarter-second pause"), RemainingFlash > 0 && RemainingFlash <= .25);
     auto* Label = Cast<UACERetailTextBlock>(Binder->SelectionText);
     if (!TestNotNull(TEXT("Selected name uses the DAT bitmap text renderer"), Label)) return false;
     if (!TestNotNull(TEXT("Selected name resolves its bitmap font"), Label->GetBitmapFont())) return false;
@@ -110,12 +113,21 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     const auto* TextSlot = Cast<UCanvasPanelSlot>(Label->Slot);
     if (!TestNotNull(TEXT("Name is attached to the toolbar canvas"), TextSlot)) return false;
     TestTrue(TEXT("Name retains full authored 140x31 bounds"), TextSlot->GetSize().Equals(FVector2D(140, 31)));
+    Binder->ToolbarSelectionFlashUntil=FPlatformTime::Seconds()+10; // hold the flash for the render capture
+    Draw(TEXT("CopperBraceletFlash"));
+    TestEqual(TEXT("Flash paints the retail green indicator"),Frame->PaintState,0x1000000Bu);
+    Binder->ToolbarSelectionFlashUntil=0; Binder->RefreshSelectionOverlay();
     Draw(TEXT("CopperBracelet"));
+    TestEqual(TEXT("An item without a meter returns to the normal field"),Field->DefaultState,1u);
+    TestEqual(TEXT("Expired flash clears the child indicator's selected state"),Frame->PaintState,0u);
+    TestEqual(TEXT("Expiration keeps the selected item's name"),Label->GetText().ToString(),FString(TEXT("Copper Bracelet")));
+    TestEqual(TEXT("Expiration does not deselect the item"),Client->GetSelectedObject().Guid,Item.Guid);
 
     Session.WorldObjects[Item.Guid].Name = TEXT("Copper Bracelet"); Binder->RefreshSelectionOverlay();
     TestEqual(TEXT("Already decorated material is not doubled"), Label->GetText().ToString(), FString(TEXT("Copper Bracelet")));
     Session.SelectedObject.bShowMana = true; Session.SelectedObject.ManaFraction = .4f;
-    Binder->RefreshSelectionOverlay();
+    Client->OnSelectionChanged.Broadcast(Session.SelectedObject); Binder->RefreshSelectionOverlay();
+    TestEqual(TEXT("Late mana replies do not restart the toolbar flash"),Binder->ToolbarSelectionFlashUntil,0.0);
     TestTrue(TEXT("Successful item mana reply exposes the authored mana vial"), bool(Mana->bVisible));
     TestEqual(TEXT("Mana fill comes from response independently of structure"), Mana->MeterFillFraction, .4f);
     TestEqual(TEXT("Mana keeps the authored background image"), Mana->ImageFileId, 0x060022D5u);
@@ -126,7 +138,8 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     TestEqual(TEXT("Empty mana has zero fill"), Mana->MeterFillFraction, 0.f);
 
     Session.SelectedObject.bShowHealth = true; Session.SelectedObject.HealthFraction = .65f;
-    Binder->RefreshSelectionOverlay();
+    Client->OnSelectionChanged.Broadcast(Session.SelectedObject); Binder->RefreshSelectionOverlay();
+    TestEqual(TEXT("Health updates do not restart the toolbar flash"),Binder->ToolbarSelectionFlashUntil,0.0);
     TestTrue(TEXT("Health selection exposes authored health vial"), bool(Health->bVisible));
     TestFalse(TEXT("Health takes precedence over stale mana"), bool(Mana->bVisible));
     TestEqual(TEXT("Health uses response fraction"), Health->MeterFillFraction, .65f);
@@ -135,6 +148,7 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
 
     auto& StackItem = Session.WorldObjects[Item.Guid]; StackItem.Name = TEXT("Arrow");
     StackItem.PluralName = TEXT("Arrows"); StackItem.MaterialType = 64; StackItem.StackSize = StackItem.MaxStackSize = 50;
+    Client->SelectObject(Item.Guid);
     Binder->SelectedStackAmount = 50; Binder->RefreshSelectionOverlay();
     TestTrue(TEXT("A stack always shows split controls"), bool(Stack->bVisible));
     TestFalse(TEXT("A stack suppresses even a stale health reply"), bool(Health->bVisible));
@@ -143,7 +157,13 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     TestTrue(TEXT("Stack name is one line above quantity controls"), Text->bTextOneLine);
     TestEqual(TEXT("Stack name aligns left in retail state"), int32(Label->GetTextJustification()), int32(ETextJustify::Left));
     TestEqual(TEXT("Stack uses retail selected field state"), Field->DefaultState, 0x1000000Cu);
+    Binder->ToolbarSelectionFlashUntil=FPlatformTime::Seconds()+10;
+    Draw(TEXT("StackFlash"));
+    Binder->ToolbarSelectionFlashUntil=0; Binder->RefreshSelectionOverlay();
     Draw(TEXT("Stack"));
+    TestEqual(TEXT("Stack flash settles into the retail StackedItem state"),Field->DefaultState,0x1000000Du);
+    TestEqual(TEXT("Stack flash clears its green indicator"),Frame->PaintState,0u);
+    TestTrue(TEXT("Ending the stack flash preserves split controls"),bool(Stack->bVisible));
 
     const auto Track = Stack->Children[0], Thumb = Stack->Children[1];
     TestEqual(TEXT("Retail stack track art"), Track->ImageFileId, 0x06004CF6u);
@@ -159,7 +179,6 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     TestEqual(TEXT("Partial quantity does not shrink the track"), Track->Width, Stack->Width);
     TestEqual(TEXT("Typed quantity immediately repositions thumb"), Thumb->X, 10);
     TestEqual(TEXT("Typed quantity immediately updates name"), Label->GetText().ToString(), FString(TEXT("7 Steel Arrows (of 50)")));
-    const auto Frame = Manager->FindElementByName(TEXT("SelectionBlinkField"));
     TestTrue(TEXT("Opaque selection frame paints below the slider"), Field->Children.IndexOfByKey(Frame) < Field->Children.IndexOfByKey(Stack));
     Draw(TEXT("StackPartial"));
     Draw(TEXT("StackPartial150"), 1.5f);

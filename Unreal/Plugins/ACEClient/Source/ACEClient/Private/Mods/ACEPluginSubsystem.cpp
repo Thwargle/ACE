@@ -352,9 +352,26 @@ void UACEPluginSubsystem::ValidateItemBuffTimers()
         if(Number(E,TEXT("expires"))<=Now)return true;
         const TArray<TSharedPtr<FJsonValue>>* Equipment=nullptr;
         if(Target==DataPlayer&&E->TryGetArrayField(TEXT("equipment"),Equipment))
+        {
+            // A shield can be removed to wield the casting wand. Do not erase
+            // every worn-armor timer when combat equips it again: that produces
+            // an endless wand -> shield -> wand cycle. Retain uncovered items
+            // until their individual cast completes, even while in inventory.
+            const TArray<TSharedPtr<FJsonValue>>* Previous=nullptr;
+            TArray<TSharedPtr<FJsonValue>> Missing;
+            if(E->TryGetArrayField(TEXT("missing_equipment"),Previous))Missing=*Previous;
             for(const auto& Pair:Session->GetWorldObjects())
                 if(Pair.Value.WielderId==DataPlayer&&(Pair.Value.ItemType&(ACEItemType::Armor|ACEItemType::Clothing))
-                    &&!Equipment->ContainsByPredicate([&](const auto& Id){return Id->AsNumber()==double(uint32(Pair.Key));}))return true;
+                    &&!Equipment->ContainsByPredicate([&](const auto& Id){return Id->AsNumber()==double(uint32(Pair.Key));})
+                    &&!Missing.ContainsByPredicate([&](const auto& Id){return Id->AsNumber()==double(uint32(Pair.Key));}))
+                    Missing.Add(MakeShared<FJsonValueNumber>(uint32(Pair.Key)));
+            Missing.RemoveAll([&](const auto& Id)
+            {
+                FACEWorldObject Item;
+                return !C->GetWorldObject(int32(uint32(Id->AsNumber())),Item)||!IsOwnedPluginItem(Item);
+            });
+            E->SetArrayField(TEXT("missing_equipment"),Missing);
+        }
         return false;
     });
 }

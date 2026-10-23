@@ -16,6 +16,7 @@
 #include "UI/ACEUIElement.h"
 #include "ACECharacterOptions.h"
 #include "ACERuntimeOptions.h"
+#include "ACEDesktopDisplay.h"
 #include "ACEClientSubsystem.h"
 #include "Components/Border.h"
 #include "Components/CanvasPanel.h"
@@ -239,6 +240,17 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 		Canvas->PlaceWidgetAtElement(Label, TabEl, 100000, FMargin(8.f, 4.f, 6.f, 4.f));
 	}
 
+    static const TPair<const TCHAR*, const TCHAR*> Buttons[] = {
+        { TEXT("GameplayOptions_LeaveWorld_Button"), TEXT("Leave World") },
+        { TEXT("GameplayOptions_Quit_Button"), TEXT("Quit") },
+        { TEXT("GameplayOptions_Keyboard_Button"), TEXT("Keyboard Layout") },
+        { TEXT("GameplayOptions_MouseTurning_Button"), TEXT("Mouse Turning") },
+        { TEXT("GameplayOptions_Help_Button"), TEXT("Help") },
+        { TEXT("GameplayOptions_UrgentAssistance_Button"), TEXT("Urgent Assistance") },
+        { TEXT("GameplayOptions_ReportAbuse_Button"), TEXT("Report Abuse") },
+        { TEXT("GameplayOptions_Plugins_Button"), TEXT("Plugin Manager") },
+        { TEXT("GameplayOptions_ResetGraphics_Button"), TEXT("Reset graphics") },
+    };
 	if (ActiveOptionsTab == TEXT("GameplayOptionsPage"))
 	{
 		for (UTextBlock* T : OptionRowLabels) { if (T) { T->SetVisibility(ESlateVisibility::Collapsed); } }
@@ -246,7 +258,8 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 		OptionRowOptions.Reset();
 
 		// A native button using the same DAT chrome as the surrounding options.
-        if(!Manager->FindElementUnder(ActiveOptionsTab,TEXT("GameplayOptions_Plugins_Button")))
+        for(const TCHAR* Name:{TEXT("GameplayOptions_Plugins_Button"),TEXT("GameplayOptions_ResetGraphics_Button")})
+        if(!Manager->FindElementUnder(ActiveOptionsTab,Name))
         {
             auto Source=Manager->FindElementUnder(ActiveOptionsTab,TEXT("GameplayOptions_ReportAbuse_Button"));
             if(Source)if(auto Parent=Source->Parent.Pin())
@@ -255,23 +268,13 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
                 // Copying nodes with InstanceId=0 aliases the canvas paint cache.
                 if(auto B=UACEUILayoutResolver::LoadTemplate(0x2100002A,0x10000207))
                 {
-                    B->SetElementName(TEXT("GameplayOptions_Plugins_Button"));B->TextEntryId=0;
+                    B->SetElementName(Name);B->TextEntryId=0;
                     B->X=Source->X;B->Y=Source->Y+Source->Height+8;
                     B->Width=Source->Width;B->Height=Source->Height;
                     Parent->AddChild(B);
                 }
             }
         }
-        static const TPair<const TCHAR*, const TCHAR*> Buttons[] = {
-			{ TEXT("GameplayOptions_LeaveWorld_Button"), TEXT("Leave World") },
-			{ TEXT("GameplayOptions_Quit_Button"), TEXT("Quit") },
-			{ TEXT("GameplayOptions_Keyboard_Button"), TEXT("Keyboard Layout") },
-			{ TEXT("GameplayOptions_MouseTurning_Button"), TEXT("Mouse Turning") },
-			{ TEXT("GameplayOptions_Help_Button"), TEXT("Help") },
-			{ TEXT("GameplayOptions_UrgentAssistance_Button"), TEXT("Urgent Assistance") },
-			{ TEXT("GameplayOptions_ReportAbuse_Button"), TEXT("Report Abuse") },
-            { TEXT("GameplayOptions_Plugins_Button"), TEXT("Plugin Manager") },
-		};
 		if(auto First=Manager->FindElementUnder(ActiveOptionsTab,Buttons[0].Key))if(auto Parent=First->Parent.Pin())
         {
             const int32 StartY=First->Y;
@@ -377,7 +380,7 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 			Btn->EdgeAnchorX = Btn->EdgeAnchorY = 0; Btn->RecomputeLayoutOffset();
 		}
 	}
-	while (OptionsButtonLabels.Num() < 11)
+	while (OptionsButtonLabels.Num() < UE_ARRAY_COUNT(Buttons)+UE_ARRAY_COUNT(Footer))
 	{
 		UTextBlock* L = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
 		L->SetJustification(ETextJustify::Center);
@@ -385,8 +388,8 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 	}
 	for (int32 i = 0; i < UE_ARRAY_COUNT(Footer); ++i)
 	{
-		// Footer labels live at the tail of the shared label pool (8 gameplay buttons first).
-		UTextBlock* Label = OptionsButtonLabels.IsValidIndex(8 + i) ? OptionsButtonLabels[8 + i] : nullptr;
+		// Footer labels follow the gameplay captions without sharing their widgets.
+		UTextBlock* Label = OptionsButtonLabels[UE_ARRAY_COUNT(Buttons) + i];
 		if (!Label)
 		{
 			continue;
@@ -721,6 +724,12 @@ bool UACEUIGameplayBinder::HandleOptionsNamedClick(const FString& Name)
 	if (Name == TEXT("GameplayOptions_Plugins_Button"))
     {
         if(Client)Client->GetGameInstance()->GetSubsystem<UACEPluginSubsystem>()->TogglePanel();
+        return true;
+    }
+    if (Name == TEXT("GameplayOptions_ResetGraphics_Button"))
+    {
+        FACEDesktopDisplay::ResetGraphics(PlayerController.Get());
+        if(auto* Video=Cast<UACEVideoSettingsWidget>(VideoSettings))Video->ResetVideo();
         return true;
     }
     if (Name == TEXT("GameplayOptions_Keyboard_Button"))

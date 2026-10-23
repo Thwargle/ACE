@@ -904,6 +904,15 @@ void UACEWorldPresenterComponent::SpawnOrUpdateEntity(const FACEWorldObject& Obj
 		DestroySpawnedSelf(Object.Guid);
 		return;
 	}
+	UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
+	UACEDatSubsystem* Dat = GI ? GI->GetSubsystem<UACEDatSubsystem>() : nullptr;
+	if (!Dat || !Dat->IsDatReady())
+	{
+		for (auto& Pending : PendingSpawns)
+			if (Pending.Guid == Object.Guid) { Pending = Object; return; }
+		PendingSpawns.Add(Object);
+		return;
+	}
 	const bool bViewerAdmin = Client && Client->GetSession() && Client->GetSession()->IsLocalPlayerAdmin();
 	if (ShouldSkipAdminOnlyMesh(Object, bViewerAdmin))
 	{
@@ -940,6 +949,7 @@ void UACEWorldPresenterComponent::SpawnOrUpdateEntity(const FACEWorldObject& Obj
 		Actor = Spawned[Object.Guid];
 		if (Actor)
 		{
+			Actor->PlacementTerrain = GetOwner()->FindComponentByClass<UACETerrainPresenterComponent>();
 			Actor->InitializeFromObject(Object, WorldScale, /*bApplyDatAppearance*/ false);
 		}
 	}
@@ -959,6 +969,7 @@ void UACEWorldPresenterComponent::SpawnOrUpdateEntity(const FACEWorldObject& Obj
 			return;
 		}
 
+		Actor->PlacementTerrain = GetOwner()->FindComponentByClass<UACETerrainPresenterComponent>();
 		Actor->InitializeFromObject(Object, WorldScale, /*bApplyDatAppearance*/ false);
 		Spawned.Add(Object.Guid, Actor);
 	}
@@ -1013,8 +1024,6 @@ void UACEWorldPresenterComponent::SpawnOrUpdateEntity(const FACEWorldObject& Obj
 	// object using the same GUID after an earlier setup failed.
 	AppearanceRetryCounts.Remove(Object.Guid);
 
-	UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
-	UACEDatSubsystem* Dat = GI ? GI->GetSubsystem<UACEDatSubsystem>() : nullptr;
 	if (bImmediateDatAppearance && bApplyDatAppearance && Dat && Dat->IsDatReady())
 	{
 		const uint64 Revision = Actor->Appearance ? Actor->Appearance->GetAppearanceRevision() : 0;
@@ -1065,22 +1074,14 @@ void UACEWorldPresenterComponent::SpawnOrUpdateEntity(const FACEWorldObject& Obj
 
 void UACEWorldPresenterComponent::DrainPendingSpawns()
 {
+	// A body created before its Setup metadata is resident gets no movement
+	// spheres and cannot settle later, even after its visual mesh appears.
+	auto* Dat = GetWorld() && GetWorld()->GetGameInstance()
+		? GetWorld()->GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr;
+	if (!Dat || !Dat->IsDatReady()) return;
 	const int32 Budget = FMath::Max(1, SpawnsPerTick);
 	int32 SpawnedCount = 0;
-	int32 EffectiveBudget = Budget;
-	if (UWorld* World = GetWorld())
-	{
-		if (UGameInstance* GI = World->GetGameInstance())
-		{
-			if (UACEDatSubsystem* Dat = GI->GetSubsystem<UACEDatSubsystem>())
-			{
-				if (Dat->IsLightweightStreaming())
-				{
-					EffectiveBudget = 1;
-				}
-			}
-		}
-	}
+	const int32 EffectiveBudget = Dat->IsLightweightStreaming() ? 1 : Budget;
 	while (PendingSpawns.Num() > 0 && SpawnedCount < EffectiveBudget)
 	{
 		if (SpawnedCount == 0 && PendingSpawns.Num() > 1 && Client)

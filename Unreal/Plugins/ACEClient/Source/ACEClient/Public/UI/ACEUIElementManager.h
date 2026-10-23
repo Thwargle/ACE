@@ -86,6 +86,8 @@ public:
 
 	/** Raise a floaty (or the floaty containing Element) above sibling floaties. */
 	void BringFloatyToFront(const TSharedPtr<FACEUIElement>& Element);
+	/** Keep a window accessible; recovery can override the offscreen-drag preference. */
+    void ConstrainWindow(const TSharedPtr<FACEUIElement>& Window, FIntPoint ViewSize, bool bForce=false);
 
 	/** Mouse in viewport space; converts to canvas then routes like retail. */
 	void NotifyMouseMove(FVector2D ViewportPos, FVector2D ViewportSize);
@@ -124,7 +126,6 @@ public:
 
 private:
 	UPROPERTY(Transient) TObjectPtr<UACEUIResourceResolver> ResourceResolver;
-    void ConstrainWindow(const TSharedPtr<FACEUIElement>& Window, FIntPoint ViewSize);
 	mutable TMap<FString, TArray<TSharedPtr<FACEUIElement>>> NameLookupIndex;
 	mutable bool bNameLookupIndexValid = false;
 	mutable uint64 NameLookupRevision = 0;

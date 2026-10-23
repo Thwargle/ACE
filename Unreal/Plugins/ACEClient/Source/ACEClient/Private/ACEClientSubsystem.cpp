@@ -888,7 +888,7 @@ bool UACEClientSubsystem::IsUseBusy() const
 bool UACEClientSubsystem::IsInPortalSpace() const
 {
 	const auto* PC = GetWorld() ? Cast<AACEPlayerController>(GetWorld()->GetFirstPlayerController()) : nullptr;
-	return PC && PC->IsWorldTransitionActive();
+	return (Session && Session->IsLogOffPending()) || (PC && PC->IsWorldTransitionActive());
 }
 
 void UACEClientSubsystem::SendGetAndWieldItem(int32 ItemGuid, int64 WieldLocation)

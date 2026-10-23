@@ -134,7 +134,8 @@ void UACEActionDeckSubsystem::Deserialize(const TSharedPtr<FJsonObject>& J)
         {
             if((*Array)[I]->Type!=EJson::Object)continue;
             const auto E=(*Array)[I]->AsObject();auto& S=Slots[I];
-            S.Action=EACEDeckAction(FMath::Clamp(Integer(E,TEXT("action")),0,4));
+            const int32 Action=Integer(E,TEXT("action"));
+            S.Action=Action>=0&&Action<=int32(EACEDeckAction::Self)?EACEDeckAction(Action):EACEDeckAction::Empty;
             S.Guid=Integer(E,TEXT("guid"));S.Spell=Integer(E,TEXT("spell"));S.Height=FMath::Clamp(Integer(E,TEXT("height"),2),1,3);
             S.Item.ClassId=Integer(E,TEXT("class"));S.Item.Name=Text(E,TEXT("name")).Left(256);
             S.Item.Icon=Integer(E,TEXT("icon"));S.Item.Overlay=Integer(E,TEXT("overlay"));S.Item.Underlay=Integer(E,TEXT("underlay"));
@@ -205,6 +206,7 @@ FString UACEActionDeckSubsystem::SlotName(int32 Index) const
     if(!Slots.IsValidIndex(Index))return FString();
     const auto& S=Slots[Index];
     if(S.Action==EACEDeckAction::Empty)return TEXT("Empty slot");
+    if(S.Action==EACEDeckAction::Self)return TEXT("Backpack · Target self");
     if(S.Action==EACEDeckAction::Melee||S.Action==EACEDeckAction::Missile)
         return FString(S.Action==EACEDeckAction::Melee?TEXT("Melee"):TEXT("Missile"))
             +TEXT(" · ")+(S.Height==1?TEXT("Low"):S.Height==3?TEXT("High"):TEXT("Medium"));
@@ -251,7 +253,8 @@ UACEUIGameplayBinder* UACEActionDeckSubsystem::Binder() const
 }
 bool UACEActionDeckSubsystem::ReservesKey(const FInputChord& Key) const
 {
-    if(!IsOverrideActive()||MatchKey(Key)==INDEX_NONE)return false;
+    const int32 Index=MatchKey(Key);
+    if(!IsOverrideActive()||Index==INDEX_NONE||Slots[Index].Action==EACEDeckAction::Empty)return false;
     if(!Client||Client->GetSessionState()!=EACESessionState::InWorld||ACEInputBindings::IsEditing()
         ||ACEInputBindings::IsTextEntryFocused())return false;
     auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
@@ -278,7 +281,7 @@ bool UACEActionDeckSubsystem::HandleKey(const FInputChord& Key,bool Repeat)
     }
     // Editing pauses deck actions without silently handing keys to native bars.
     if(!Repeat&&!ConfigOpen)Activate(MatchKey(Key));
-    // Even empty/depleted slots reserve their binding: never fall through and
+    // Assigned but depleted/disabled slots still reserve their binding: never fall through and
     // accidentally cast a different native hotbar spell.
     return true;
 }
@@ -305,6 +308,8 @@ void UACEActionDeckSubsystem::Refresh(bool Force)
     {
         auto& S=Slots[I];auto& A=Available[I];
         if(S.Action==EACEDeckAction::Empty){A.Reason=TEXT("Drag an inventory item or spell here.");continue;}
+        // Selection remains available during an action and in every stance.
+        if(S.Action==EACEDeckAction::Self){A.Guid=Player;A.Ready=Player!=0;continue;}
         if(S.Action==EACEDeckAction::Item)
         {
             const FACEWorldObject* Best=nullptr;
@@ -336,6 +341,14 @@ void UACEActionDeckSubsystem::Refresh(bool Force)
 bool UACEActionDeckSubsystem::BindItem(int32 Index,int32 Guid)
 {
     EnsureCharacter();FACEWorldObject Item;
+    // The main backpack is the player's GUID, not an owned inventory item.
+    // Persist the action rather than an inventory match or a particular login's GUID.
+    if(Slots.IsValidIndex(Index)&&Client&&Player&&Guid==Player)
+    {
+        auto& S=Slots[Index];S.Action=EACEDeckAction::Self;S.Guid=S.Spell=0;S.Item=FACESupplyEntry();
+        S.Item.Icon=0x06004CF7;S.Item.ItemType=ACEItemType::Container;
+        Notice.Empty();Save();Refresh(true);return true;
+    }
     if(!Slots.IsValidIndex(Index)||!Client||!Client->GetWorldObject(Guid,Item)||!Client->IsOwnedInventoryItem(Item))
     {Notice=TEXT("Drag an item from your own inventory.");return false;}
     auto& S=Slots[Index];S.Action=EACEDeckAction::Item;S.Guid=Guid;S.Spell=0;
@@ -374,14 +387,22 @@ void UACEActionDeckSubsystem::SwapSlots(int32 From,int32 To)
 }
 int32 UACEActionDeckSubsystem::HealingTarget(const FACEWorldObject& Kit,int32 Selected,int32 Self,const TMap<int32,FACEWorldObject>& Objects)
 {
-    auto Valid=[&](int32 Guid)
+    const auto* PlayerObject=Objects.Find(Self);
+    if(!Self||(PlayerObject&&PlayerObject->bDying))return 0;
+    if(const auto* Target=Objects.Find(Selected);Target&&Selected!=Self&&Target->bIsPlayer&&!Target->bDying)
     {
-        const auto* Target=Objects.Find(Guid);
-        return Target&&(Guid==Self||Target->bIsPlayer)&&!Target->bDying
-            &&ACEInventoryRules::IsTargetCompatible(Kit,*Target,Self,true,false,false);
-    };
-    if(Selected&&Valid(Selected))return Selected;
-    return Valid(Self)?Self:0;
+        // ACE Healer::HandleActionUseOnTarget permits the same PK status, or
+        // an NPK recipient. A selected creature or incompatible player must
+        // not prevent the default self heal.
+        constexpr int32 PKFlags=ACEObjectDescFlag::PlayerKiller|ACEObjectDescFlag::PkLiteStatus|ACEObjectDescFlag::FreePkStatus;
+        const int32 TargetPK=Target->ObjectDescriptionFlags&PKFlags;
+        const int32 SelfPK=PlayerObject?PlayerObject->ObjectDescriptionFlags&PKFlags:0;
+        if((!TargetPK||TargetPK==SelfPK)&&ACEInventoryRules::IsTargetCompatible(Kit,*Target,Self,true,false,false))return Selected;
+    }
+    // The session's player ID is authoritative even while its world descriptor
+    // is being recreated. Self healing must not depend on a visible world entry.
+    FACEWorldObject SelfTarget;SelfTarget.Guid=Self;SelfTarget.ItemType=ACEItemType::Creature;
+    return ACEInventoryRules::IsTargetCompatible(Kit,SelfTarget,Self,true,false,false)?Self:0;
 }
 bool UACEActionDeckSubsystem::Activate(int32 Index)
 {
@@ -391,7 +412,11 @@ bool UACEActionDeckSubsystem::Activate(int32 Index)
     if(PC&&(PC->IsWorldTransitionActive()||PC->IsVRActive()))return false;
     if(!Available[Index].Ready){Notice=Available[Index].Reason;return false;}
     const auto& S=Slots[Index];auto* B=Binder();
-    if(S.Action==EACEDeckAction::Spell)
+    if(S.Action==EACEDeckAction::Self)
+    {
+        if(B)B->TargetActionDeckSelf();else Client->SelectObject(Player);
+    }
+    else if(S.Action==EACEDeckAction::Spell)
     {
         if(!Client->SendCastSpell(S.Spell)){Notice=TEXT("Select a valid target for this spell.");return false;}
     }

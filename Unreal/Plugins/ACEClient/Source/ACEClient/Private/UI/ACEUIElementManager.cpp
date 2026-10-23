@@ -1,4 +1,5 @@
 #include "UI/ACEUIElementManager.h"
+#include "ACEDesktopDisplay.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "ACERuntimeOptions.h"
 #include "UI/ACERetailUILayout.h"
@@ -401,10 +402,10 @@ void UACEUIElementManager::ApplyEdgeAnchoredLayout(int32 ViewportWidth, int32 Vi
 	}
 }
 
-void UACEUIElementManager::ConstrainWindow(const TSharedPtr<FACEUIElement>& Window, FIntPoint ViewSize)
+void UACEUIElementManager::ConstrainWindow(const TSharedPtr<FACEUIElement>& Window, FIntPoint ViewSize, bool bForce)
 {
-    if (!Window || Window->Width<=0 || Window->Height<=0 || ViewSize.X<=0 || ViewSize.Y<=0
-        || ACERuntimeOptions::Get(TEXT("ConstrainUIWindows"))<=.5f) return;
+    if (FACEDesktopDisplay::IsModeChangePending() || !Window || Window->Width<=0 || Window->Height<=0 || ViewSize.X<=0 || ViewSize.Y<=0
+        || (!bForce && ACERuntimeOptions::Get(TEXT("ConstrainUIWindows"))<=.5f)) return;
     // Shrinking the viewport/UI scale must leave bottom controls accessible.
     if (Window->Height>ViewSize.Y && Window->ElementName.StartsWith(TEXT("RootGameplay_Floaty"))
         && !IsFixedSizeFloaty(Window->ElementName))

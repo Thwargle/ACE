@@ -26,6 +26,7 @@ class ACECLIENT_API UACEUICharSelectBinder : public UObject
 	GENERATED_BODY()
 	friend class FACERetailScreenTest;
 	friend class FACECharacterManagementTest;
+	friend class FACERetailCharacterCreationScreenTest;
 
 public:
 	void Initialize(UACEClientSubsystem* InClient, UACEUIElementManager* InManager,

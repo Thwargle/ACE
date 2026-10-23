@@ -46,6 +46,7 @@ void UACELoginWidget::SelectCharacterIndex(int32 Index)
 	}
 	SelectedCharacterIndex = Index;
 	SelectedCharacterId = CachedCharacters[Index].CharacterId;
+	if (Client && Client->GetSession()) Client->GetSession()->SetPreferredCharacterId(SelectedCharacterId);
 	SetStatus(FString::Printf(TEXT("Selected %s"), *CachedCharacters[Index].Name));
 	UpdateCharacterRowHighlight();
 }
@@ -106,8 +107,10 @@ void UACELoginWidget::HandleCharacters(const TArray<FACECharacterInfo>& Characte
 	SelectedCharacterId = 0;
 	if (Characters.Num() > 0)
 	{
-		SelectedCharacterIndex = 0;
-		SelectedCharacterId = Characters[0].CharacterId;
+		const int32 Preferred = Client && Client->GetSession() ? Client->GetSession()->GetPreferredCharacterId() : 0;
+		SelectedCharacterIndex = Characters.IndexOfByPredicate([Preferred](const FACECharacterInfo& C) { return C.CharacterId == Preferred; });
+		if (SelectedCharacterIndex == INDEX_NONE) SelectedCharacterIndex = 0;
+		SelectedCharacterId = Characters[SelectedCharacterIndex].CharacterId;
 	}
 	if (CharacterListLabel)
 	{

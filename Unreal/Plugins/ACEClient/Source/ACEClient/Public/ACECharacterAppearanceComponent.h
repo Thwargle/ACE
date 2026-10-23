@@ -37,6 +37,7 @@ class ACECLIENT_API UACECharacterAppearanceComponent : public UActorComponent
 	friend class FACERetailScreenTest;
     friend class FACERetailWorldEntryTest;
 	friend class FACERetailPortalSpaceTest;
+	friend class FACERetailLogoutTest;
 
 public:
 	// Controllers and remote actors consume authored displacement before collision.

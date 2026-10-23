@@ -63,6 +63,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	GENERATED_BODY()
 	friend class FACERetailScreenTest;
 	friend class FACEPortalInterfaceTest;
+	friend class FACERetailLogoutTest;
 	friend struct FACERetailAugmentationUIFixture;
 	friend class FACEDungeonInterfacesTest;
 	friend class FACEDesktopHighlightTest;
@@ -92,6 +93,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEItemPresentationTest;
 	friend class FACESelectionToolbarTest;
     friend class FACEActionDeckTest;
+    friend class FACERetailCursorTest;
 
 public:
     /** Shared attack mark used by desktop controls, VR and plugin commands. */
@@ -238,6 +240,7 @@ public:
 	void ActivateHotbarSlot(int32 SlotIndex);
     /** Manual deck actions use the same equip/target/charge paths as native UI. */
     void UseActionDeckItem(int32 Guid) { CancelPendingUseWith(); UseInventoryItem(Guid); }
+    void TargetActionDeckSelf();
     void RequestActionDeckAttack(uint32 Height) { BeginCombatPowerCharge(Height, false); }
 
 	/**
@@ -506,6 +509,7 @@ private:
 	bool bCombatRequestSent = false;
 	float ReleasedAttackPower = 0.f;
 	bool bCombatRepeatActive = false;
+	bool bCombatRetargetPending = false;
 	uint32 LastCombatEventRevision = 0;
 	int32 LastCombatAttackTarget = 0;
 	float LastCombatAttackPower = 0.f;
@@ -521,6 +525,8 @@ private:
 	FACEPlayerVitals LastVitals;
 	FACESelectedObject LastSelection;
 	double SelectionFlashUntil = 0;
+	/** Toolbar DAT state pause is 0.25s, independently of the 0.4s object flash. */
+	double ToolbarSelectionFlashUntil = 0;
 	void SetRetailTooltip(UWidget* Widget, const FText& Text);
 	void TickSelectionFlash();
 	void RefreshKeyboardOverlays();

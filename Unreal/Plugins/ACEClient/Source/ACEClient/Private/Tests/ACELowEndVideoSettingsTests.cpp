@@ -11,6 +11,7 @@
 #include "UI/ACEVideoSettingsWidget.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/ComboBoxString.h"
+#include "Components/Slider.h"
 #include "Components/DirectionalLightComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/SceneComponent.h"
@@ -25,6 +26,12 @@
 #include "HAL/IConsoleManager.h"
 #include "ProceduralMeshComponent.h"
 #include "Scalability.h"
+#include "Dat/ACEDatTextureResolver.h"
+#include "Dat/ACELandTextureMipProvider.h"
+#include "Engine/Texture2D.h"
+#include "TextureResource.h"
+#include "RenderingThread.h"
+#include "UObject/StrongObjectPtr.h"
 #include "UObject/UObjectIterator.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACELowEndVideoSettingsTest,"ACE.Rendering.LowEndVideoSettings",
@@ -36,6 +43,13 @@ bool FACELowEndVideoSettingsTest::RunTest(const FString&)
     const auto PreviousQuality=Settings->ScalabilityQuality;
     const auto PreviousAppliedQuality=Scalability::GetQualityLevels();
     const FString PreviousIni=GGameUserSettingsIni;
+    // Other rendering fixtures override budgets with SetByCode. Exercise the
+    // user preference at its real priority, independently of test order.
+    auto* EffectBudget=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.FXLightBudget"));
+    if(!TestNotNull(TEXT("Desktop effect budget exists"),EffectBudget))return false;
+    const int32 PreviousBudget=EffectBudget->GetInt();
+    const auto PreviousBudgetPriority=static_cast<EConsoleVariableFlags>(EffectBudget->GetFlags()&ECVF_SetByMask);
+    EffectBudget->ClearFlags(ECVF_SetByMask);
     GGameUserSettingsIni=FPaths::ProjectSavedDir()/TEXT("Automation/LowEndVideoPreferences.ini");
     FConfigFile Config; Config.NoSave=false; Config.bCanSaveAllSections=true;
     GConfig->SetFile(GGameUserSettingsIni,&Config);
@@ -45,6 +59,7 @@ bool FACELowEndVideoSettingsTest::RunTest(const FString&)
         Scalability::SetQualityLevels(PreviousAppliedQuality);
         IConsoleManager::Get().CallAllConsoleVariableSinks();
         GGameUserSettingsIni=PreviousIni; ACERuntimeOptions::Apply();
+        EffectBudget->ClearFlags(ECVF_SetByMask);EffectBudget->Set(PreviousBudget,PreviousBudgetPriority);
     };
     Settings->SetOverallScalabilityLevel(3);
     ACERuntimeOptions::Apply();
@@ -111,6 +126,36 @@ bool FACELowEndVideoSettingsTest::RunTest(const FString&)
         Sky->UpdateWorldLighting(Key,Key,0,.5f); Submit();
         Options->ResetVideo();
     };
+    auto* Detail=Cast<UComboBoxString>(Options->WidgetTree->FindWidget(TEXT("TextureQuality")));
+    auto* Preset=Cast<UComboBoxString>(Options->WidgetTree->FindWidget(TEXT("GraphicsQuality")));
+    if(!TestNotNull(TEXT("World texture detail selector"),Detail))return false;
+    TArray<FColor> Pixels;Pixels.Init(FColor(65,123,200,180),128*64);
+    TStrongObjectPtr<UTexture2D> Object(FACEDatTextureResolver::CreateTransientRgbaWithMips(128,64,Pixels,true));
+    TStrongObjectPtr<UTexture2D> Effect(FACEDatTextureResolver::CreateTransientRgbaWithMips(128,64,Pixels,true,TA_Wrap,TA_Wrap,false,false,4,TF_Bilinear));
+    TStrongObjectPtr<UTexture2D> Interface(FACEDatTextureResolver::CreateTransientRgbaUi(128,64,Pixels));
+    auto Blend=MakeShared<FACETerrainBlend,ESPMode::ThreadSafe>();Blend->Width=128;Blend->Height=64;Blend->Pixels=Pixels;
+    TestTrue(TEXT("Terrain source mips prepared"),Blend->PrepareUploadMips());
+    TStrongObjectPtr<UTexture2D> Terrain(UACELandTextureMipProvider::CreateTexture(Dat,Blend));
+    auto GPUSize=[](UTexture2D* Texture) {return Texture->GetResource()->TextureRHI->GetSizeXY();};
+    for(int32 Quality:{0,1,2,3,4,0,2})
+    {
+        Detail->SetSelectedIndex(Quality);Apply();FlushRenderingCommands();
+        const int32 Divisor=Quality==0?4:Quality==1?2:1;
+        for(auto* Texture:{Object.Get(),Effect.Get(),Terrain.Get()})
+        {
+            TestEqual(TEXT("Actual GPU texture dimensions obey detail without replacing the texture"),GPUSize(Texture),FIntPoint(128/Divisor,64/Divisor));
+            TestEqual(TEXT("Full source remains available to restore quality"),Texture->GetSizeX(),128);
+        }
+        TestEqual(TEXT("Inventory, fonts and UI are not degraded"),GPUSize(Interface.Get()),FIntPoint(128,64));
+        TStrongObjectPtr<UTexture2D> Arriving(FACEDatTextureResolver::CreateTransientRgbaWithMips(128,64,Pixels,true));
+        FlushRenderingCommands();
+        TestEqual(TEXT("Newly loaded objects use the same selected detail"),GPUSize(Arriving.Get()),FIntPoint(128/Divisor,64/Divisor));
+    }
+    Preset->SetSelectedIndex(0);
+    TestEqual(TEXT("Low preset visibly updates texture control"),Detail->GetSelectedIndex(),0);
+    Detail->SetSelectedIndex(1);Apply();FlushRenderingCommands();
+    TestEqual(TEXT("An individual texture choice overrides the preset"),GPUSize(Object.Get()),FIntPoint(64,32));
+    Preset->SetSelectedIndex(3);Apply();
     for(int32 Level:{3,1,0,2,4,0,3})
     {
         Shadow->SetSelectedIndex(Level); Dynamic->SetSelectedIndex(Level==0?0:Level==1?1:2);
@@ -131,6 +176,18 @@ bool FACELowEndVideoSettingsTest::RunTest(const FString&)
         for(auto* Light:DoorLights()) TestEqual(TEXT("Loaded doorway obeys preference"),Light->IsVisible(),Level>1);
         TestEqual(TEXT("Hidden room only casts for enabled doorway lights"),bool(Room->CellMesh->bCastHiddenShadow),Level>1);
     }
+    auto* LightLimit=Cast<USlider>(Options->WidgetTree->FindWidget(TEXT("EffectLightLimit")));
+    if(!TestNotNull(TEXT("User-facing effect light limit"),LightLimit))return false;
+    LightLimit->SetValue(32);Apply();
+    TestEqual(TEXT("Custom light count reaches the desktop renderer"),IConsoleManager::Get().FindConsoleVariable(TEXT("ace.FXLightBudget"))->GetInt(),32);
+    TestEqual(TEXT("Increasing the limit lights all ten nearby sources"),Lights->GetVisibleLightCount(),10);
+    auto* CountOptions=CreateWidget<UACEVideoSettingsWidget>(GI);CountOptions->TakeWidget();
+    TestEqual(TEXT("Reopened settings retain custom light count"),Cast<USlider>(CountOptions->WidgetTree->FindWidget(TEXT("EffectLightLimit")))->GetValue(),32.f);
+    LightLimit->SetValue(4);Apply();
+    TestEqual(TEXT("Reducing the limit releases excess lights"),Lights->GetVisibleLightCount(),4);
+    LightLimit->SetValue(0);Apply();
+    TestEqual(TEXT("Zero limit disables effect lights"),Lights->GetVisibleLightCount(),0);
+    LightLimit->SetValue(8);Apply();
     Shadow->SetSelectedIndex(0); Dynamic->SetSelectedIndex(0);
     TestTrue(TEXT("Editing lighting enables Apply"),Options->HasPendingChanges());
     TestEqual(TEXT("Changing selection waits for Apply"),ACERuntimeOptions::DynamicLightingQuality(),2);

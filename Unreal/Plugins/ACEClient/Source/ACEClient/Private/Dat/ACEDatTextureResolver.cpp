@@ -1,6 +1,7 @@
 #include "Dat/ACEDatTextureResolver.h"
 #include "Dat/ACEDatCursor.h"
 #include "Dat/ACEDxtUtil.h"
+#include "Dat/ACEWorldTextureMipProvider.h"
 #include "ACEDatSubsystem.h"
 #include "Engine/Texture2D.h"
 #include "Engine/Texture.h"
@@ -186,6 +187,12 @@ UTexture2D* FACEDatTextureResolver::CreateTransientRgbaWithMips(
 	PlatformData->SizeY = Height;
 	PlatformData->PixelFormat = PF_B8G8R8A8;
 	PlatformData->Mips.Empty(MipCount);
+	UACEWorldTextureMipProvider* Provider=nullptr;
+	if(bApplyWorldSizeLimit)
+	{
+		Provider=NewObject<UACEWorldTextureMipProvider>(Tex);
+		Tex->AddAssetUserData(Provider);
+	}
 
 	TArray<FColor> Current = Pixels;
 	// Ensure exact size (callers may pass larger scratch buffers).
@@ -215,10 +222,14 @@ UTexture2D* FACEDatTextureResolver::CreateTransientRgbaWithMips(
 		FTexture2DMipMap* Mip = new FTexture2DMipMap();
 		Mip->SizeX = CurW;
 		Mip->SizeY = CurH;
-		Mip->BulkData.Lock(LOCK_READ_WRITE);
-		void* Data = Mip->BulkData.Realloc(CurW * CurH * sizeof(FColor));
-		FMemory::Memcpy(Data, Current.GetData(), CurW * CurH * sizeof(FColor));
-		Mip->BulkData.Unlock();
+		if(Provider)Provider->AddMip(Current);
+		else
+		{
+			Mip->BulkData.Lock(LOCK_READ_WRITE);
+			void* Data = Mip->BulkData.Realloc(CurW * CurH * sizeof(FColor));
+			FMemory::Memcpy(Data, Current.GetData(), CurW * CurH * sizeof(FColor));
+			Mip->BulkData.Unlock();
+		}
 		PlatformData->Mips.Add(Mip);
 
 		if (Level + 1 >= MipCount)

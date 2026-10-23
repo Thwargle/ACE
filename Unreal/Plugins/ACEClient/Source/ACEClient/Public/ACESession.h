@@ -70,6 +70,7 @@ DECLARE_MULTICAST_DELEGATE_FourParams(FACEOnCombatFeedback, const FString&, int3
  */
 class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 {
+	friend class FACERetailLogoutTest;
 	friend class FACECollisionSizingTest;
 	friend class FACEPvPCombatParityTest;
 	friend class FACEEmoteTransitionTest;
@@ -104,6 +105,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEItemPresentationTest;
 	friend class FACESelectionToolbarTest;
     friend class FACEActionDeckTest;
+    friend class FACERetailCursorTest;
 	friend class FACEWorldLootPlacementTest;
 	friend class FACEChatParityTest;
 	friend class FACECombatChatTest;
@@ -253,6 +255,8 @@ public:
 	void RequestLogOff();
 	/** True while waiting for CharacterList after CharacterLogOff. */
 	bool IsLogOffPending() const { return bLogOffPending; }
+	/** Retail logoff presentation starts 3 seconds after requesting (23 for PK/PKLite). */
+	double GetLogOffPortalStartTime() const { return LogOffPortalStartTime; }
 	void Tick(float DeltaSeconds);
 	/** Retail CObjectMaint grace period outside cell/PVS interest, independent of the camera. */
 	void MaintainWorldObjectVisibility(double Now, TFunctionRef<bool(int32)> IsCellInPVS);
@@ -269,6 +273,8 @@ public:
 	double GetPortalYearTicks() const;
 	bool HasServerTime() const { return bHasServerTime; }
 	const TArray<FACECharacterInfo>& GetCharacters() const { return Characters; }
+	int32 GetPreferredCharacterId() const { return PreferredCharacterId; }
+	void SetPreferredCharacterId(int32 Id) { PreferredCharacterId = Id; }
 	int32 GetPlayerGuid() const { return PlayerGuid; }
 	const FACEPosition& GetPlayerPosition() const { return PlayerPosition; }
 	uint16 GetTeleportSeq() const { return TeleportSeq; }
@@ -531,6 +537,9 @@ public:
 
 	/** True while a Use / UseWithTarget is outstanding (cleared by UseDone 0x01C7). */
 	bool IsUseBusy() const { return bUseBusy || PendingEquipmentGuid != 0; }
+	/** Presentation only: retail UI waits must never block input or automation. */
+	bool IsCursorBusy() const;
+	void CancelCursorAppraisal() { CursorAppraisalGuid=0; CursorAppraisalUntil=0.; }
 	int32 GetPendingEquipmentGuid() const { return PendingEquipmentGuid; }
 	bool IsEquipmentSwapPending() const { return PendingEquipmentGuid != 0; }
 	bool IsInventoryTransferPending() const { return !PendingInventoryTransfers.IsEmpty(); }
@@ -1084,12 +1093,14 @@ private:
 	bool bAutoPosContact = true;
 	/** True after RequestLogOff until CharacterList returns us to character select. */
 	bool bLogOffPending = false;
+	double LogOffPortalStartTime = 0.;
 	/** Force Disconnect if the server never answers CharacterLogOff. */
 	float LogOffTimeout = 0.f;
 	/** Retransmit CharacterLogOff while waiting (UDP loss). */
 	float LogOffRetransmitTimer = 0.f;
 
 	TArray<FACECharacterInfo> Characters;
+	int32 PreferredCharacterId = 0;
 	FString ServerName;
 	int32 PlayerGuid = 0;
 	FACEPosition PlayerPosition;
@@ -1133,6 +1144,12 @@ private:
 	TArray<int32> TradeSelfItems;
 	TArray<int32> TradePartnerItems;
 	bool bUseBusy = false;
+	// Independent waits preserve the hourglass when one overlapping operation finishes.
+	TArray<TPair<uint32,double>> CursorUseWaits;
+	double CursorAttackUntil = 0., CursorAppraisalUntil = 0., CursorAllegianceUntil = 0.;
+	int32 CursorAppraisalGuid = 0;
+	void ResetCursorWaits();
+	void ReleaseCursorUse(bool ItemOnly=false);
 	double UseStartedAt = 0.0;
 	int32 UseSourceGuid = 0, UseTargetGuid = 0;
 	void BeginPendingUse(int32 Source, int32 Target);

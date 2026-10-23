@@ -6,6 +6,7 @@
 #include "ACERuntimeOptions.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
+#include "ACEDesktopDisplay.h"
 #include "ACECharacterOptions.h"
 #include "Components/ScrollBox.h"
 #include "Engine/GameInstance.h"
@@ -122,8 +123,9 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  CursorScaleLabel=Label(TEXT("100%")); CursorScaleLabel->SetJustification(ETextJustify::Right); Box->AddChild(Fixed(CursorScaleLabel,250,14));
  UACEHoverTooltipWidget::SetWidgetTooltip(CursorScale, FText::FromString(TEXT("50% to 300% in 25% steps. Previews and saves immediately, including move, resize, and targeting pointers.")));
  ObjectGlow=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("ObjectGlow"));
- ObjectGlow->SetWidgetStyle(RoundToggle); ObjectGlow->SetContent(Label(TEXT("Highlight selected and hovered objects"))); Box->AddChild(Fixed(ObjectGlow,272,20));
- UACEHoverTooltipWidget::SetWidgetTooltip(ObjectGlow,FText::FromString(TEXT("Glow on selected objects and pointer targets, including the center of view during mouse look. Left-click selects; double-click interacts. Applies to desktop and VR.")));
+ ObjectGlow->SetWidgetStyle(RoundToggle); ObjectGlow->SetContent(Label(TEXT("Custom object highlighting"))); Box->AddChild(Fixed(ObjectGlow,272,20));
+ ObjectGlow->OnCheckStateChanged.AddDynamic(this,&UACEVideoSettingsWidget::ChangeObjectGlow);
+ UACEHoverTooltipWidget::SetWidgetTooltip(ObjectGlow,FText::FromString(TEXT("Glow on selected and hovered objects, including your own character. Turn off to remove the custom glow in desktop and VR. Selection and interaction still work. Changes apply and save immediately.")));
  ShowFrameRate=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("ShowFrameRate"));
  ShowFrameRate->SetWidgetStyle(RoundToggle);ShowFrameRate->SetContent(Label(TEXT("Show FPS overlay")));Box->AddChild(Fixed(ShowFrameRate,272,20));
  Resolution=Combo(TEXT("Resolution")); Resolution->Rename(TEXT("DisplayResolution"));
@@ -161,6 +163,11 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  static const TCHAR* QualityNames[] = {TEXT("Texture Detail"),TEXT("Landscape Draw Distance"),TEXT("Shadows"),TEXT("Effects"),TEXT("Post Processing"),TEXT("Anti-Aliasing"),TEXT("Foliage"),TEXT("Shading")};
  for (const TCHAR* Name : QualityNames) {
   auto* C=Combo(Name);
+  if(FCString::Strcmp(Name,TEXT("Texture Detail"))==0)
+  {
+   C->Rename(TEXT("TextureQuality"));
+   UACEHoverTooltipWidget::SetWidgetTooltip(C,FText::FromString(TEXT("Low uses quarter-resolution world textures; Medium uses half resolution. High and above preserve full DAT detail. Applies to loaded terrain, objects and effects without restarting. Interface artwork stays sharp.")));
+  }
   if(FCString::Strcmp(Name,TEXT("Shadows"))==0)
   {
    C->Rename(TEXT("ShadowQuality"));
@@ -174,6 +181,13 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  for(const TCHAR* V:{TEXT("Off"),TEXT("Low"),TEXT("Full")}) DynamicLighting->AddOption(V);
  UACEHoverTooltipWidget::SetWidgetTooltip(DynamicLighting,FText::FromString(TEXT("Off removes light cast by spells, weapons and doorways. Low keeps up to two nearby effect lights. Particles, sunlight and ambient room illumination remain visible. Saved with Apply.")));
  Box->AddChild(Fixed(Label(TEXT("Older hardware: turn shadows and dynamic lights off."),7),272,18));
+ AddValue(ACERuntimeOptions::Values[UE_ARRAY_COUNT(ACERuntimeOptions::Values)-1]);
+ auto* LightLimit=ValueSliders[TEXT("EffectLightLimit")].Get();
+ LightLimit->SetStepSize(1.f); LightLimit->MouseUsesStep=true;
+ LightLimit->OnValueChanged.AddDynamic(this,&UACEVideoSettingsWidget::ChangeEffectLightLimit);
+ EffectLightLimitLabel=Label(TEXT(""),7); EffectLightLimitLabel->SetJustification(ETextJustify::Right);
+ Box->AddChild(Fixed(EffectLightLimitLabel,250,14));
+ UACEHoverTooltipWidget::SetWidgetTooltip(LightLimit,FText::FromString(TEXT("Maximum simultaneous desktop weapon, portal and spell lights. More lights reduce switching in crowds but cost more GPU time. Default: 8. Dynamic lights Off disables them; Low caps this at 2. Saved with Apply.")));
  Filtering=Combo(TEXT("Texture Filtering")); for (const TCHAR* V:{TEXT("1x"),TEXT("2x"),TEXT("4x"),TEXT("8x"),TEXT("16x")}) Filtering->AddOption(V);
  Section(TEXT("Input Options"));
  InvertMouseX=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("InvertMouseX"));
@@ -213,6 +227,7 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  ScreenshotDirectory->SetHintText(FText::FromString(ACEScreenshotSettings::DefaultDirectory()));
  UACEHoverTooltipWidget::SetWidgetTooltip(ScreenshotDirectory, FText::FromString(TEXT("Screenshot folder. Leave blank to use the default. Use Apply to save changes.")));
  Box->AddChild(Fixed(ScreenshotDirectory,272,32));
+ Quality->OnSelectionChanged.AddDynamic(this,&UACEVideoSettingsWidget::ChangeQuality);
  ResetVideo();
  return Super::RebuildWidget();
 }
@@ -234,6 +249,7 @@ void UACEVideoSettingsWidget::NativeTick(const FGeometry& Geometry, float DeltaT
 }
 void UACEVideoSettingsWidget::ResetVideo()
 {
+ TGuardValue<bool> Loading(LoadingSettings,true);
  auto* S=UGameUserSettings::GetGameUserSettings();if(!S||!Resolution)return;
  const auto R=S->GetScreenResolution(); ObservedResolution=R; ObservedWindowMode=int32(S->GetFullscreenMode()); const FString Value=FString::Printf(TEXT("%d x %d"),R.X,R.Y);
  if(Resolution->FindOptionIndex(Value)<0)Resolution->AddOption(Value);Resolution->SetSelectedOption(Value);
@@ -250,6 +266,7 @@ void UACEVideoSettingsWidget::ResetVideo()
  ChangeFieldOfView(GetPreviewFieldOfView());
  ChangeScreenBrightness(ValueSliders[TEXT("ScreenBrightness")]->GetValue());
  ChangeScreenContrast(ValueSliders[TEXT("Contrast")]->GetValue());
+ ChangeEffectLightLimit(ValueSliders[TEXT("EffectLightLimit")]->GetValue());
  ActiveSoundOnly->SetIsChecked(ACERuntimeOptions::Get(TEXT("ActiveSoundOnly"))>.5f);
  Filtering->SetSelectedIndex(FMath::Clamp(FMath::FloorLog2(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("Anisotropy")))),0,4));
  if(auto* GI=GetGameInstance()) if(auto* Client=GI->GetSubsystem<UACEClientSubsystem>()) for(auto& P:CharacterChecks)P.Value->SetIsChecked(Client->IsCharacterOptionSet(P.Key));
@@ -332,26 +349,38 @@ void UACEVideoSettingsWidget::ApplyVideo()
 {
  auto* S=UGameUserSettings::GetGameUserSettings();if(!S||!Resolution)return;
  S->ValidateSettings();
- FString X,Y;if(Resolution->GetSelectedOption().Split(TEXT(" x "),&X,&Y))S->SetScreenResolution(FIntPoint(FCString::Atoi(*X),FCString::Atoi(*Y)));
- S->SetFullscreenMode(EWindowMode::Type(FMath::Clamp(WindowMode->GetSelectedIndex(),0,2)));
+ auto* PC=Cast<AACEPlayerController>(GetOwningPlayer());
+ FIntPoint Requested=S->GetScreenResolution();
+ FString X,Y;if(Resolution->GetSelectedOption().Split(TEXT(" x "),&X,&Y))Requested=FIntPoint(FCString::Atoi(*X),FCString::Atoi(*Y));
+ const auto Mode=EWindowMode::Type(FMath::Clamp(WindowMode->GetSelectedIndex(),0,2));
+ Requested=FACEDesktopDisplay::ResolveResolution(S->GetFullscreenMode(),Mode,Requested,
+  FACEDesktopDisplay::GetMonitorResolution(PC),Requested!=ObservedResolution);
  ApplyRenderingOptions();
  // Validation can reload/reset the config on first launch or after an engine
  // settings-version change. Save our preferences after that reload completes.
  S->SetFrameRateLimit(FCString::Atof(*FrameLimit->GetSelectedOption()));S->SetVSyncEnabled(VSync->IsChecked());
- S->ApplySettings(false);S->ConfirmVideoMode();S->SaveSettings();
+ S->ApplyNonResolutionSettings();
+ FACEDesktopDisplay::ApplyModeChange(PC,Mode,Requested);
  ApplyRuntimeOptions(); ResetVideo();
- if(auto* PC=Cast<AACEPlayerController>(GetOwningPlayer()))PC->RefreshDesktopDisplayInputMode();
+ if(PC)PC->RefreshDesktopDisplayInputMode();
 }
 
 void UACEVideoSettingsWidget::ApplyRenderingOptions()
 {
  auto* S=UGameUserSettings::GetGameUserSettings(); if(!S || !Quality) return;
  if(Quality->GetSelectedIndex()<5 && Quality->GetSelectedIndex()!=InitialQuality) S->SetOverallScalabilityLevel(Quality->GetSelectedIndex());
- else if(QualityLevels.Num()==8) {
+ if(QualityLevels.Num()==8) {
   S->SetTextureQuality(QualityLevels[0]->GetSelectedIndex()); S->SetViewDistanceQuality(QualityLevels[1]->GetSelectedIndex()); S->SetShadowQuality(QualityLevels[2]->GetSelectedIndex());
   S->SetVisualEffectQuality(QualityLevels[3]->GetSelectedIndex()); S->SetPostProcessingQuality(QualityLevels[4]->GetSelectedIndex()); S->SetAntiAliasingQuality(QualityLevels[5]->GetSelectedIndex());
   S->SetFoliageQuality(QualityLevels[6]->GetSelectedIndex()); S->SetShadingQuality(QualityLevels[7]->GetSelectedIndex());
  }
+}
+
+void UACEVideoSettingsWidget::ChangeQuality(FString, ESelectInfo::Type)
+{
+ if(LoadingSettings || !Quality || Quality->GetSelectedIndex()<0 || Quality->GetSelectedIndex()>=5)return;
+ // Show what the preset will apply, and let subsequent individual edits win.
+ for(auto Level:QualityLevels)Level->SetSelectedIndex(Quality->GetSelectedIndex());
 }
 
 void UACEVideoSettingsWidget::ApplyRuntimeOptions()
@@ -393,6 +422,16 @@ void UACEVideoSettingsWidget::ChangeCursorScale(float Value)
  }
 }
 
+void UACEVideoSettingsWidget::ChangeObjectGlow(bool bEnabled)
+{
+ const float Value=bEnabled?1.f:0.f;
+ if(ACERuntimeOptions::Get(TEXT("ObjectGlow"))!=Value)
+ {
+  ACERuntimeOptions::Set(TEXT("ObjectGlow"),Value);
+  if(GConfig)GConfig->Flush(false,GGameUserSettingsIni);
+ }
+}
+
 void UACEVideoSettingsWidget::ChangeMouseTurnSpeed(float Value)
 {
  ACECameraSettings::SetMouseTurnSpeed(Value);
@@ -406,6 +445,10 @@ void UACEVideoSettingsWidget::ChangeScreenBrightness(float Value)
   ACERuntimeOptions::Set(TEXT("ScreenBrightness"),Value);
   ACERuntimeOptions::Apply();
  }
+}
+void UACEVideoSettingsWidget::ChangeEffectLightLimit(float Value)
+{
+ if(EffectLightLimitLabel)EffectLightLimitLabel->SetText(FText::FromString(FString::Printf(TEXT("%d lights (saved with Apply)"),FMath::RoundToInt(Value))));
 }
 void UACEVideoSettingsWidget::ChangeScreenContrast(float Value)
 {
@@ -437,7 +480,7 @@ void UACEVideoSettingsWidget::DefaultsVideo()
  InvertMouseX->SetIsChecked(false);InvertMouseY->SetIsChecked(false);DesktopScale->SetSelectedIndex(0);
  ToggleMouseLook->SetIsChecked(false);
  CursorScale->SetValue(1.f); ChangeCursorScale(1.f);
- ObjectGlow->SetIsChecked(true);
+ ObjectGlow->SetIsChecked(true); ChangeObjectGlow(true);
  ConstrainUIWindows->SetIsChecked(true);
  ShowFrameRate->SetIsChecked(false);
  ChatFontFace->SetSelectedIndex(2); ChatFontSize->SetSelectedIndex(1);

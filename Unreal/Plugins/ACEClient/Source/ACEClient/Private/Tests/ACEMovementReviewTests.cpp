@@ -217,7 +217,9 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   // exponential rotation filter on the displayed creature.
   TestTrue(TEXT("The next physics frame uses the authoritative correction heading"),Walker->GetActorQuat().Equals(P.ToUnrealQuat(),.001));
   for(int I=0;I<1000;++I)Walker->Tick(.01f);
-  TestTrue(TEXT("A missing stop packet cannot extrapolate forever"),FVector::Dist(Walker->RemotePredictLocation,Walker->RemoteAnchorLocation)<=801);
+  // A descriptor without contact metadata is not an F748 constraint event.
+  // Missing motion alone must not impose the former two-second distance cap.
+  TestTrue(TEXT("A descriptor does not impose a custom movement radius"),FVector::Dist(Walker->RemotePredictLocation,Walker->RemoteAnchorLocation)>3000);
   P.Location.X+=100;Walker->ApplyACEPosition(P);
   TestTrue(TEXT("Large teleport still snaps immediately"),Walker->GetActorLocation().Equals(P.ToUnrealLocation(100),.01));
   Walker->Destroy();
