@@ -1123,6 +1123,57 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         auto Ack=[&](uint32 Error){FACEBinaryWriter Packet;Packet.WriteUInt32(Error);FACEBinaryReader R(Packet.GetData());Session.HandleUseDone(R);};
         auto Drive=[&](){float F=0,R=0,T=0;H->ApplyMovement(BuffPC,F,R,T,false,false,false,FVector::ForwardVector);return F;};
         auto CastCount=[&](){int32 Count=0;for(const auto& Packet:Session.CachedC2SPackets){FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.CanRead(4)&&R.ReadUInt32()==ACEGameAction::CastTargetedSpell)++Count;}return Count;};
+        {
+            // ACE defaults Attackable to true even for inventory items. A new
+            // shield needs a direct bane after the wand replaces it; its old
+            // world position must never be used as a monster sight target.
+            int32 Bane=0;
+            for(uint32 Id=1;Id<7000;++Id)
+            {FString Name;uint32 Icon;if(Dat->TryGetSpellInfo(Id,Name,Icon)&&Name==TEXT("Olthoi's Bane")){Bane=Id;break;}}
+            if(!TestTrue(TEXT("Reported retail Olthoi's Bane is available"),Bane!=0))return false;
+            Session.KnownSpells.Add(Bane);Session.KnownSpells.Add(27); // Flame Bolt I
+            FACEWorldObject Shield;Shield.Guid=0x7100a001;Shield.Name=TEXT("Tower Shield");Shield.ItemType=ACEItemType::Armor;
+            Shield.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;Shield.ValidLocations=ACEEquipMask::Shield;
+            Shield.Position=Session.PlayerPosition;Shield.Position.Location.X+=10;
+            const FVector Here=Session.PlayerPosition.ToUnrealLocation(),There=Shield.Position.ToUnrealLocation();
+            auto* Wall=World->SpawnActor<AActor>();auto* Obstacle=NewObject<UBoxComponent>(Wall);
+            Wall->SetRootComponent(Obstacle);Obstacle->SetBoxExtent(FVector(10,300,300));
+            Obstacle->SetCollisionEnabled(ECollisionEnabled::QueryOnly);Obstacle->SetCollisionResponseToAllChannels(ECR_Block);
+            Obstacle->RegisterComponent();Wall->SetActorLocation((Here+There)*.5+FVector(0,0,200));
+            ON_SCOPE_EXIT
+            {
+                Wall->Destroy();Session.WorldObjects.Remove(Shield.Guid);Session.WorldObjects.Remove(Shield.Guid+1);
+                Session.KnownSpells={Focus,Self};Session.CachedC2SPackets.Reset();H->ItemBuffs.Empty();
+                H->PendingSpell=0;H->PendingSpellOwner.Empty();H->PendingBuffResultDriven=false;
+                H->ConfirmedBuffAckAt=0;H->ConfirmedBuffOwner.Empty();P->NextAction=0;
+            };
+            for(bool Worn:{true,false})
+            {
+                Shield.WielderId=Worn?Session.PlayerGuid:0;Shield.ContainerId=Worn?0:Session.PlayerGuid;
+                Shield.CurrentWieldedLocation=Worn?ACEEquipMask::Shield:0;
+                Session.WorldObjects.Add(Shield.Guid,Shield);
+                TestTrue(TEXT("Reported shield carries ACE's default Attackable flag"),Shield.IsAttackable());
+                TestFalse(TEXT("Shield's stale world position is occluded in the regression fixture"),H->HasClearCombatSight(Shield));
+                auto Buff=Intent(Bane);Buff->SetNumberField(TEXT("target"),uint32(Shield.Guid));Buff->SetBoolField(TEXT("fast_cast"),false);
+                P->NextAction=0;const int32 Before=CastCount();H->Execute(*P,Buff);
+                TestEqual(TEXT("Shield bane sends despite an occluded stale inventory position"),CastCount(),Before+1);
+                TestEqual(TEXT("Shield buff tracks the actual item recipient"),H->PendingSpellTarget,Shield.Guid);
+                if(H->PendingSpell==Bane)
+                {
+                    H->ObserveMetaChat(TEXT("You cast Olthoi's Bane on Tower Shield, refreshing Olthoi's Bane"),TEXT(""),ACEChatMessageType::Magic);
+                    Ack(0);
+                    TestTrue(TEXT("Shield confirmation releases casting and the acknowledgment gate"),H->LastSpellConfirmed&&!H->PendingSpell&&!H->ConfirmedBuffAckAt);
+                    TestTrue(TEXT("Shield receives its own confirmed bane timer"),H->ItemBuffs.ContainsByPredicate([&](const auto& E)
+                    {return E->AsObject()->GetNumberField(TEXT("target"))==double(uint32(Shield.Guid))&&E->AsObject()->GetNumberField(TEXT("spell"))==Bane;}));
+                }
+            }
+            FACEWorldObject Monster=Shield;Monster.Guid++;Monster.Name=TEXT("Occluded monster");Monster.ItemType=ACEItemType::Creature;
+            Monster.WielderId=Monster.ContainerId=Monster.CurrentWieldedLocation=0;Monster.bHasPosition=true;Session.WorldObjects.Add(Monster.Guid,Monster);
+            auto AttackSpell=Intent(27);AttackSpell->SetStringField(TEXT("activity"),TEXT("combat"));AttackSpell->SetNumberField(TEXT("target"),uint32(Monster.Guid));
+            P->NextAction=0;const int32 Before=CastCount();H->Execute(*P,AttackSpell);
+            TestEqual(TEXT("Real hostile creatures still require line of sight"),CastCount(),Before);
+            TestTrue(TEXT("Occluded monster rejection does not start a cast"),!H->PendingSpell&&P->Status.Contains(TEXT("obstruction")));
+        }
         struct FTapPacket {uint32 Command,Hold,Stance;TArray<uint8> PositionAndStamps;};
         auto MovementPackets=[&]()
         {

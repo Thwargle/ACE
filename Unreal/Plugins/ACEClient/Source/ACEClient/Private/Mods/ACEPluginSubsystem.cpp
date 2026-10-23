@@ -1825,8 +1825,12 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         {P.Status=TEXT("Spell target is unavailable");return;}
         FACEWorldObject CastTargetObject;
         if(DefeatedTargets.Contains(Target)){P.NextAction=0;P.NextDecision=0;ScheduleDecisionWake(Now);return;}
-        if(C->GetWorldObject(Target,CastTargetObject)&&CastTargetObject.IsAttackable()&&!CastTargetObject.bIsPlayer&&!CastTargetObject.PetOwnerId
-            && !HasClearCombatSight(CastTargetObject)){C->GetSession()->SendCancelAttack();P.Status=TEXT("Target behind an obstruction; continuing route");return;}
+        // ACE also marks inventory items Attackable. Their stale world positions
+        // must not block equipment buffs with the hostile-creature sight check.
+        const bool HostileCreature=C->GetWorldObject(Target,CastTargetObject)&&(CastTargetObject.ItemType&ACEItemType::Creature)
+            &&CastTargetObject.IsAttackable()&&!CastTargetObject.bIsPlayer&&!CastTargetObject.PetOwnerId;
+        if(HostileCreature&&!HasClearCombatSight(CastTargetObject))
+        {C->GetSession()->SendCancelAttack();P.Status=TEXT("Target behind an obstruction; continuing route");return;}
         if(Target && Target!=C->GetPlayerGuid() && Target!=C->GetSelectedObject().Guid)C->SelectObject(Target);
         if(!PrepareCombatAction(P,I,8))return;
         // SendCastSpell's public UI path selects only in VR. Automation uses the same
@@ -1845,8 +1849,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         {
             PrepareSpellConfirmation(SpellName);
         }
-        if(C->GetWorldObject(Target,CastTargetObject)&&CastTargetObject.IsAttackable()&&!CastTargetObject.bIsPlayer&&!CastTargetObject.PetOwnerId
-            &&Dat->IsPluginSingleTargetOffensiveSpell(Spell)&&Dat->TryGetSpellInfo(Spell,SpellName,Icon))
+        if(HostileCreature&&Dat->IsPluginSingleTargetOffensiveSpell(Spell)&&Dat->TryGetSpellInfo(Spell,SpellName,Icon))
         {
             if(P.IsPolicy())this->CombatTarget=Target;
             FOffensiveCast Record;Record.Spell=Spell;Record.Target=Target;Record.Owner=P.Id;
