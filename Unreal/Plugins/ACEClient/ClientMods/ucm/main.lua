@@ -241,6 +241,11 @@ local function timed_buff(e)
  return e.duration==nil or e.duration>0
 end
 -- A side-effect-free buff plan is shared by NeedBuff and the casting policy.
+local function item_enchantable(item)
+ -- Retail appraisal's ResistMagic (36), also used by ACE's IsEnchantable.
+ -- Covenant is one example; never infer eligibility from an item's name.
+ return item and ((item.int_properties or {})['36'] or 0)<9999
+end
 local function compute_buff(s,p)
  local trained={};for _,id in ipairs(s.trained_skills or {}) do trained[id]=true end
  -- Index selections once. Scanning long imported buff/exclusion lists for every
@@ -306,12 +311,14 @@ local function compute_buff(s,p)
  -- the same family on every carried weapon or armor piece. Other-player banes
  -- intentionally retain their separate equipment targeting below.
  local id=s.player or 0
+ local owned,usable_names,current_weapon={},{},nil
+ for _,v in ipairs(s.inventory or {}) do owned[v.id]=v;if v.usable and v.name then usable_names[v.name]=v end;if v.equipped and band(v.type,0x8101)~=0 then current_weapon=v end end
  local missing={}
  for _,e in ipairs(s.item_buffs or {}) do
   local v=best[e.category] or item_best[e.category]
   if v and e.target==id and confirmed[tostring(id)..':'..e.category] then
    for _,item in ipairs(e.missing_equipment or {}) do
-    if (confirmed[tostring(item)..':'..e.category] or -1)<v.power and not buff_skipped(s,item,e.category) then
+    if item_enchantable(owned[item]) and (confirmed[tostring(item)..':'..e.category] or -1)<v.power and not buff_skipped(s,item,e.category) then
      missing[e.category]=missing[e.category] or item
     end
    end
@@ -325,12 +332,10 @@ local function compute_buff(s,p)
   if not forced_buff and missing[category] and not buff_skipped(s,missing[category],category) then return v,missing[category] end
   end
  end
- local owned,usable_names,current_weapon={},{},nil
- for _,v in ipairs(s.inventory or {}) do owned[v.id]=v;if v.usable and v.name then usable_names[v.name]=v end;if v.equipped and band(v.type,0x8101)~=0 then current_weapon=v end end
  for _,binding in ipairs(p.item_buff_targets or {}) do
   local item=binding.item==0 and current_weapon or owned[binding.item];local exemplar=by_id[binding.spell]
   local v=exemplar and item_best[exemplar.category]
-  if item and v then
+  if item_enchantable(item) and v then
    -- Keep UCM's player-targeted armor/weapon auras. Explicit non-redirectable
    -- item enchantments (for example a jewelry target) retain their own target.
    local target=(v.caster_target or band(v.target_type,0x8107)~=0) and id or item.id
@@ -1947,6 +1952,17 @@ local function tick(s,p)
   -- Missing components or rejected families must not stop the rest of a run.
   if v then
    local key=tostring(id)..':'..v.category
+   -- Assess direct equipment targets before changing weapons or attempting a
+   -- cast. Unknown gear can be unenchantable even though it can be wielded.
+   if id~=(s.player or 0) then
+    for _,item in ipairs(inventory) do if item.id==id and item.identified==false then
+     if (item_attempts['id'..id] or 0)>=3 then
+      buff_skips[key]=s.time+120;buff_plan=nil
+      return result(nil,'Skipping unassessed buff target: '..item.name)
+     end
+     return assess(item)
+    end end
+   end
    if not forced_buff and s.time<(until_time['buffack'..id..':'..v.id] or 0) then return result(nil,'Waiting for buff timer update') end
    if s.time<(until_time[key] or 0) then return result(nil,'Waiting for buff confirmation') end
    if mp<option('stop_mana',10) then return failed('Mana too low to buff; configure recovery') end

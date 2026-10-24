@@ -164,6 +164,49 @@ bool FACEUCMBuffParityTest::RunTest(const FString&)
     }
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMUnenchantableEquipmentTest,"ACE.Plugins.UnenchantableEquipment",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMUnenchantableEquipmentTest::RunTest(const FString&)
+{
+    FString Source,Error;
+    FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    for(int Resist:{0,9998,9999,10000})for(bool Equipped:{false,true})
+    {
+        FACEPluginVM VM;TestTrue(TEXT("Buff policy loads"),VM.Load(Source,Error));
+        auto S=BuffJson(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"action_serial":0,"action_error":0,"combat_mode":8,"components_required":false,"spells":[{"id":10,"category":162,"power":100,"skill":300,"school":3,"duration":1800,"self_buff":true,"beneficial":true,"caster_target":true,"target_type":6}],"item_buffs":[{"target":1,"category":162,"power":100,"duration":1800,"expires":1900,"missing_equipment":[50]}],"inventory":[{"id":99,"type":32768,"name":"Wand","equipped":true,"identified":true,"can_wield":true}]})"));
+        auto P=BuffJson(TEXT(R"({"buffing":true,"recovery":false,"combat":"off","refresh_seconds":60})"));
+        auto Shield=BuffJson(TEXT(R"({"id":50,"type":2,"name":"Any shield","identified":true,"can_wield":true})"));
+        auto Ints=MakeShared<FJsonObject>();Ints->SetNumberField(TEXT("36"),Resist);Shield->SetObjectField(TEXT("int_properties"),Ints);
+        Shield->SetBoolField(TEXT("equipped"),Equipped);
+        auto Inventory=S->GetArrayField(TEXT("inventory"));Inventory.Add(MakeShared<FJsonValueObject>(Shield));S->SetArrayField(TEXT("inventory"),Inventory);
+        auto Step=[&](){TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
+        auto I=Step();
+        TestEqual(TEXT("Direct shield buffs honor the retail ResistMagic threshold in either slot"),I->HasField(TEXT("spell")),Resist<9999);
+        if(Resist>=9999)for(int Time:{113,150,301,600})
+        {
+            S->SetNumberField(TEXT("time"),Time);
+            TestFalse(TEXT("Unenchantable gear never starts a later buff retry or wand swap"),Step()->HasField(TEXT("action")));
+        }
+        // No appraisal yet: identify before trying a direct bane, even when a
+        // cached missing-equipment queue survived a previous client version.
+        FACEPluginVM Unknown;TestTrue(TEXT("Fresh appraisal policy loads"),Unknown.Load(Source,Error));
+        Shield->RemoveField(TEXT("int_properties"));Shield->SetBoolField(TEXT("identified"),false);
+        TSharedPtr<FJsonObject> Intent;TestTrue(*Error,Unknown.Step(S,P,Intent,Error));
+        TestEqual(TEXT("Unknown shield is assessed before casting or switching equipment"),Intent->GetStringField(TEXT("action")),FString(TEXT("identify")));
+        Shield->SetObjectField(TEXT("int_properties"),Ints);Shield->SetBoolField(TEXT("identified"),true);
+        S->SetNumberField(TEXT("data_revision"),1);S->SetNumberField(TEXT("time"),601);
+        TestTrue(*Error,Unknown.Step(S,P,Intent,Error));
+        TestEqual(TEXT("Returned appraisal determines whether the direct buff is allowed"),Intent->HasField(TEXT("spell")),Resist<9999);
+        // Explicit item-target bindings must respect the same restriction.
+        FACEPluginVM Explicit;TestTrue(TEXT("Explicit buff policy loads"),Explicit.Load(Source,Error));
+        P->SetBoolField(TEXT("auto_buffs"),false);
+        P->SetArrayField(TEXT("item_buff_targets"),{MakeShared<FJsonValueObject>(BuffJson(TEXT(R"({"item":50,"spell":10})")))});
+        S->SetArrayField(TEXT("item_buffs"),{});
+        TestTrue(*Error,Explicit.Step(S,P,Intent,Error));
+        TestEqual(TEXT("Explicit bindings also skip unenchantable equipment"),Intent->HasField(TEXT("spell")),Resist<9999);
+    }
+    return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMBuffEquipmentHandoffTest,"ACE.Plugins.BuffEquipmentHandoff",
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACEUCMBuffEquipmentHandoffTest::RunTest(const FString&)

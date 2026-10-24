@@ -1024,6 +1024,16 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             Session.WorldObjects[NewArmor.Guid].WielderId=0;Session.WorldObjects[NewArmor.Guid].ContainerId=Session.PlayerGuid;
             H->ValidateItemBuffTimers();
             TestEqual(TEXT("Equipping a wand cannot forget the uncovered shield or armor"),H->ItemBuffs[0]->AsObject()->GetArrayField(TEXT("missing_equipment")).Num(),1);
+            FACEAppraisalInfo Unenchantable;Unenchantable.ObjectGuid=NewArmor.Guid;Unenchantable.bSuccess=true;
+            Unenchantable.IntProperties.Add(36,9999);H->ObserveAppraisal(Unenchantable);
+            H->ValidateItemBuffTimers();
+            TestTrue(TEXT("A late Unenchantable appraisal prunes a carried item's pending bane"),H->ItemBuffs[0]->AsObject()->GetArrayField(TEXT("missing_equipment")).IsEmpty());
+            Session.WorldObjects[NewArmor.Guid].WielderId=Session.PlayerGuid;Session.WorldObjects[NewArmor.Guid].ContainerId=0;
+            H->ValidateItemBuffTimers();
+            TestTrue(TEXT("Reequipping Covenant gear does not queue it again"),H->ItemBuffs[0]->AsObject()->GetArrayField(TEXT("missing_equipment")).IsEmpty());
+            Unenchantable.IntProperties[36]=9998;H->ObserveAppraisal(Unenchantable);H->ValidateItemBuffTimers();
+            TestEqual(TEXT("Enchantable resistant gear still receives its missing buff"),H->ItemBuffs[0]->AsObject()->GetArrayField(TEXT("missing_equipment")).Num(),1);
+            H->Appraisals.Remove(NewArmor.Guid);
             Session.WorldObjects.Remove(NewArmor.Guid);
             H->LoadItemBuffTimers();++Session.PlayerVitals.NumDeaths;H->ValidateItemBuffTimers();
             TestTrue(TEXT("Death invalidates saved item-buff estimates"),H->ItemBuffs.IsEmpty());

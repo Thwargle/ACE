@@ -368,7 +368,13 @@ void UACEPluginSubsystem::ValidateItemBuffTimers()
             Missing.RemoveAll([&](const auto& Id)
             {
                 FACEWorldObject Item;
-                return !C->GetWorldObject(int32(uint32(Id->AsNumber())),Item)||!IsOwnedPluginItem(Item);
+                const int32 Guid=int32(uint32(Id->AsNumber()));
+                const auto* Appraisal=Appraisals.Find(Guid);
+                // Retail's Unenchantable property (ResistMagic) and ACE's
+                // IsEnchantable use the same threshold, including Covenant.
+                // Prune saved queues too when the appraisal arrives later.
+                return !C->GetWorldObject(Guid,Item)||!IsOwnedPluginItem(Item)
+                    ||(Appraisal&&Appraisal->bSuccess&&Appraisal->IntProperties.FindRef(36)>=9999);
             });
             E->SetArrayField(TEXT("missing_equipment"),Missing);
         }

@@ -432,6 +432,97 @@ FString ACERetailUIScreenTestsDatDirectory()
 }
 }
 
+// Keep the counted-contract rendering regression outside the large UI suite.
+static FORCENOINLINE void CheckContractProgress(FAutomationTestBase& Test, UACEDatSubsystem* Dat,
+    UACEUIElementManager* Manager, TArray<FACEContractEntry>& Contracts, const TArray<int32>& RowIds,
+    const TArray<TObjectPtr<UTextBlock>>& StatusRows, TFunctionRef<void()> Refresh,
+    TFunctionRef<void(const FString&,float)> CaptureScreen, TFunctionRef<int32()> ScrollNext)
+{
+    const auto SavedContracts=Contracts;
+    TArray<int32> KillContracts;
+    for(int32 Id=1;Id<1000;++Id)
+        if(const auto* Info=Dat->GetContractInfo(Id);Info && Info->DescriptionProgress.Contains(TEXT("%d")))KillContracts.Add(Id);
+    Test.TestFalse(TEXT("Real DAT contains counted contract tasks"),KillContracts.IsEmpty());
+    KillContracts.Sort([&](int32 A,int32 B){return Dat->GetContractInfo(A)->DescriptionProgress.Len()>Dat->GetContractInfo(B)->DescriptionProgress.Len();});
+    for(int32 Count:{1,25,999})
+    {
+        Contracts.Reset();
+        for(int32 Index=0;Index<FMath::Min(5,KillContracts.Num());++Index)
+        {FACEContractEntry Entry;Entry.ContractId=KillContracts[Index];Entry.Stage=Count+4;Contracts.Add(Entry);}
+        Refresh();
+        for(float Scale:{1.f,1.5f})
+        {
+            CaptureScreen(FString::Printf(TEXT("GameplayContractKills%dScale%d"),Count,int32(Scale*100)),Scale);
+            for(int32 ContractRow=0;ContractRow<StatusRows.Num() && ContractRow<RowIds.Num();++ContractRow)
+            {
+                if(StatusRows[ContractRow]->GetVisibility()==ESlateVisibility::Collapsed)continue;
+                const auto* Info=Dat->GetContractInfo(RowIds[ContractRow]);
+                auto* Label=CastChecked<UACERetailTextBlock>(StatusRows[ContractRow]);
+                const FString Expected=Info->DescriptionProgress.Replace(TEXT("%d"),*FString::FromInt(Count));
+                Test.TestEqual(TEXT("Contract count uses the retail DAT progress description"),Label->GetText().ToString(),Expected);
+                const auto Cell=Label->GetRetailElement();
+                const int32 Width=Cell->Width-int32(Cell->TextMargins.Left+Cell->TextMargins.Right);
+                const auto Lines=ACEDatText::Layout(*Label->GetBitmapFont(),Expected,Width,false);
+                Test.TestTrue(TEXT("Complete wrapped progress, including the count, fits vertically"),Lines.Num()*int32(Label->GetBitmapFont()->MaxCharHeight)<=Cell->Height);
+                for(const auto& Line:Lines)Test.TestTrue(TEXT("Progress fits between the column margins"),Line.Width<=Width);
+                Test.TestTrue(TEXT("Long progress leaves the contract name column intact"),Cell->X>=152);
+                const auto ContractList=Manager->FindElementByName(TEXT("ContractsBox"));
+                Test.TestTrue(TEXT("Count stays inside the list and away from its scrollbar"),Cell->GetScreenOrigin().X+Cell->Width<=ContractList->GetScreenOrigin().X+ContractList->Width);
+                Test.TestEqual(TEXT("Contract status uses the authored retail font"),Cell->FontId,uint32(0x40000001));
+            }
+        }
+        if(Count==999)
+        {
+            int32 VisibleRows=0;
+            for(const auto& Label:StatusRows)if(Label->GetVisibility()!=ESlateVisibility::Collapsed)++VisibleRows;
+            Test.TestTrue(TEXT("Scrolling wrapped contracts never skips an unseen entry"),ScrollNext()<=VisibleRows);
+            CaptureScreen(TEXT("GameplayContractKillsScrolled"),1.f);
+        }
+    }
+    Contracts=SavedContracts;Refresh();CaptureScreen(TEXT("GameplayContractsRestored"),1.f);
+}
+
+struct FACEContractUIFixture
+{
+    static FORCENOINLINE void Run(FAutomationTestBase& Test, UACEDatSubsystem* Dat,
+        UACEUIGameplayBinder* Gameplay, UACEUIElementManager* Manager, UACEUICanvasWidget* Canvas,
+        UACEUIResourceResolver* Resources, TArray<FACEContractEntry>& Contracts,
+        TFunctionRef<void(const FString&,float)> CaptureScreen)
+    {
+        Contracts.Reset();
+        for (int32 Id=1;Id<1000 && Contracts.Num()<2;++Id)
+        {
+            if (!Dat->GetContractInfo(Id)) continue;
+            FACEContractEntry Entry;Entry.ContractId=Id;Entry.Stage=2;
+            Entry.TimeWhenDone=3600;Entry.ReceivedAt=FPlatformTime::Seconds()-60;
+            Contracts.Add(Entry);
+        }
+        Gameplay->ShowPanelPage(TEXT("QuestManagementPanel_Field"));
+        Gameplay->RefreshQuestOverlays();CaptureScreen(TEXT("GameplayContracts"),1.f);
+        Test.TestFalse(TEXT("Personal notes do not overlap the contracts page"),bool(Manager->FindElementByName(TEXT("JournalPage"))->bVisible));
+        Test.TestEqual(TEXT("Journal displays received contracts"),Contracts.Num(),2);
+        if (Gameplay->QuestRows.Num()>1)
+        {
+            const auto NameElement=Gameplay->ContractRowElements[0]->Children[0];
+            FACEDatFont ContractFont;Resources->ResolveFont(NameElement->FontId,ContractFont);
+            Test.TestEqual(TEXT("Journal truncates only the contract name within its retail column"),Gameplay->QuestRows[0]->GetText().ToString(),
+                ACEDatText::Ellipsize(ContractFont,Dat->GetContractInfo(Gameplay->QuestRowIds[0])->Name,
+                    NameElement->Width-int32(NameElement->TextMargins.Left+NameElement->TextMargins.Right)));
+            Test.TestEqual(TEXT("Journal text lets the list receive clicks"),Gameplay->QuestRows[0]->GetVisibility(),ESlateVisibility::HitTestInvisible);
+            Test.TestEqual(TEXT("Journal shows the server stage in the status column"),Gameplay->QuestStatusRows[0]->GetText().ToString(),FString(TEXT("In progress")));
+            Test.TestTrue(TEXT("Journal countdown advances after the server snapshot"),Gameplay->QuestDetailLabels.ContainsByPredicate([](UTextBlock* Label)
+                {return Label && Label->GetText().ToString().Contains(TEXT("00:59:"));}));
+            const auto& RowGeometry=Gameplay->QuestStatusRows[1]->GetCachedGeometry();
+            const FVector2D RowPoint=Canvas->GetCachedGeometry().AbsoluteToLocal(RowGeometry.LocalToAbsolute(RowGeometry.GetLocalSize()*.5));
+            Test.TestTrue(TEXT("Clicking journal status selects its contract"),Gameplay->TryHandleOverlayClick(RowPoint));
+            Test.TestEqual(TEXT("Journal detail follows the clicked second row"),Gameplay->SelectedContractId,Gameplay->QuestRowIds[1]);
+        }
+        CheckContractProgress(Test,Dat,Manager,Contracts,Gameplay->QuestRowIds,Gameplay->QuestStatusRows,
+            [&](){Gameplay->RefreshQuestOverlays();},[&](const FString& Name,float Scale){CaptureScreen(Name,Scale);},
+            [&](){Gameplay->ScrollQuestList(-1.f);return Gameplay->QuestScrollOffset;});
+    }
+};
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailScreenTest,"ACE.RetailParity.UIScreens",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACERetailScreenTest::RunTest(const FString& Parameters)
@@ -3933,31 +4024,8 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("Repeated world selection retains exactly the authored emitter count"),Script->ActiveEmitters.Num(),Emitters);
             Gameplay->SelectionFlashUntil=0;Gameplay->TickSelectionFlash();WeaponActor->Destroy();
         }
-        Client->Session->Contracts.Reset();
-        for (int32 Id=1;Id<1000 && Client->Session->Contracts.Num()<2;++Id)
-        {
-            if (!PreviewDat->GetContractInfo(Id)) continue;
-            FACEContractEntry Entry;Entry.ContractId=Id;Entry.Stage=2;
-            Entry.TimeWhenDone=3600;Entry.ReceivedAt=FPlatformTime::Seconds()-60;
-            Client->Session->Contracts.Add(Entry);
-        }
-        Gameplay->ShowPanelPage(TEXT("QuestManagementPanel_Field"));
-        Gameplay->RefreshQuestOverlays();CaptureScreen(TEXT("GameplayContracts"));
-        TestFalse(TEXT("Personal notes do not overlap the contracts page"),bool(Manager->FindElementByName(TEXT("JournalPage"))->bVisible));
-        TestEqual(TEXT("Journal displays received contracts"),Client->Session->Contracts.Num(),2);
-        if (Gameplay->QuestRows.Num()>1)
-        {
-            TestEqual(TEXT("Journal uses the real contract name"),Gameplay->QuestRows[0]->GetText().ToString(),
-                PreviewDat->GetContractInfo(Gameplay->QuestRowIds[0])->Name);
-            TestEqual(TEXT("Journal text lets the list receive clicks"),Gameplay->QuestRows[0]->GetVisibility(),ESlateVisibility::HitTestInvisible);
-            TestEqual(TEXT("Journal shows the server stage in the status column"),Gameplay->QuestStatusRows[0]->GetText().ToString(),FString(TEXT("In progress")));
-            TestTrue(TEXT("Journal countdown advances after the server snapshot"),Gameplay->QuestDetailLabels.ContainsByPredicate([](UTextBlock* Label)
-                {return Label && Label->GetText().ToString().Contains(TEXT("00:59:"));}));
-            const auto& RowGeometry=Gameplay->QuestStatusRows[1]->GetCachedGeometry();
-            const FVector2D RowPoint=Canvas->GetCachedGeometry().AbsoluteToLocal(RowGeometry.LocalToAbsolute(RowGeometry.GetLocalSize()*.5));
-            TestTrue(TEXT("Clicking journal status selects its contract"),Gameplay->TryHandleOverlayClick(RowPoint));
-            TestEqual(TEXT("Journal detail follows the clicked second row"),Gameplay->SelectedContractId,Gameplay->QuestRowIds[1]);
-        }
+        FACEContractUIFixture::Run(*this,PreviewDat,Gameplay,Manager,Canvas,Resources,Client->Session->Contracts,
+            [&](const FString& Name,float Scale){CaptureScreen(Name,Scale);});
         Gameplay->JournalStorageRoot=FPaths::ProjectSavedDir()/TEXT("Automation/JournalFixture");
         Gameplay->HandleNamedClick(TEXT("JournalTab")); CaptureScreen(TEXT("GameplayJournal"));
         TestEqual(TEXT("Journal tab remains selected across refresh"),Gameplay->ActiveQuestTab,FString(TEXT("JournalPage")));

@@ -313,7 +313,16 @@ bool UACEUIGameplayBinder::ScrollQuestList(float WheelDelta)
 	}
 	const int32 Dir = WheelDelta > 0.f ? -1 : 1;
 	int32& Offset = ActiveQuestTab == TEXT("PageListPage") ? JournalScrollOffset : QuestScrollOffset;
-	Offset = FMath::Max(0, Offset + Dir * 3);
+	int32 Step=3;
+	if(ActiveQuestTab==TEXT("ContractsPage"))
+	{
+		int32 VisibleRows=0;
+		for(const auto& Row:ContractRowElements)if(Row && Row->bVisible)++VisibleRows;
+		// Wrapped progress can leave fewer than three entries visible. A wheel
+		// step must not jump over a row that was never shown.
+		Step=FMath::Clamp(VisibleRows,1,3);
+	}
+	Offset = FMath::Max(0, Offset + Dir * Step);
 	RefreshQuestOverlays();
 	return true;
 }

@@ -1036,6 +1036,7 @@ void UACEUIGameplayBinder::RefreshQuestOverlays()
 	for (UTextBlock* L : QuestTabLabels) if (L) L->SetVisibility(ESlateVisibility::Collapsed);
 	for (UTextBlock* L : JournalLabels) if (L) L->SetVisibility(ESlateVisibility::Collapsed);
 	for (const auto& Row : JournalRowElements) if (Row) Row->bVisible=false;
+	for (const auto& Row : ContractRowElements) if (Row) Row->bVisible=false;
 	for (UACERetailTextEntry* E : JournalEntries) if (E) E->SetVisibility(ESlateVisibility::Collapsed);
 	if (JournalNotes) JournalNotes->SetVisibility(ESlateVisibility::Collapsed);
 	if (ActivePanelPage != TEXT("QuestManagementPanel_Field") || !Client || !Manager || !Canvas
@@ -1080,11 +1081,29 @@ void UACEUIGameplayBinder::RefreshQuestOverlays()
 	}
 	TArray<FACEContractEntry> Contracts = Client->GetContracts();
 	for (UTextBlock* R:QuestStatusRows) if (R) R->SetVisibility(ESlateVisibility::Collapsed);
-	auto Status=[](const FACEContractEntry& C)->FString
+	auto Status=[Dat](const FACEContractEntry& C)->FString
 	{
 		if(C.Stage==1)return TEXT("Available");
 		if(C.Stage==3)return TEXT("Completed");
-		if(C.Stage>=4)return FString::Printf(TEXT("Progress: %d"),C.Stage-4);
+		// Retail gmContractsUI::FillProgressString substitutes stage - 4 into
+		// the DAT progress description (for example, remaining kills).
+		if(C.Stage>=4 && Dat)
+			if(const auto* Info=Dat->GetContractInfo(C.ContractId);Info && !Info->DescriptionProgress.IsEmpty())
+			{
+				FString Text;
+				const FString& Format=Info->DescriptionProgress;
+				for(int32 I=0;I<Format.Len();++I)
+				{
+					if(Format[I]=='%' && I+1<Format.Len())
+					{
+						if(Format[I+1]=='%'){Text.AppendChar('%');++I;continue;}
+						if(Format[I+1]=='d'||Format[I+1]=='u'||Format[I+1]=='i')
+						{Text+=FString::FromInt(C.Stage-4);++I;continue;}
+					}
+					Text.AppendChar(Format[I]);
+				}
+				return Text;
+			}
 		return TEXT("In progress");
 	};
 	auto ContractName = [Dat](int32 ContractId) -> FString
@@ -1118,7 +1137,15 @@ void UACEUIGameplayBinder::RefreshQuestOverlays()
 	}
 
 	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementByName(TEXT("ContractsBox"));
-	constexpr int32 QuestRowHeight = 20;
+	// Keep the retail columns and font. Long progress descriptions wrap instead
+	// of clipping the count or taking all the space reserved for contract names.
+	FACEDatFont ContractFont;
+	const bool HasContractFont=Canvas->GetResourceResolver()->ResolveFont(0x40000001,ContractFont);
+	const int32 StatusWidth=ListEl?FMath::Max(1,ListEl->Width-152):118;
+	int32 QuestRowHeight=20;
+	if(HasContractFont)for(const auto& C:Contracts)
+		QuestRowHeight=FMath::Max(QuestRowHeight,
+			ACEDatText::Layout(ContractFont,Status(C),FMath::Max(1,StatusWidth-12),false).Num()*int32(ContractFont.MaxCharHeight)+2);
 	const int32 VisibleRows = ListEl.IsValid()
 		? FMath::Max(1, ListEl->Height / QuestRowHeight) : 1;
 	QuestScrollOffset = FMath::Clamp(QuestScrollOffset, 0,
@@ -1132,6 +1159,8 @@ void UACEUIGameplayBinder::RefreshQuestOverlays()
 	QuestRowIds.SetNum(QuestRows.Num());
 	while (QuestStatusRows.Num()<QuestRows.Num())
 		QuestStatusRows.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
+	while (ContractRowElements.Num()<VisibleRows)
+		ContractRowElements.Add(UACEUILayoutResolver::LoadTemplate(0x21000069,0x100005D7));
 	if (!Contracts.ContainsByPredicate([this](const FACEContractEntry& C){return C.ContractId==SelectedContractId;}))
 		SelectedContractId=Contracts.IsEmpty()?0:Contracts[0].ContractId;
 	if (Contracts.Num() == 0 && ListEl.IsValid() && QuestRows.Num() > 0 && QuestRows[0])
@@ -1158,21 +1187,22 @@ void UACEUIGameplayBinder::RefreshQuestOverlays()
 		}
 		const FACEContractEntry& C = Contracts[Index];
 		QuestRowIds[i] = C.ContractId;
-		const bool bSel = (C.ContractId == SelectedContractId);
-		Row->SetText(FText::FromString(ContractName(C.ContractId)));
-		Row->SetColorAndOpacity(FSlateColor(bSel ? SocialGold : SocialWhite));
-		Row->SetVisibility(ESlateVisibility::HitTestInvisible);
-		Canvas->PlaceWidgetAtElement(Row, ListEl, 640 + i,
-			FMargin(6.f, static_cast<float>(2 + i * QuestRowHeight), 96.f,
-				FMath::Max(0, ListEl->Height - 2 - (i + 1) * QuestRowHeight)));
+		const auto Entry=ContractRowElements[i];
+		if(!Entry || Entry->Children.Num()<2)continue;
+		if(Entry->Parent.Pin()!=ListEl)ListEl->AddChild(Entry);
+		Entry->bVisible=true;Entry->Y=i*QuestRowHeight;Entry->Width=ListEl->Width;Entry->Height=QuestRowHeight;
+		Entry->bUseExplicitState=true;Entry->DefaultState=C.ContractId==SelectedContractId?6:1;
+		const auto NameCell=Entry->Children[0],StatusCell=Entry->Children[1];
+		NameCell->Width=ListEl->Width-StatusWidth;
+		StatusCell->X=NameCell->Width;StatusCell->Width=StatusWidth;
+		NameCell->Height=StatusCell->Height=QuestRowHeight;
+		StatusCell->bTextOneLine=false;
+		const FString Name=ContractName(C.ContractId);
+		const int32 NameWidth=FMath::Max(0,NameCell->Width-int32(NameCell->TextMargins.Left+NameCell->TextMargins.Right));
+		PlaceTextOnElement(Row,NameCell,HasContractFont?ACEDatText::Ellipsize(ContractFont,Name,NameWidth):Name,
+			9,SocialWhite,640+i);
 		UTextBlock* State=QuestStatusRows[i];
-		State->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),9));
-		State->SetJustification(ETextJustify::Right);
-		State->SetText(FText::FromString(Status(C)));
-		State->SetColorAndOpacity(FSlateColor(bSel?SocialGold:SocialWhite));
-		State->SetVisibility(ESlateVisibility::HitTestInvisible);
-		Canvas->PlaceWidgetAtElement(State,ListEl,640+i,FMargin(FMath::Max(0,ListEl->Width-92),2+i*QuestRowHeight,2,
-			FMath::Max(0,ListEl->Height-2-(i+1)*QuestRowHeight)));
+		PlaceTextOnElement(State,StatusCell,Status(C),9,SocialWhite,640+i);
 	}
 	if (TSharedPtr<FACEUIElement> Bar = Manager->FindElementByName(TEXT("ContractsBoxScrollbar")))
 	{
@@ -1229,10 +1259,7 @@ void UACEUIGameplayBinder::RefreshQuestOverlays()
 	{
 		TimedText = FString(TEXT("Available in: "))+Remaining(Sel->TimeWhenRepeats);
 	}
-	const FString Notes = Info
-		? (Sel && (Sel->Stage == 2 || Sel->Stage >= 4) && !Info->DescriptionProgress.IsEmpty()
-			? Info->DescriptionProgress : Info->Description)
-		: FString();
+	const FString Notes = Info ? Info->Description : FString();
 	struct FQuestCaption { const TCHAR* Element; FString Text; bool bGold; };
 	const FQuestCaption Captions[] = {
 		{ TEXT("ContractNameSortButton"), FString(TEXT("Contract")), false },

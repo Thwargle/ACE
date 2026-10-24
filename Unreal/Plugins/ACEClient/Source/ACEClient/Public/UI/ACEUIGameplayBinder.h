@@ -62,6 +62,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 {
 	GENERATED_BODY()
 	friend class FACERetailScreenTest;
+	friend struct FACEContractUIFixture;
 	friend class FACEPortalInterfaceTest;
 	friend class FACERetailLogoutTest;
 	friend struct FACERetailAugmentationUIFixture;
@@ -1135,6 +1136,7 @@ private:
 	UPROPERTY()
 	TArray<TObjectPtr<UTextBlock>> QuestRows;
 	UPROPERTY() TArray<TObjectPtr<UTextBlock>> QuestStatusRows;
+	TArray<TSharedPtr<FACEUIElement>> ContractRowElements;
 	UPROPERTY()
 	TArray<int32> QuestRowIds;
 	/** Quest panel detail-pane captions, one per ContractTable field. */
