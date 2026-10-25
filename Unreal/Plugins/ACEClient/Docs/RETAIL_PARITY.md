@@ -3712,3 +3712,69 @@ The baseline retry fixture also exposed its first-use mesh-format invalidation;
 the final fixture consumes that initialization before measuring timer cadence.
 Individual synchronous uploads/collision/scene installation can still exceed a
 frame budget; this pass does not establish that every loading hitch is eliminated.
+
+## Network positions, turn poses, and emotes (2026-10-25)
+
+Reviewed the local retail decompile's `SmartBox::HandleReceivedPosition`,
+`CPhysicsObj::MoveOrTeleport` (00516330), `CMotionInterp::apply_interpreted_movement`,
+`CMotionTable::GetObjectSequence`, `CSequence::update_internal` /
+`advance_to_next_animation`, and `CommandInterpreter::ShouldSendPositionEvent`
+(006B45E0), `SendMovementEvent` (006B4680), and `SendPositionEvent` (006B4770).
+The changes retain DAT models, animation clips, collision bodies, and authored
+movement speeds.
+
+- Remote interpreted turns, TurnTo, and MoveTo steering now drive the authored
+  turn animation channel as well as the physics heading. Directed turns update
+  that channel once per step, avoiding repeated animation-clock resets. Stop,
+  airborne motion, and tracked VR clear the desktop turn channel.
+- Nearby creature corrections no longer become teleports solely because their
+  error exceeds 40 AC units. Retail interpolates nearby contact updates and uses
+  immediate positioning at viewer distance >=96 AC units; a new teleport epoch
+  still places immediately, and ordinary non-contact updates remain ignored.
+- Force-position timestamps advance monotonically across wraparound. A newer
+  position carrying an older force epoch cannot roll that epoch backward and
+  make a later duplicate force correction blip the player again. Forced local
+  corrections immediately acknowledge corrected XYZ with the retained local
+  heading, as retail does.
+- Position-frame comparisons use retail's 0.0002 tolerance. Outgoing chat-emote
+  MoveToState packets retain physical contact and reset the position timer just
+  like other movement packets; they no longer invent grounded contact.
+- Received emote/pickup rates are preserved instead of forced to 1.0. Changes
+  to an active interpreted substate's speed do not replay its entry. Distinct
+  stamped actions queue instead of cutting short the previous gesture.
+- One-shot social actions return to the previous locomotion cycle. Persistent
+  substates play their entry and then their actual DAT cycle, including nonzero
+  looping cycles; they no longer all freeze at an endpoint. Already-active
+  spawn states start directly in the cycle. Zero-rate poses and Dead stay still.
+  The extended fixture exposed frozen cycles in 23 human chat substates.
+
+`NetworkAnimationParity` replays F74C through the session and actor, compares
+rendered part transforms with DAT evaluation for all 309 chat aliases / 74
+distinct motions on both human setups at 0.5/1/2 speed, and checks completion,
+continuing cycles, already-active spawn states, speed changes, and action queues.
+It exercises players, human NPCs, carenzi, gromnies, wasps, rabbits, chickens,
+roosters and chicks, with turns at 30/60/144 FPS and the 95/96/110 AC position
+boundary. NetworkTransport adds force-epoch/replay, contact, and report-cadence
+checks; MovementReview verifies immediate forced-correction acknowledgements.
+
+The pre-change baseline already failed two older suites: landing totals counted
+the positive clip's High boundary as another root step, and the LOD clock fixture
+included Ready->Run entry time in its cyclic-clock measurement. Their fixtures
+now integrate the retail boundary rules and isolate the cyclic clock. Existing
+remote replay relocation fixtures now explicitly model fresh creation/teleport
+instead of relying on the removed 40-unit heuristic. The sidestep fixture checks
+continued authored substate cycles rather than requiring every pose to freeze.
+
+The Development Editor build and all 17 final suites passed: NetworkAnimationParity,
+NetworkTransport, EmoteTransitions, MovementReview, RemoteMovementReplay,
+RemoteTurnTargets, TargetedEmotes, ArcheryMotion, AttackHeightMotion, AvatarMotion,
+WalkingStep, RunSpeed, RemoteSupport, CombatProtocol, RuntimeActors, InteriorNetwork,
+and PumpBudget. Quest shared source was synchronized and CheckOnly passed. Existing
+unrelated compiler conversion/deprecation warnings remain. RuntimeActors passed
+with six scalability console-variable priority warnings; the other 16 suites
+passed without warnings, and there were no automation errors. Validation artifacts are under
+`TestOutput/MovementPass-2026-10-25/` (baseline,
+build logs, intermediate reports, and `complete`). These are isolated offline
+protocol/DAT/Unreal actor tests, not a synchronized recording from a live retail
+client and Unreal client. They do not certify every custom server motion or
+replace live multiplayer verification.

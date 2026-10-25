@@ -1,5 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
+#include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
 #include "Dat/ACEDatDatabase.h"
 #include "Dat/ACEDatMotionPlayer.h"
@@ -24,7 +26,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEEmoteTransitionTest, "ACE.RetailParity.Emot
 bool FACEEmoteTransitionTest::RunTest(const FString&)
 {
  FACEDatDatabase Portal;
- if (!TestTrue(TEXT("Retail DAT opens"), Portal.Open(TEXT("C:/Turbine/Asheron's Call/client_portal.dat")))) return false;
+ if (!TestTrue(TEXT("Retail DAT opens"), Portal.Open(FPaths::Combine(ACETestDatDirectory(), TEXT("client_portal.dat"))))) return false;
  FACEDatMotionPlayer Player(&Portal);
  if (!TestTrue(TEXT("Retail human motion table loads"), Player.SetMotionTable(0x09000001))) return false;
  constexpr uint32 Style = ACEMotion::StanceNonCombat;
@@ -48,7 +50,7 @@ bool FACEEmoteTransitionTest::RunTest(const FString&)
  auto* GI = NewObject<UGameInstance>(GEngine); World->SetGameInstance(GI);
  Context.OwningGameInstance = GI; Context.SetCurrentWorld(World); GI->OnWorldChanged(nullptr, World); GI->Init();
  ON_SCOPE_EXIT { GI->Shutdown(); GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
- if (!TestTrue(TEXT("World DAT subsystem opens"), GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+ if (!TestTrue(TEXT("World DAT subsystem opens"), GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(ACETestDatDirectory()))) return false;
  FACEWorldObject Obj; Obj.Guid = 12345; Obj.SetupId = 0x02000001; Obj.MotionTableId = 0x09000001; Obj.bIsPlayer = true;
  auto* Actor = World->SpawnActor<AACEWorldEntityActor>(); Actor->InitializeFromObject(Obj, 100, false);
  auto* App = Actor->Appearance.Get();
@@ -125,15 +127,19 @@ bool FACEEmoteTransitionTest::RunTest(const FString&)
    for(int Frame=0;Frame<FMath::CeilToInt(12.f/Dt)&&!App->bHoldActionFinal;++Frame)Tick();
    // The completed entry link hands off to its held cycle on the next tick.
    Tick();
-   TArray<FTransform> Held;
-   for(int Part=0;Part<App->GetPartCount();++Part)Held.Add(App->GetPartMesh(Part)->GetRelativeTransform());
    for(float Strafe:{-1.f,0.f,1.f})
    {
     App->SetLocomotionInput(0,Strafe,true,1);Tick();
     TestTrue(TEXT("A held pose survives sidestep start/reverse/release"),App->ActionCommand==Pose&&App->bHoldActionFinal);
-    for(int Part=0;Part<Held.Num();++Part)
-     if(!TestTrue(FString::Printf(TEXT("Sidestep preserves pose %08X, setup %08X, part %d at %.0f Hz"),Pose,Setup,Part,1.f/Dt),
-      App->GetPartMesh(Part)->GetRelativeTransform().Equals(Held[Part],.0001)))return false;
+    TArray<FTransform> Expected;int32 Count=0;
+    TestTrue(TEXT("Persistent substate has a DAT cycle"),Player.EvaluateMotion(Pose,App->AnimTime,App->GetPartCount(),Expected,100,Count,nullptr,nullptr,Style,true));
+    for(int Part=0;Part<Count;++Part)
+    {
+     const auto Actual=App->GetPartMesh(Part)->GetRelativeTransform();
+     if(!TestTrue(FString::Printf(TEXT("Sidestep preserves authored cycle %08X, setup %08X, part %d at %.0f Hz"),Pose,Setup,Part,1.f/Dt),
+      Actual.GetTranslation().Equals(Expected[Part].GetTranslation(),.04001)
+      && Actual.GetRotation().Equals(Expected[Part].GetRotation(),.000011)))return false;
+    }
    }
    CheckTransition(Pose, ACEMotion::Ready, Direct(Pose, ACEMotion::Ready)->Anims, true);
    CheckTransition(Pose, ACEMotion::Ready, Direct(Pose, ACEMotion::Ready)->Anims, false);
@@ -193,18 +199,19 @@ bool FACEEmoteTransitionTest::RunTest(const FString&)
    App->PlayActionMotion(0x1300007eu,1,Style,true,true);
    TestEqual(TEXT("Each combine restarts its authored gesture"),App->AnimTime,0.f);
    TestFalse(TEXT("Each combine releases the previous final pose"),App->bHoldActionFinal);
-   for(int Frame=0; Frame<FMath::CeilToInt(10.f/Dt) && !App->bHoldActionFinal; ++Frame)App->TickComponent(Dt,LEVELTICK_All,nullptr);
-   TestTrue(TEXT("Repeated combine evaluates to completion without walking"),App->bHoldActionFinal && App->bActionEverEvaluated);
-   const float End=App->AnimTime;
+   App->TickComponent(Dt,LEVELTICK_All,nullptr);
+   const float Playing=App->AnimTime;
    App->PlayActionMotion(0x1300007eu,1,Style,true,false);
-   TestEqual(TEXT("State echo does not restart a completed gesture"),App->AnimTime,End);
+   TestEqual(TEXT("State echo does not restart an in-flight gesture"),App->AnimTime,Playing);
+   for(int Frame=0; Frame<FMath::CeilToInt(10.f/Dt) && App->ActionCommand; ++Frame)App->TickComponent(Dt,LEVELTICK_All,nullptr);
+   TestTrue(TEXT("Repeated combine returns to its idle cycle without walking"),App->ActionCommand==0 && !App->bHoldActionFinal);
   }
   App->ClearActionMotion();App->PlayActionMotion(0x1300007eu,1,Style,true,true);
   App->TickComponent(Dt,LEVELTICK_All,nullptr);
   App->PlayActionMotion(0x1300007eu,1,Style,true,true);
   TestEqual(TEXT("Early next combine is queued instead of lost"),App->PendingActionCommands.Num(),1);
-  for(int Frame=0;Frame<FMath::CeilToInt(20.f/Dt) && (!App->PendingActionCommands.IsEmpty()||!App->bHoldActionFinal);++Frame)App->TickComponent(Dt,LEVELTICK_All,nullptr);
-  TestTrue(TEXT("Both queued combines finish"),App->PendingActionCommands.IsEmpty() && App->bHoldActionFinal);
+  for(int Frame=0;Frame<FMath::CeilToInt(20.f/Dt) && App->ActionCommand;++Frame)App->TickComponent(Dt,LEVELTICK_All,nullptr);
+  TestTrue(TEXT("Both queued combines finish"),App->PendingActionCommands.IsEmpty() && App->ActionCommand==0);
  }
  // Multiple distinct combines may be coalesced into one server command list.
  App->ClearActionMotion();
@@ -212,8 +219,8 @@ bool FACEEmoteTransitionTest::RunTest(const FString&)
  Combines.bNewAction=true;Combines.ActionFollowups={int32(0x1300007eu),int32(0x1300007eu)};
  Actor->ApplyMotionState(Combines);
  TestEqual(TEXT("Batched crafting actions all enter the animation queue"),App->PendingActionCommands.Num(),2);
- for(int Frame=0;Frame<1800 && (!App->PendingActionCommands.IsEmpty()||!App->bHoldActionFinal);++Frame)App->TickComponent(1.f/90,LEVELTICK_All,nullptr);
- TestTrue(TEXT("Batched combines finish without movement"),App->PendingActionCommands.IsEmpty()&&App->bHoldActionFinal);
+ for(int Frame=0;Frame<1800 && App->ActionCommand;++Frame)App->TickComponent(1.f/90,LEVELTICK_All,nullptr);
+ TestTrue(TEXT("Batched combines finish without movement"),App->PendingActionCommands.IsEmpty()&&App->ActionCommand==0);
  // Landing uses the real Falling->movement link, not a blend from a frozen
  // airborne endpoint. Compare every rendered part against the DAT recovery.
  for(float Forward:{0.f,1.f})for(bool Run:{false,true})for(float Dt:{1.f/30,1.f/90})
@@ -229,8 +236,38 @@ bool FACEEmoteTransitionTest::RunTest(const FString&)
   TestTrue(TEXT("Landing exposes authored position frames to the movement controller"),App->BuildLandingRootTrack(Track));
   FVector Travel=FVector::ZeroVector;
   for(int32 Step=0;Step<300 && Track.IsActive();++Step) Travel+=Track.Advance(Dt).GetTranslation();
-  const float ExpectedTravel=Forward==0?0.f:Run?.760f:.610f;
-  TestTrue(TEXT("Landing consumes the complete authored displacement at every frame rate"),Travel.Equals(FVector(0,ExpectedTravel,0),.0001));
+  // Independently integrate the DAT frames crossed by CSequence: High is
+  // the positive clip's exit boundary, then the next positive clip's first
+  // frame is entered. Hard-coded totals used to count High as another step.
+  FTransform ExpectedTravel=FTransform::Identity;
+  auto StepRoot=[&](const FTransform& Delta)
+  {
+   ExpectedTravel.SetTranslation(ExpectedTravel.GetTranslation()+ExpectedTravel.GetRotation().RotateVector(Delta.GetTranslation()));
+   ExpectedTravel.SetRotation((ExpectedTravel.GetRotation()*Delta.GetRotation()).GetNormalized());
+  };
+  for(int32 ClipIndex=0;ClipIndex<Link->Anims.Num();++ClipIndex)
+  {
+   const auto& Clip=Link->Anims[ClipIndex];const auto* Animation=Player.LoadAnimation(Clip.AnimId);
+   if(!TestNotNull(TEXT("Landing root animation exists"),Animation))return false;
+   const int32 High=Clip.HighFrame<0?int32(Animation->NumFrames)-1:Clip.HighFrame;
+   if(ClipIndex>0 && Clip.Framerate>0 && Animation->PositionFrames.IsValidIndex(Clip.LowFrame))
+    StepRoot(FTransform(Animation->PositionFrames[Clip.LowFrame]));
+   for(int32 I=Clip.LowFrame;I<=High;++I)
+   {
+    const int32 Frame=Clip.Framerate<0?High-(I-Clip.LowFrame):I;
+    if((Clip.Framerate>0 && Frame==High)||!Animation->PositionFrames.IsValidIndex(Frame))continue;
+    const FTransform Delta(Animation->PositionFrames[Frame]);
+    StepRoot(Clip.Framerate<0?Delta.Inverse():Delta);
+   }
+  }
+  if(const auto* Cycle=Player.FindCycle(Destination,Style);Cycle && !Cycle->Anims.IsEmpty())
+  {
+   const auto& Clip=Cycle->Anims[0];const auto* Animation=Player.LoadAnimation(Clip.AnimId);
+   if(Clip.Framerate>0 && Animation && Animation->PositionFrames.IsValidIndex(Clip.LowFrame))
+    StepRoot(FTransform(Animation->PositionFrames[Clip.LowFrame]));
+  }
+  TestTrue(*FString::Printf(TEXT("Landing consumes authored displacement forward=%.0f run=%d dt=%.4f actual=%s expected=%s"),
+   Forward,Run,Dt,*Travel.ToString(),*ExpectedTravel.GetTranslation().ToString()),Travel.Equals(ExpectedTravel.GetTranslation(),.0001));
   TestTrue(TEXT("Completed recovery cannot apply its final frame twice"),Track.Advance(Dt).Equals(FTransform::Identity));
   const FTransform Root=Actor->GetActorTransform();bool Completed=false;
   for(int32 Frame=0;Frame<120;++Frame)

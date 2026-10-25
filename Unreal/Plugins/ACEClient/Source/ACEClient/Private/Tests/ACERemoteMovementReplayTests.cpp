@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "ACEWorldEntityActor.h"
 #include "ACEDatSubsystem.h"
 #include "ACECharacterAppearanceComponent.h"
@@ -18,7 +19,7 @@
 #include "Engine/World.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERemoteMovementReplayTest,"ACE.RetailParity.RemoteMovementReplay",
- EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+ EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACERemoteMovementReplayTest::RunTest(const FString&)
 {
  const auto Values=UWorld::InitializationValues().AllowAudioPlayback(false).RequiresHitProxies(false)
@@ -28,7 +29,7 @@ bool FACERemoteMovementReplayTest::RunTest(const FString&)
  auto* GI=NewObject<UGameInstance>(GEngine);World->SetGameInstance(GI);
  Context.SetCurrentWorld(World);Context.OwningGameInstance=GI;GI->OnWorldChanged(nullptr,World);GI->Init();
  auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
- TestTrue(TEXT("Retail player body DAT loads"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
+ TestTrue(TEXT("Retail player body DAT loads"),Dat->LoadDatDirectory(ACETestDatDirectory()));
  FACEPosition P;P.CellId=0x016C0101;P.Location=FVector(50,50,100);P.bIsGrounded=true;
  P.bHasContactState=true;P.bHasTeleportSequence=true;
  const FVector Origin=P.ToUnrealLocation(100);
@@ -157,7 +158,7 @@ bool FACERemoteMovementReplayTest::RunTest(const FString&)
   auto Exit=ReadRoot(Running?0x03000007:0x03000009,1.f);Cycle.bApplyEntry=true;
   auto* A=Spawn();A->bClampToGround=false;A->SetActorEnableCollision(false);A->MotionTableId=0x09000001;
   FACEPosition CasePosition=P;CasePosition.CellId=0xAAB30004;CasePosition.bHasContactState=false;
-  A->ApplyACEPosition(CasePosition); // CreateObject does not start a position constraint.
+  A->bHaveRemotePredict=false;A->ApplyACEPosition(CasePosition,false); // CreateObject placement, not a large unsequenced teleport.
   FACESession Session;FACEWorldObject O;O.Guid=0x70004202;O.bIsPlayer=true;
   O.SetupId=0x02000001;O.MotionTableId=0x09000001;O.ItemType=ACEItemType::Creature;
   const bool Visible=FPS==60;
@@ -240,7 +241,8 @@ bool FACERemoteMovementReplayTest::RunTest(const FString&)
  for(int FPS:{30,144})for(bool Indoor:{false,true})
  {
   auto* A=Spawn();A->bClampToGround=false;A->SetActorEnableCollision(false);
-  FACEPosition Start=P;Start.CellId=Indoor?0x016C0101:0xAAB30004;A->ApplyACEPosition(Start);
+  FACEPosition Start=P;Start.CellId=Indoor?0x016C0101:0xAAB30004;
+  A->bHaveRemotePredict=false;A->ApplyACEPosition(Start);
   A->RemoteMotion.bMoving=true;A->RemoteMotion.Forward=1;A->RemoteMotion.ForwardUnitsPerSecond=4;
   FVector Reference=A->GetActorLocation();double Budget=0,Worst=0;
   const double Begin=Indoor?5:10,End=Indoor?20:50,Dt=1./FPS;

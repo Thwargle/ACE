@@ -17,11 +17,12 @@ public:
     void Construct(const FArguments&, UACERetailTextEntry* InOwner) { Owner=InOwner; SetClipping(EWidgetClipping::ClipToBounds); }
     virtual bool ComputeVolatility() const override { return HasKeyboardFocus(); }
     virtual bool SupportsKeyboardFocus() const override { return true; }
-    void ResetSelection() { if (Owner.IsValid()) Cursor=Anchor=Owner->Value.Len(); ScrollOffset=0; bFollowCaret=true; }
+    void ResetSelection() { if (Owner.IsValid()) Cursor=Anchor=Owner->Value.Len(); ScrollOffset=HorizontalOffset=0; bFollowCaret=true; }
     virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D(60,16); }
     virtual FReply OnFocusReceived(const FGeometry&, const FFocusEvent&) override
     {
         bCommitting=false;
+        bFollowCaret=true;
         if (Owner.IsValid()) { Original=Owner->Value; Undo.Reset(); bHasUndo=false; }
         if (Owner.IsValid() && Owner->bSelectAllOnFocus) { Anchor=0; Cursor=Owner->Value.Len(); }
         return FReply::Handled();
@@ -57,6 +58,7 @@ public:
     {
         if (!Owner.IsValid()) return;
         Anchor=FMath::Clamp(Start,0,Owner->Value.Len()); Cursor=FMath::Clamp(End,0,Owner->Value.Len());
+        bFollowCaret=true;
         Invalidate(EInvalidateWidgetReason::Paint);
     }
     virtual FText GetText() const override { return Owner.IsValid() ? Owner->GetText() : FText::GetEmpty(); }
@@ -85,7 +87,7 @@ public:
     }
     float Scroll(const TArray<FACEBitmapTextLine>& Rows, float Height, int32 LineHeight) const
     {
-        if (Owner->ContentMargins.IsSet() && !Owner->bMultiline) return 0.f;
+        if (!Owner->bMultiline) return 0.f;
         const FMargin Padding=Owner->ContentMargins.Get(FMargin(2.f));
         const float Visible=FMath::Max(float(LineHeight),Height-Padding.Top-Padding.Bottom);
         if (HasKeyboardFocus() && bFollowCaret)
@@ -98,6 +100,26 @@ public:
         ScrollOffset=FMath::Clamp(ScrollOffset,0.f,FMath::Max(0.f,Rows.Num()*LineHeight-Visible));
         return ScrollOffset;
     }
+    float HorizontalScroll(const TArray<FACEBitmapTextLine>& Rows, float Width) const
+    {
+        if (Owner->bMultiline || Rows.IsEmpty()) return 0.f;
+        const FMargin Padding=Owner->ContentMargins.Get(FMargin(2.f,2.f,8.f,2.f));
+        const float Start=Left(Rows[0],Width);
+        const float Right=FMath::Max(Padding.Left+1.f,Width-Padding.Right);
+        if (HasKeyboardFocus() && bFollowCaret && Owner->FontLabel && Owner->FontLabel->GetBitmapFont())
+        {
+            const auto& Font=*Owner->FontLabel->GetBitmapFont();
+            float Caret=Start;
+            for (int32 I=0;I<FMath::Min(Cursor,Owner->Value.Len());++I)
+                Caret+=ACEDatText::Advance(Font,Owner->Value[I]);
+            // UIElement_Text::ScrollToPosition includes room for the caret itself.
+            if (Caret-HorizontalOffset<Padding.Left) HorizontalOffset=Caret-Padding.Left;
+            else if (Caret-HorizontalOffset+2.f>Right) HorizontalOffset=Caret+2.f-Right;
+            bFollowCaret=false;
+        }
+        HorizontalOffset=FMath::Clamp(HorizontalOffset,0.f,FMath::Max(0.f,Start+Rows[0].Width+2.f-Right));
+        return HorizontalOffset;
+    }
     virtual FReply OnMouseWheel(const FGeometry& G,const FPointerEvent& E) override
     {
         if (!Owner.IsValid() || !Owner->bMultiline || !Owner->FontLabel || !Owner->FontLabel->GetBitmapFont()) return FReply::Unhandled();
@@ -109,6 +131,11 @@ public:
     {
         if(!Owner.IsValid() || !Owner->FontLabel || !Owner->FontLabel->GetBitmapFont())return 0;
         return Scroll(Lines(GetCachedGeometry().GetLocalSize().X),GetCachedGeometry().GetLocalSize().Y,Owner->FontLabel->GetBitmapFont()->MaxCharHeight);
+    }
+    float GetHorizontalScrollOffset() const
+    {
+        if (!Owner.IsValid()) return 0.f;
+        return HorizontalScroll(Lines(GetCachedGeometry().GetLocalSize().X),GetCachedGeometry().GetLocalSize().X);
     }
     float GetScrollEnd() const
     {
@@ -127,7 +154,7 @@ public:
         const FVector2D P=G.AbsoluteToLocal(Absolute);
         const float Offset=Scroll(Rows,G.GetLocalSize().Y,Font.MaxCharHeight);
         const int32 R=FMath::Clamp(FMath::FloorToInt((P.Y+Offset-Owner->ContentMargins.Get(FMargin(2.f)).Top)/Font.MaxCharHeight),0,Rows.Num()-1);
-        float X=Left(Rows[R],G.GetLocalSize().X);
+        float X=Left(Rows[R],G.GetLocalSize().X)-HorizontalScroll(Rows,G.GetLocalSize().X);
         for (int32 I=Rows[R].Begin;I<Rows[R].End;++I)
         {
             const int32 Advance=ACEDatText::Advance(Font,Owner->Value[I]);
@@ -141,6 +168,7 @@ public:
         if (E.GetEffectingButton()!=EKeys::LeftMouseButton) return FReply::Unhandled();
         if (!HasKeyboardFocus() && Owner.IsValid() && Owner->bDigitsOnly) { Anchor=0;Cursor=Owner->Value.Len(); }
         else { Cursor=Hit(G,E.GetScreenSpacePosition()); if (!E.IsShiftDown()) Anchor=Cursor; }
+        bFollowCaret=true;
         Invalidate(EInvalidateWidgetReason::Paint);
         OpenPlatformKeyboard(E.GetUserIndex());
         return FReply::Handled().SetUserFocus(SharedThis(this)).CaptureMouse(SharedThis(this));
@@ -148,7 +176,7 @@ public:
     virtual FReply OnMouseMove(const FGeometry& G, const FPointerEvent& E) override
     {
         if (!HasMouseCapture()) return FReply::Unhandled();
-        Cursor=Hit(G,E.GetScreenSpacePosition()); Invalidate(EInvalidateWidgetReason::Paint); return FReply::Handled();
+        Cursor=Hit(G,E.GetScreenSpacePosition()); bFollowCaret=true; Invalidate(EInvalidateWidgetReason::Paint); return FReply::Handled();
     }
     virtual FReply OnMouseButtonUp(const FGeometry&, const FPointerEvent& E) override
     { return HasMouseCapture() ? FReply::Handled().ReleaseMouseCapture() : FReply::Unhandled(); }
@@ -215,12 +243,13 @@ public:
         const auto* O=Owner.Get(); if (!O || !O->FontLabel || !O->FontLabel->GetBitmapFont()) return Layer;
         const auto& Font=*O->FontLabel->GetBitmapFont(); auto* Atlas=O->FontLabel->GetGlyphAtlas(false); if (!Atlas) return Layer;
         auto Rows=Lines(G.GetLocalSize().X); const float Offset=Scroll(Rows,G.GetLocalSize().Y,Font.MaxCharHeight);
+        const float Horizontal=HorizontalScroll(Rows,G.GetLocalSize().X);
         FSlateBrush Brush; Brush.DrawAs=ESlateBrushDrawType::Image; Brush.SetResourceObject(Atlas);
         auto Box=[&](FVector2D P,FVector2D Size,FLinearColor Color,int32 Z) { FSlateDrawElement::MakeBox(Out,Z,G.ToPaintGeometry(Size,FSlateLayoutTransform(P)),FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")),ESlateDrawEffect::None,Color); };
         const int32 Begin=FMath::Min(Cursor,Anchor), End=FMath::Max(Cursor,Anchor);
         for (int32 R=0;R<Rows.Num();++R)
         {
-            float X=Left(Rows[R],G.GetLocalSize().X), Y=O->ContentMargins.Get(FMargin(0.f,O->bDigitsOnly ? 0.f : 2.f)).Top+R*Font.MaxCharHeight-Offset;
+            float X=Left(Rows[R],G.GetLocalSize().X)-Horizontal, Y=O->ContentMargins.Get(FMargin(0.f,O->bDigitsOnly ? 0.f : 2.f)).Top+R*Font.MaxCharHeight-Offset;
             for (int32 I=Rows[R].Begin;I<Rows[R].End;++I)
             {
                 const int32 Adv=ACEDatText::Advance(Font,O->Value[I]);
@@ -245,6 +274,7 @@ private:
     FString Original,Undo;
     bool bCommitting=false, bHasUndo=false;
     mutable float ScrollOffset=0;
+    mutable float HorizontalOffset=0;
     mutable bool bFollowCaret=true;
 };
 
@@ -254,7 +284,12 @@ UACERetailTextEntry::UACERetailTextEntry()
     // the leaf's clipping lets long notes draw over neighboring retail controls.
     SetClipping(EWidgetClipping::ClipToBounds);
 }
-void UACERetailTextEntry::SetText(const FText& Text) { Value=Text.ToString(); if (Editor) Editor->ResetSelection(); InvalidateLayoutAndVolatility(); }
+void UACERetailTextEntry::SetText(const FText& Text)
+{
+    const FString NewValue=Text.ToString();
+    if (Value==NewValue) return; // A binder refresh must not move the user's caret/selection.
+    Value=NewValue; if (Editor) Editor->ResetSelection(); InvalidateLayoutAndVolatility();
+}
 void UACERetailTextEntry::SetRetailElement(UACEUIResourceResolver* Resources,const TSharedPtr<FACEUIElement>& Element)
 {
     if (!FontLabel) FontLabel=NewObject<UACERetailTextBlock>(this);
@@ -263,6 +298,7 @@ void UACERetailTextEntry::SetRetailElement(UACEUIResourceResolver* Resources,con
 void UACERetailTextEntry::Commit(ETextCommit::Type Method) { OnTextCommitted.Broadcast(GetText(),Method); OnContextCommitted.Broadcast(ContextId,GetText(),Method); }
 void UACERetailTextEntry::RequestPlatformKeyboard(uint32 UserIndex) { if (Editor.IsValid()) Editor->OpenPlatformKeyboard(UserIndex); }
 float UACERetailTextEntry::GetScrollOffset() const { return Editor ? Editor->GetScrollOffset() : 0.f; }
+float UACERetailTextEntry::GetHorizontalScrollOffset() const { return Editor ? Editor->GetHorizontalScrollOffset() : 0.f; }
 float UACERetailTextEntry::GetScrollOffsetOfEnd() const { return Editor ? Editor->GetScrollEnd() : 0.f; }
 void UACERetailTextEntry::SetScrollOffset(float Offset) { if(Editor)Editor->SetScrollOffset(Offset); }
 TSharedRef<SWidget> UACERetailTextEntry::RebuildWidget() { Editor=SNew(SACERetailTextEntry,this); Editor->ResetSelection(); return Editor.ToSharedRef(); }

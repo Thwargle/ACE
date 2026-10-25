@@ -29,6 +29,7 @@ class ACECLIENT_API UACECharacterAppearanceComponent : public UActorComponent
 	friend class FACEAvatarMotionTest;
 	friend class FACERunSpeedParityTest;
 	friend class FACEEmoteTransitionTest;
+	friend class FACENetworkAnimationParityTest;
 	friend class FACEArcheryMotionTest;
 	friend class FACEAttackHeightMotionTest;
 	friend class FACEPortalMotionTest;
@@ -219,7 +220,7 @@ public:
 	/** Server Ready completes missile substates without interrupting a locally predicted jump/cast. */
 	void FinishMissileMotion();
 
-	/** Seed held action pose without replaying (ObjectCreate corpse already Dead). */
+	/** Seed the substate's cycle without replaying its entry (including a corpse's static Dead pose). */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
 	void SetHeldActionMotion(int32 ActionCommand, int32 Style = 0);
 

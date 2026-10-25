@@ -91,7 +91,7 @@ LayoutDesc marks true 3D hosts as `UIElement_Viewport`:
 | `RootGameplay_SmartBox_Field/PortalSpace` | 800×600 | World view (rendered by the game viewport) |
 | `InventoryPanel_Field/PaperDollField/PaperDoll` | 224×214 | Live character via scene-capture rig |
 | `FloatyExamination/BasicCreatureExamineUI/Exam_PaperDoll` | 300×265 | Scene-capture rig (`EnsureExamPaperDollPreviewRig`) |
-| `SmartBox/BarberField/Barber3DViewport` | 200×200 | Not implemented |
+| `SmartBox/BarberField/Barber3DViewport` | 200×200 | Shared character-appearance preview through the barber binder |
 
 The paperdoll rig (`UACEUIGameplayBinder::EnsurePaperDollPreviewRig`) spawns an off-map actor with
 `UACECharacterAppearanceComponent` + `USceneCaptureComponent2D`, flags its parts
@@ -149,13 +149,44 @@ art is authored at the element size still draw 1:1.
 - **Refusal text.** Retail string templates use a bare `_` as the name placeholder
   (`"_ doesn't know what to do with that."`); `LookupWeenieErrorWithString` substitutes it.
 
-## Still to do (gm*UI behavior)
+## Shared control parity
 
-- Native language-DAT unpack in `UACEDatSubsystem` (skip JSON extract step).
-- Typed widget behaviour beyond flags (Meter fill from Media, native Scrollbar / ListBox).
-- 3D viewports for examination paperdoll and barber.
-- World map texture on `WorldPanel_Field`; Options page bindings.
-- Char create / delete / restore in `UACEUICharSelectBinder`.
+- `UIElement_Button::MouseUp` (retail `004720E0`) requires release over the original
+  pressed button. Disabled, hidden, detached and obscured controls cannot activate.
+  Screen changes and capture loss cancel the pending click; secondary mouse buttons
+  do not steal a left-button capture.
+- Retail hot buttons (`MouseDown` at `00471FF0`, `ListenToGlobalMessage` at `00471C60`)
+  activate on press and repeat using `UICore_Button_hot_click_first_interval` and
+  `UICore_Button_hot_click_interval`. The resolver imports these DAT properties;
+  the canvas ticks the manager while held. Leaving the control pauses repetition,
+  and release never adds another click. A delayed frame sends at most one repeat.
+- Text entry follows `UIElement_Text::ScrollToPosition`: single-line fields scroll
+  horizontally to expose the caret. Painting and pointer selection use the same
+  offset. Multiline fields retain wrapping and vertical scrolling. Reapplying an
+  unchanged value preserves the selection and caret.
+- Scrollbar tracks, stack quantity sliders and vendor/trade drop targets convert
+  viewport coordinates into layout coordinates once. Exposure checks retain their
+  viewport input and account for overlapping windows.
+- Runtime window depths are compacted in their existing paint order, so repeated
+  window raises cannot eventually send the clicked window behind its siblings.
+- Toolbar item slots and secure-trade slots use the DAT accept/reject drag artwork.
+  The large toolbar backpack uses `ItemSlot_DragOver_DropIn` and accepts inventory
+  relocation even with the inventory page closed (`gmToolbarUI::HandleDrop`).
+  Hover leave, cancellation and completed drops clear this feedback.
+
+The 2026-10-25 pass uses retail source and resolved DAT layouts, with offscreen
+screen/interaction checks across character management, creation, barber, inventory,
+appraisal, vendor, trade, salvage, housing, spells, combat controls, chat, social,
+journal, options, fonts, tooltips and plugin chrome. `SharedControls` and
+`TextEntryScroll` cover the common behavior above; `UIInteractions` exercises
+vendor/trade drops and scrollbars at 100%, 125% and 200% geometry scale. These
+checks are fixture-based, not a claim that every live-server UI state has been tested.
+
+## Layout pipeline follow-up
+
+Native language-DAT unpack in `UACEDatSubsystem` could replace the JSON extraction
+step. Examination/barber previews, map texture, options bindings and character
+create/delete/restore are implemented and covered by the respective parity suites.
 
 ## Gameplay binding (`UACEUIGameplayBinder`)
 

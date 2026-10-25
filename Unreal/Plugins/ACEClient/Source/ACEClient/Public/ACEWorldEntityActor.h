@@ -23,6 +23,7 @@ class ACECLIENT_API AACEWorldEntityActor : public AActor
 	friend class FACERemoteSupportTest;
 	friend class FACERemoteMovementReplayTest;
 	friend class FACERemoteTurnTargetsTest;
+	friend class FACENetworkAnimationParityTest;
 	friend class FACESpawnSupportTest;
 
 public:
@@ -243,7 +244,7 @@ public:
 	void EndRemoteVRRoot();
 	FVector InterpolateRemoteLocation(const FVector& Target, float DeltaTime, const FVector& Movement = FVector::ZeroVector) const;
 
-	/** Corrections larger than this many AC units snap (portals/teleports) instead of blending. */
+	/** Non-creature presentation corrections beyond this distance snap. Creatures use retail distance/teleport rules. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "5.0", ClampMax = "192.0"))
 	float RemoteSnapDistance = 40.f;
 
@@ -285,6 +286,8 @@ protected:
 	bool ResolveFacingTarget(int32 TargetGuid, FVector& Location, bool bAllowCachedPosition = true) const;
 	bool ResolveMovementTarget(int32 TargetGuid, FVector& Location, float& Radius, float& Height);
 	FVector AdvanceRemoteMoveTo(float Seconds);
+	void AdvanceRemoteTurn(const FQuat& Desired, float Speed, float Seconds);
+	float RemoteTurnAnimationRate = 0.f;
 	void SetRemoteLocomotion(float Forward, float Strafe, bool bRunning, float Rate);
 	enum class ERemoteMoveToPhase : uint8 { Begin, Turn, Move, FinalTurn };
 	ERemoteMoveToPhase RemoteMoveToPhase = ERemoteMoveToPhase::Begin;

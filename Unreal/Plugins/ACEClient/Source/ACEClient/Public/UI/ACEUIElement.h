@@ -117,6 +117,9 @@ struct FACEUIElement : public TSharedFromThis<FACEUIElement>
 	bool bRollover = false;
 	bool bGhosted = false;
 	bool bHighlighted = false;
+	bool bHotButton = false;
+	float HotClickFirstInterval = 0.5f;
+	float HotClickInterval = 0.1f;
     bool bUseExplicitState = false;
 	bool bDrawAfterChildren = false;
 	uint32 FontId = 0;

@@ -143,11 +143,11 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     int32 Corrections=0;
     FACEPosition LastPosition;
     PositionSession.OnPositionUpdate.AddLambda([&](int32,const FACEPosition& P){++Corrections;LastPosition=P;});
-    auto Position=[&](uint16 Instance,uint16 Sequence,uint16 Teleport,float X,uint32 Flags=0x74)
+    auto Position=[&](uint16 Instance,uint16 Sequence,uint16 Teleport,float X,uint32 Flags=0x74,uint16 Force=0)
     {
         FACEBinaryWriter W; W.WriteUInt32(123); W.WriteUInt32(Flags); W.WriteUInt32(0x2B120021);
         W.WriteFloat(X); W.WriteFloat(90); W.WriteFloat(20); W.WriteFloat(1);
-        W.WriteUInt16(Instance); W.WriteUInt16(Sequence); W.WriteUInt16(Teleport); W.WriteUInt16(0);
+        W.WriteUInt16(Instance); W.WriteUInt16(Sequence); W.WriteUInt16(Teleport); W.WriteUInt16(Force);
         FACEBinaryReader R(W.GetData()); PositionSession.HandleUpdatePosition(R);
     };
     Position(3,11,2,45); Position(2,99,2,100); Position(3,100,1,101); Position(3,11,3,102);
@@ -163,10 +163,24 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     Position(3,1,3,48,0x70);
     TestTrue(TEXT("Airborne and descriptor positions remain distinguishable"),LastPosition.bHasContactState && !LastPosition.bIsGrounded);
     TestEqual(TEXT("A genuine new teleport epoch reaches presentation"),LastPosition.TeleportSequence,uint16(3));
+    PositionSession.PlayerGuid=123;
+    Position(3,2,3,48,0x74,9);
+    TestEqual(TEXT("New force epoch is acknowledged"),PositionSession.GetForcePositionSeq(),uint16(9));
+    Position(3,3,3,49,0x74,8);
+    TestEqual(TEXT("Ordinary newer position cannot rewind the force epoch"),PositionSession.GetForcePositionSeq(),uint16(9));
+    TestEqual(TEXT("Object force timestamp also remains monotonic"),PositionSession.WorldObjects[123].PhysicsTimestamps[ACEPhysicsTimeStamp::ForcePosition],uint16(9));
+    const int32 AfterOldForce=Corrections;
+    Position(3,2,3,48,0x74,9);
+    TestEqual(TEXT("Replayed force correction cannot blip the player twice"),Corrections,AfterOldForce);
+    PositionSession.WorldObjects[123].PhysicsTimestamps[ACEPhysicsTimeStamp::ForcePosition]=65535;
+    PositionSession.ForcePositionSeq=65535;
+    Position(3,3,3,50,0x74,0);
+    TestEqual(TEXT("New force epoch wraps even when position sequence is unchanged"),PositionSession.GetForcePositionSeq(),uint16(0));
+    PositionSession.PlayerGuid=0;
     {
         FACEBinaryWriter Full; Full.WriteUInt32(123); Full.WriteUInt32(0x74); Full.WriteUInt32(0x2B120021);
         Full.WriteFloat(52); Full.WriteFloat(90); Full.WriteFloat(20); Full.WriteFloat(1);
-        for (uint16 V : {uint16(3),uint16(2),uint16(3),uint16(0)}) Full.WriteUInt16(V);
+        for (uint16 V : {uint16(3),uint16(4),uint16(3),uint16(0)}) Full.WriteUInt16(V);
         const int32 Before=Corrections;
         for (int32 Bytes=0; Bytes<Full.GetData().Num(); ++Bytes)
         { FACEBinaryReader Short(Full.GetData().GetData(),Bytes); PositionSession.HandleUpdatePosition(Short); }
@@ -766,6 +780,17 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Stop retains the forced-position epoch"),R.ReadUInt16(),Sender.ForcePositionSeq);
         TestEqual(TEXT("Stopping input never invents ground contact"),R.ReadUInt8(),uint8(Contact));
         TestEqual(TEXT("Future position reports preserve the physical contact state"),Sender.bAutoPosContact,Contact);
+        Sender.AutoPosTimer=.9f;
+        Sender.SendSoulEmoteMotion(0x13000087u);
+        const auto* Emote=Sender.CachedC2SPackets.Find(Sender.NextPacketSequence-1);
+        if(TestNotNull(TEXT("Gesture uses an ordinary movement packet"),Emote))
+        {
+            FACEBinaryReader E(Emote->Payload);E.Skip(24);
+            TestEqual(TEXT("Gesture action is MoveToState"),E.ReadUInt32(),ACEGameAction::MoveToState);
+            E.Skip(12+8+32+8); // Raw flags/hold/style, action, position, timestamps.
+            TestEqual(TEXT("Gesture never invents ground contact"),E.ReadUInt8(),uint8(Contact));
+        }
+        TestEqual(TEXT("Gesture restarts the retail movement report clock"),Sender.AutoPosTimer,0.f);
     }
     // DreamWeave fast-tick/portal loading exposes stale stationary positions:
     // the wire must carry final physics changes even after movement input ends.
@@ -785,6 +810,9 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     int32 Reports=CountPositions();
     Sender.TickPositionReporting(5.f);
     TestEqual(TEXT("Unchanged stationary players do not flood position packets"),CountPositions(),Reports);
+    Sender.PlayerPosition.Location.X+=.00015;
+    Sender.TickPositionReporting(1.f);
+    TestEqual(TEXT("Retail frame tolerance suppresses sub-0.0002 coordinate noise"),CountPositions(),Reports);
     Sender.PlayerPosition.Location.Z+=.03;
     Sender.TickPositionReporting(.01f);
     TestEqual(TEXT("Ground settling reports without a movement key or jump"),CountPositions(),++Reports);

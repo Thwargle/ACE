@@ -2207,8 +2207,8 @@ void UACEUIGameplayBinder::SyncInventoryButtonVisual()
 		Btn->bHighlighted = bInvOpen;
 		Btn->ImageFileId = bInvOpen ? DidBagOpen : DidBagClosed;
 	}
-	// 0x060011F9 is ItemSlot_GenericDragOver (green ring) — only for drag-over, not idle chrome.
-	Manager->SetElementVisibleByName(TEXT("BigBackpack_Icon_DragAccept"), false);
+	// Drag feedback is managed by the hover path and cleared on cancellation.
+	if (!bInvDragActive) Manager->SetElementVisibleByName(TEXT("BigBackpack_Icon_DragAccept"), false);
 }
 
 void UACEUIGameplayBinder::TogglePanelPage(const FString& PageElementName)
@@ -5265,19 +5265,22 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		return true;
 	}
 
+	// gmToolbarUI::HandleDrop: the large toolbar pack accepts items even when
+	// the inventory window is closed. Shortcuts are handled above, not relocated.
+	if (Manager && Canvas->IsElementExposedAt(Manager->FindElementByName(TEXT("InventoryButton")), CanvasLocalPos))
+	{
+		if (Guid != Client->GetPlayerGuid()) MoveInventoryAmount(Guid, Client->GetPlayerGuid(), 0, Amount);
+		return true;
+	}
+
 	// Drop onto open vendor UI → stage the item or a pack's contents in the Sell cart.
 	if (OpenVendorGuid != 0 && Manager)
 	{
 		auto HitVendorUi = [&](const TCHAR* Name) -> bool
 		{
 			TSharedPtr<FACEUIElement> El = Manager->FindElementByName(Name);
-			if (!El.IsValid() || !El->bVisible || !Canvas->IsElementExposedAt(El, CanvasLocalPos))
-			{
-				return false;
-			}
-			const FIntPoint O = El->GetScreenOrigin();
-			return CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
-				&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height;
+			// Exposure checks already convert viewport coordinates to DAT layout units.
+			return Canvas->IsElementExposedAt(El, CanvasLocalPos);
 		};
 		if (HitVendorUi(TEXT("Vendor")) || HitVendorUi(TEXT("VendorPanel"))
 			|| HitVendorUi(TEXT("RootGameplay_FloatyEnvPanel_Field")))
@@ -5393,13 +5396,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		auto HitTradeUi = [&](const TCHAR* Name) -> bool
 		{
 			TSharedPtr<FACEUIElement> El = Manager->FindElementByName(Name);
-			if (!El.IsValid() || !El->bVisible || !Canvas->IsElementExposedAt(El, CanvasLocalPos))
-			{
-				return false;
-			}
-			const FIntPoint O = El->GetScreenOrigin();
-			return CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
-				&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height;
+			return Canvas->IsElementExposedAt(El, CanvasLocalPos);
 		};
 		if (HitTradeUi(TEXT("SecureTrade")) || HitTradeUi(TEXT("TradePanel"))
 			|| HitTradeUi(TEXT("TradeSelfItemsList")) || HitTradeUi(TEXT("TradeOtherItemsList"))
@@ -13432,14 +13429,15 @@ bool UACEUIGameplayBinder::IsScrollbarDragActive() const
 	return ScrollDragTarget != EACEUIScrollTarget::None;
 }
 
-bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
+bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D ViewportPos)
 {
+	const FVector2D CanvasLocalPos = Canvas ? Canvas->ViewportToLayout(ViewportPos) : ViewportPos;
 	// Selected-item stack amount slider (toolbar SelectedObjectField).
 	if (Manager && SelectedStackMax > 1)
 	{
 		if (TSharedPtr<FACEUIElement> Slider = Manager->FindElementByName(TEXT("StackSizeSlider")))
 		{
-			if (Slider->bVisible && Canvas && Canvas->IsElementExposedAt(Slider, CanvasLocalPos))
+			if (Slider->bVisible && Canvas && Canvas->IsElementExposedAt(Slider, ViewportPos))
 			{
 				const FIntPoint O = Slider->GetScreenOrigin();
 				if (CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
@@ -13463,7 +13461,7 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 						: FMath::Clamp((LocalX - ThumbWidth * .5f) / FMath::Max(1, ScrollDragTravel - 1), 0.f, 1.f);
 					ScrollDragGrabOffset = LocalX - ScrollDragFraction * ScrollDragTravel;
 					if (bOnThumb) ScrollDragLastOffset = SelectedStackAmount;
-					else UpdateScrollbarDrag(CanvasLocalPos);
+					else UpdateScrollbarDrag(ViewportPos);
 					return true;
 				}
 			}
@@ -13474,7 +13472,7 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 		int32 MaxOff, bool bHorizontal) -> bool
 	{
 		if (!Bar.IsValid() || !Bar->bVisible || MaxOff <= 0
-			|| !Canvas || !Canvas->IsElementExposedAt(Bar, CanvasLocalPos))
+			|| !Canvas || !Canvas->IsElementExposedAt(Bar, ViewportPos))
 		{
 			return false;
 		}
@@ -13500,7 +13498,7 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 		{
 			return false;
 		}
-		// Exclude up/down (or left/right) button chrome — those use click-to-step.
+		// Arrow buttons use the element manager's DAT hot-button repeat behavior.
 		if (bHorizontal)
 		{
 			if (CanvasLocalPos.X < BarO.X + Btn || CanvasLocalPos.X >= BarO.X + Bar->Width - Btn)
@@ -13535,7 +13533,7 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 		const float ThumbSize = Thumb ? (bHorizontal ? Thumb->Width : Thumb->Height) : 8.f;
 		ScrollDragGrabOffset = Cursor >= ThumbStart && Cursor <= ThumbStart + ThumbSize ? Cursor - ThumbStart : ThumbSize * .5f;
 		ScrollDragVisibleFraction = ThumbSize / FMath::Max(1.f, float((bHorizontal ? Bar->Width : Bar->Height) - Btn*2));
-		UpdateScrollbarDrag(CanvasLocalPos);
+		UpdateScrollbarDrag(ViewportPos);
 		return true;
 	};
 
@@ -13776,8 +13774,9 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 	return false;
 }
 
-void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D CanvasLocalPos)
+void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D ViewportPos)
 {
+	const FVector2D CanvasLocalPos = Canvas ? Canvas->ViewportToLayout(ViewportPos) : ViewportPos;
 	if (ScrollDragTarget == EACEUIScrollTarget::None || ScrollDragTravel <= 0)
 	{
 		return;

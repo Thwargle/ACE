@@ -902,8 +902,8 @@ namespace ACEMotion
 
 	/**
 	 * Idle poses that retail holds as Interpreted ForwardCommand (golem/skeleton Sleeping,
-	 * Sitting, Crouch, Dead, chat-pose 0x4300/0x4200/0x1300). Snap to the final frame —
-	 * do not play Ready→pose then fall through to locomotion.
+	 * Sitting, Crouch, Dead, chat-pose 0x4300/0x4200). Remain in their authored
+	 * cycle (a still pose at zero rate), rather than falling through to Ready.
 	 */
 	inline bool IsHeldRestCommand(uint32 Cmd)
 	{
@@ -913,7 +913,7 @@ namespace ACEMotion
 			return false;
 		}
 		const uint32 Fam = Cmd & 0xFF000000u;
-		if (Fam == 0x13000000u || Fam == 0x42000000u || Fam == 0x43000000u)
+		if (Fam == 0x42000000u || Fam == 0x43000000u)
 		{
 			return true;
 		}

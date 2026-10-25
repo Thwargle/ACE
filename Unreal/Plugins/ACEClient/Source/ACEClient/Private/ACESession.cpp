@@ -576,9 +576,9 @@ void FACESession::TickPositionReporting(float DeltaSeconds)
 		const bool CellOrContactChanged = bHaveReportedPosition
 			&& (LastReportedPosition.CellId != PlayerPosition.CellId || bLastReportedContact != bAutoPosContact);
 		const bool PoseChanged = !bHaveReportedPosition || CellOrContactChanged
-			|| !LastReportedPosition.Location.Equals(PlayerPosition.Location, .0001)
-			|| !LastReportedPosition.RotationXYZ.Equals(PlayerPosition.RotationXYZ, .0001)
-			|| !FMath::IsNearlyEqual(LastReportedPosition.RotationW, PlayerPosition.RotationW, .0001f);
+			|| !LastReportedPosition.Location.Equals(PlayerPosition.Location, .0002)
+			|| !LastReportedPosition.RotationXYZ.Equals(PlayerPosition.RotationXYZ, .0002)
+			|| !FMath::IsNearlyEqual(LastReportedPosition.RotationW, PlayerPosition.RotationW, .0002f);
 		// SendVRPose now pairs each tracked sample with its feet. Do not send a
 		// second timed report in the same frame; retain normal reporting if the
 		// tracking stream pauses or the headset is disabled.
@@ -4547,10 +4547,13 @@ void FACESession::SendSoulEmoteMotion(uint32 MotionCommand)
 	W.WriteUInt16(ServerControlSeq);
 	W.WriteUInt16(TeleportSeq);
 	W.WriteUInt16(ForcePositionSeq);
-	W.WriteUInt8(0x01); // contact
+	W.WriteUInt8(bAutoPosContact ? 0x01 : 0x00);
 	W.Align();
 
 	SendGameAction(ACEGameAction::MoveToState, W.GetData(), ACEQueue::WeenieQueue);
+	// A gesture is another SendMovementEvent: retain physical contact and
+	// restart the periodic position clock just like an ordinary movement send.
+	AutoPosTimer = 0.f;
 }
 
 void FACESession::SendTell(const FString& TargetName, const FString& Message)
@@ -8193,11 +8196,15 @@ void FACESession::HandleUpdatePosition(FACEBinaryReader& Reader)
 					Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::ForcePosition], IncomingForce);
 				if (!bNewPosition && !bForceSelf) return;
 			}
+			// POSITION_TS can advance while an older FORCE_POSITION_TS is still
+			// in flight. Retail newer_event never rolls the force epoch backwards.
+			if (!Obj->bHasPhysicsTimestamps || ACEPhysicsTimeStamp::IsNewer(
+				Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::ForcePosition], IncomingForce))
+				Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::ForcePosition] = IncomingForce;
 			Obj->bHasPhysicsTimestamps = true;
 			Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance] = IncomingInstance;
 			Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Position] = IncomingPosition;
 			Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Teleport] = IncomingTeleport;
-			Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::ForcePosition] = IncomingForce;
 			Obj->Position = Pos;
 			Obj->bHasPosition = true;
 			Obj->PlacementId = PlacementId;
@@ -8212,7 +8219,10 @@ void FACESession::HandleUpdatePosition(FACEBinaryReader& Reader)
 			InstanceSeq = IncomingInstance;
 			if (TeleportSeq != IncomingTeleport) SelectObject(0);
 			TeleportSeq = IncomingTeleport;
-			ForcePositionSeq = IncomingForce;
+			if (const auto* Obj = WorldObjects.Find(Guid))
+				ForcePositionSeq = Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::ForcePosition];
+			else if (ACEPhysicsTimeStamp::IsNewer(ForcePositionSeq, IncomingForce))
+				ForcePositionSeq = IncomingForce;
 		}
 	}
 	else if (FACEWorldObject* Obj = WorldObjects.Find(Guid))
@@ -8377,9 +8387,7 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 			const bool bStance = (Full & 0xFF000000u) == 0x80000000u;
 			if (!IsLocoOrDoorOrReady(Low) && !bStance)
 			{
-				const uint32 Fam = Full & 0xFF000000u;
-				const bool bChatPose = Fam == 0x13000000u || Fam == 0x42000000u || Fam == 0x43000000u;
-				const float ClampedSpeed = bChatPose ? 1.f : FMath::Max(0.05f, Speed);
+				const float ClampedSpeed = FMath::Max(0.05f, Speed);
 				if (Motion.ActionCommand == 0)
 				{
 					Motion.ActionCommand = static_cast<int32>(Full);
@@ -8438,16 +8446,9 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 				if (!IsLocoOrDoorOrReady(Low) && !bStance)
 				{
 					Motion.ActionCommand = static_cast<int32>(Full);
-					// ChatPose hold states use speed_mod 1; don't inherit a stale run rate.
-					const uint32 Fam = Full & 0xFF000000u;
-					if (Fam == 0x13000000u || Fam == 0x42000000u || Fam == 0x43000000u)
-					{
-						Motion.ActionSpeed = 1.f;
-					}
-					else
-					{
-						Motion.ActionSpeed = FMath::Max(0.05f, ForwardSpeed);
-					}
+					// Interpreted forward speed belongs to this substate, including
+					// held emotes. Retail passes it through to DoInterpretedMotion.
+					Motion.ActionSpeed = FMath::Max(0.05f, ForwardSpeed);
 				}
 			}
 			break;

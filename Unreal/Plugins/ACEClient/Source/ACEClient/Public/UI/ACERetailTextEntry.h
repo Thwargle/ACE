@@ -28,6 +28,7 @@ public:
     void Commit(ETextCommit::Type Method);
     void RequestPlatformKeyboard(uint32 UserIndex);
     float GetScrollOffset() const;
+    float GetHorizontalScrollOffset() const;
     float GetScrollOffsetOfEnd() const;
     void SetScrollOffset(float Offset);
     bool bMultiline = false;

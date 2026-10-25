@@ -198,6 +198,11 @@ namespace
             (*Props)->TryGetBoolField(TEXT("UICore_Resizebar_border_top"),Out->bResizeTop);
             (*Props)->TryGetBoolField(TEXT("UICore_Resizebar_border_bottom"),Out->bResizeBottom);
 			(*Props)->TryGetBoolField(TEXT("UICore_Button_boolean_button"), Out->bBooleanButton);
+			(*Props)->TryGetBoolField(TEXT("UICore_Button_hot_button"), Out->bHotButton);
+			if ((*Props)->TryGetNumberField(TEXT("UICore_Button_hot_click_first_interval"), Num))
+				Out->HotClickFirstInterval = FMath::Max(0.f, static_cast<float>(Num));
+			if ((*Props)->TryGetNumberField(TEXT("UICore_Button_hot_click_interval"), Num))
+				Out->HotClickInterval = FMath::Max(0.001f, static_cast<float>(Num));
 			ReadTextColor(*Props, Out->TextColor);
 			(*Props)->TryGetBoolField(TEXT("UICore_Text_outline"), Out->bTextOutline);
             const TSharedPtr<FJsonObject>* Entry=nullptr;

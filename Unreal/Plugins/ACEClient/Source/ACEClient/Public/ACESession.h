@@ -133,6 +133,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACERetailInteriorStreamingTest;
 	friend class FACERetailCombatProtocolTest;
 	friend class FACERetailNetworkTest;
+	friend class FACENetworkAnimationParityTest;
 	friend class FACEAttackHeightMotionTest;
 	friend class FACEGroundItemPlacementTest;
 	friend class FACECustomObjectReplicationTest;

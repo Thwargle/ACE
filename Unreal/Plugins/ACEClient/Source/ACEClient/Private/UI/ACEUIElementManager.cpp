@@ -189,7 +189,7 @@ void UACEUIElementManager::Shutdown()
 	CaptureElement.Reset();
 	HoverElement.Reset();
 	DragFloaty.Reset();
-	CaptureRefCount = 0;
+	bHotClicking = false;
 	bDragMoved = false;
 }
 
@@ -440,6 +440,9 @@ bool UACEUIElementManager::ViewportToCanvas(
 
 void UACEUIElementManager::ClearRoots()
 {
+	CancelPointerCapture();
+	FocusElement.Reset();
+	HoverElement.Reset();
 	InvalidateNameLookupIndex();
 	Roots.Reset();
 	if (SyntheticRoot.IsValid())
@@ -959,8 +962,10 @@ void UACEUIElementManager::NotifyMouseMove(FVector2D ViewportPos, FVector2D View
 		&& !(ViewportSize.X >= 1.f && ViewportSize.Y >= 1.f && CaptureElement.IsValid()
 			&& (ResizeFloaty.IsValid() || DragFloaty.IsValid())))
 	{
+		HoverElement.Reset();
 		return;
 	}
+	PointerCanvas = FIntPoint(Cx, Cy);
 
 	if (ResizeFloaty.IsValid() && !IsUiLocked() && bResizeChat)
 	{
@@ -1051,7 +1056,13 @@ void UACEUIElementManager::BringFloatyToFront(const TSharedPtr<FACEUIElement>& E
 	NextFloatyZ = FMath::Max(NextFloatyZ + 1, 1000u);
 	if (NextFloatyZ >= 9000)
 	{
+		// Preserve the existing back-to-front order when compacting runtime depths.
+		// Resetting only the next counter sends newly clicked windows behind others.
 		NextFloatyZ = 1000;
+		if (auto Parent = Floaty->Parent.Pin())
+			for (const auto& Sibling : Parent->Children)
+				if (Sibling && Sibling->ZLevel >= 1000 && Sibling->ZLevel < 9000)
+					Sibling->ZLevel = NextFloatyZ++;
 	}
 	Floaty->ZLevel = NextFloatyZ;
 	if (TSharedPtr<FACEUIElement> Parent = Floaty->Parent.Pin())
@@ -1063,6 +1074,9 @@ void UACEUIElementManager::BringFloatyToFront(const TSharedPtr<FACEUIElement>& E
 
 void UACEUIElementManager::NotifyMouseDown(FVector2D ViewportPos, FVector2D ViewportSize, FKey Button)
 {
+	// A secondary button must not replace or release a pending left-button click.
+	if (Button != EKeys::LeftMouseButton) return;
+	CancelPointerCapture();
 	int32 Cx = 0, Cy = 0;
 	if (!ViewportToCanvas(ViewportPos, ViewportSize, Cx, Cy))
 	{
@@ -1073,13 +1087,13 @@ void UACEUIElementManager::NotifyMouseDown(FVector2D ViewportPos, FVector2D View
 	ResizeFloaty.Reset();
 
 	TSharedPtr<FACEUIElement> Hit = HitTestCanvas(Cx, Cy);
+	PointerCanvas = FIntPoint(Cx, Cy);
 	HoverElement = Hit;
-	if (Hit.IsValid())
+	if (Hit.IsValid() && !Hit->bGhosted)
 	{
 		BringFloatyToFront(Hit);
 
 		CaptureElement = Hit;
-		CaptureRefCount = FMath::Max(CaptureRefCount + 1, 1);
 		ActiveElement = Hit;
 		if (Hit->bAcceptsFocus)
 		{
@@ -1129,6 +1143,14 @@ void UACEUIElementManager::NotifyMouseDown(FVector2D ViewportPos, FVector2D View
 				DragStartUserY = Floaty->UserDragY;
 			}
 		}
+		// UIElement_Button::MouseDown: hot controls (notably scrollbar arrows)
+		// activate immediately, then use the DAT-authored repeat delays.
+		if (Hit->bHotButton && !DragFloaty && !ResizeFloaty)
+		{
+			bHotClicking = true;
+			NextHotClickTime = FPlatformTime::Seconds() + Hit->HotClickFirstInterval;
+			OnElementActivated.Broadcast(Hit);
+		}
 	}
 	else
 	{
@@ -1139,12 +1161,37 @@ void UACEUIElementManager::NotifyMouseDown(FVector2D ViewportPos, FVector2D View
 void UACEUIElementManager::CancelPointerCapture()
 {
 	if (bDragMoved) SaveFloatyLayout();
-	CaptureRefCount = 0; CaptureElement.Reset(); ActiveElement.Reset();
+	bHotClicking = false; CaptureElement.Reset(); ActiveElement.Reset();
 	DragFloaty.Reset(); ResizeFloaty.Reset(); bDragMoved = false;
 }
 
-void UACEUIElementManager::NotifyMouseUp(FVector2D ViewportPos, FVector2D ViewportSize, FKey Button, bool bRequireSameTarget)
+void UACEUIElementManager::TickPointerInput(double Now)
 {
+	if (!bHotClicking || !CaptureElement) return;
+	const auto Button = CaptureElement;
+	if (!Button->bHotButton || !Button->bActivatable || Button->bGhosted)
+	{
+		CancelPointerCapture();
+		return;
+	}
+	// Re-hit-test after layout/visibility changes; a held button behind another
+	// window or outside its mask must not continue scrolling.
+	if (!HoverElement || HitTestCanvas(PointerCanvas.X, PointerCanvas.Y) != Button)
+	{
+		NextHotClickTime = FMath::Max(NextHotClickTime, Now);
+		return;
+	}
+	if (Now >= NextHotClickTime)
+	{
+		// At most one activation per frame, including after a loading hitch.
+		NextHotClickTime += Button->HotClickInterval;
+		OnElementActivated.Broadcast(Button);
+	}
+}
+
+void UACEUIElementManager::NotifyMouseUp(FVector2D ViewportPos, FVector2D ViewportSize, FKey Button)
+{
+	if (Button != EKeys::LeftMouseButton) return;
 	TSharedPtr<FACEUIElement> Released;
 	int32 Cx = 0, Cy = 0;
 	if (ViewportToCanvas(ViewportPos, ViewportSize, Cx, Cy))
@@ -1157,41 +1204,12 @@ void UACEUIElementManager::NotifyMouseUp(FVector2D ViewportPos, FVector2D Viewpo
 		OnHoverChanged.Broadcast(HoverElement);
 	}
 
-	const bool bHadCapture = CaptureElement.IsValid();
 	TSharedPtr<FACEUIElement> Activated = ActiveElement;
-	const bool bSkipClick = bDragMoved;
-	DragFloaty.Reset();
-	ResizeFloaty.Reset();
-
-	if (CaptureRefCount > 0)
-	{
-		--CaptureRefCount;
-	}
-	if (CaptureRefCount <= 0)
-	{
-		CaptureRefCount = 0;
-		CaptureElement.Reset();
-	}
-
-	if (bHadCapture && Button == EKeys::LeftMouseButton && !bSkipClick
-		&& (!bRequireSameTarget || Released == Activated))
-	{
-		if (Released.IsValid())
-		{
-			Activated = Released;
-		}
-		if (Activated.IsValid())
-		{
-			OnElementActivated.Broadcast(Activated);
-		}
-	}
-
-	ActiveElement.Reset();
-	if (bSkipClick)
-	{
-		SaveFloatyLayout();
-	}
-	bDragMoved = false;
+	const bool bClick = Activated && CaptureElement == Activated && Released == Activated
+		&& !bDragMoved && !bHotClicking && Activated->bActivatable && !Activated->bGhosted;
+	// Clear before callbacks, which may change screens or start a new capture.
+	CancelPointerCapture();
+	if (bClick) OnElementActivated.Broadcast(Activated);
 }
 
 bool UACEUIElementManager::IsCanvasOverUI(int32 CanvasX, int32 CanvasY) const

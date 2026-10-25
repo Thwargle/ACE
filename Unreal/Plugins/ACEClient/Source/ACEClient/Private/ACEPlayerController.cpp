@@ -6994,6 +6994,11 @@ void AACEPlayerController::HandlePositionUpdate(int32 ObjectGuid, const FACEPosi
 			App->ClearJumpMotionIfAny();
 			App->SetSuppressLocoIdleBlend(false);
 		}
+		// SmartBox::HandleReceivedPosition acknowledges a force-position blip
+		// immediately, with the corrected XYZ and the player's retained heading.
+		// Waiting for input or the periodic report leaves the server correcting
+		// against an obsolete position. Airborne reports remain suppressed.
+		Client->FlushAutonomousPosition(Corrected.bIsGrounded);
 		return;
 	}
 
@@ -8017,17 +8022,15 @@ void AACEPlayerController::HandleMotionUpdate(int32 ObjectGuid, const FACEObject
 				const uint32 Full = Act <= 0xFFFFu
 					? ACEMotion::ExpandPackedCommand(static_cast<uint16>(Act))
 					: Act;
-				const uint32 Hi = Full & 0xFF000000u;
 				// A held forward pose survives independent sidestep/turn commands.
-				const bool bHoldEmote = Hi == 0x13000000u || Hi == 0x43000000u || Hi == 0x42000000u;
+				const bool bHoldEmote = ACEMotion::IsHeldRestCommand(Full);
 				App->PlayActionMotion(Motion.ActionCommand, Motion.ActionSpeed, Motion.CurrentStyle, bHoldEmote, Motion.bNewAction);
 				if (!bHoldEmote || Motion.bNewAction)
 				{
 					for (int32 I=0;I<Motion.ActionFollowups.Num();++I)
 					{
 						const uint32 Next = ACEMotion::NormalizeCommand(static_cast<uint32>(Motion.ActionFollowups[I]));
-						const uint32 Family = Next & 0xFF000000u;
-						const bool Hold = Family == 0x13000000u || Family == 0x42000000u || Family == 0x43000000u || ACEMotion::IsHeldRestCommand(Next);
+						const bool Hold = ACEMotion::IsHeldRestCommand(Next);
 						App->QueueActionMotion(Motion.ActionFollowups[I], Motion.FollowupSpeed(I), Motion.CurrentStyle, Hold);
 					}
 				}

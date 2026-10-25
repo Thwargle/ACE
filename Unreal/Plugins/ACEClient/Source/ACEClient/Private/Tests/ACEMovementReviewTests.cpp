@@ -184,6 +184,10 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   PC->PlayerCameraManager->InitializeFor(PC);
   TestNotNull(TEXT("Animation LOD test has a camera"),PC->PlayerCameraManager.Get());
   const FVector Eye=PC->PlayerCameraManager ? PC->PlayerCameraManager->GetCameraLocation() : FVector::ZeroVector;
+  // This measures the cyclic clock, not time spent in Ready->Run. WalkingStep
+  // separately verifies that authored entry/exit links consume their own time.
+  const bool WalkingTransitions=App->bWalkingTransitionsEnabled;
+  App->SetWalkingTransitionsEnabled(false);
   Actor->bIsPlayer=true; App->SetLocomotionInput(1,0,true,1);
   for(float Distance:{3900.f,4100.f,8100.f,15000.f})for(float Dt:{1.f/90,1.f/50,1.f/15})
   {
@@ -198,13 +202,16 @@ bool FACEMovementReviewTest::RunTest(const FString&)
     Previous=App->AnimTime;
    }
    TestTrue(TEXT("Distant walking players still receive frequent poses"),Updates>=FMath::Min(15,Frames));
-   TestTrue(TEXT("Animation clock advances a full second, independent of frame-number masks"),FMath::IsNearlyEqual(App->AnimTime,Frames*Dt,.04f));
+   TestTrue(*FString::Printf(TEXT("Animation clock retains a full second distance=%.0f dt=%.4f time=%.6f deferred=%.6f"),Distance,Dt,App->AnimTime,App->DeferredPoseDeltaTime),
+    FMath::IsNearlyEqual(App->AnimTime+App->DeferredPoseDeltaTime,Frames*Dt,.04f));
   }
+  App->SetWalkingTransitionsEnabled(WalkingTransitions);
   PC->PlayerCameraManager->Destroy();PC->Destroy();Actor->bIsPlayer=false;Actor->SetActorLocation(FVector::ZeroVector);
  }
  {
   auto* Walker=World->SpawnActor<AACEWorldEntityActor>();Walker->bIsPlayer=true;Walker->bClampToGround=false;
   FACEPosition P;P.CellId=0x7D640019;P.Location=FVector(50,50,100);P.RotationW=1;P.RotationXYZ=FVector::ZeroVector;
+  P.bHasTeleportSequence=true;
   Walker->ApplyACEPosition(P);Walker->RemoteMotion.bMoving=true;Walker->RemoteMotion.Forward=1;Walker->RemoteMotion.ForwardUnitsPerSecond=4;
   const FVector Start=Walker->GetActorLocation();
   for(int I=0;I<150;++I)Walker->Tick(.01f);
@@ -220,7 +227,7 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   // A descriptor without contact metadata is not an F748 constraint event.
   // Missing motion alone must not impose the former two-second distance cap.
   TestTrue(TEXT("A descriptor does not impose a custom movement radius"),FVector::Dist(Walker->RemotePredictLocation,Walker->RemoteAnchorLocation)>3000);
-  P.Location.X+=100;Walker->ApplyACEPosition(P);
+  P.Location.X+=100;++P.TeleportSequence;Walker->ApplyACEPosition(P);
   TestTrue(TEXT("Large teleport still snaps immediately"),Walker->GetActorLocation().Equals(P.ToUnrealLocation(100),.01));
   Walker->Destroy();
  }
@@ -513,6 +520,8 @@ bool FACEMovementReviewTest::RunTest(const FString&)
    Pawn->SetActorLocation(Local.ToUnrealLocation(100)+FVector(0,0,88));Pawn->SetActorRotation(Local.ToUnrealQuat());
    PC->PredictedPose=Local;PC->bHavePredictedPose=Predicting;PC->bLocalPredicting=Predicting;
    Session->PlayerPosition=Local;
+   Session->bHaveReportedPosition=false;
+   Session->bPositionReportingSuspended=false;
    FACEPosition Delayed=Self.Position;Delayed.Location+=FVector(.3f,.2f,-.1f);
    if(Forced)++Force;
    Receive(Delayed,0,Force);
@@ -524,7 +533,11 @@ bool FACEMovementReviewTest::RunTest(const FString&)
    {
     TestTrue(TEXT("Forced correction still applies authoritative XYZ"),PC->PredictedPose.ToUnrealLocation(100).Equals(Delayed.ToUnrealLocation(100),.01));
     TestTrue(TEXT("Forced correction still moves the body"),Pawn->GetActorLocation().Equals(Delayed.ToUnrealLocation(100)+FVector(0,0,88),.01));
+    TestTrue(TEXT("Forced correction immediately reports authoritative XYZ and retained local facing"),
+     Session->bHaveReportedPosition && Session->LastReportedPosition.ToUnrealLocation(100).Equals(Delayed.ToUnrealLocation(100),.01)
+     && Session->LastReportedPosition.ToUnrealQuat().Equals(Local.ToUnrealQuat(),.00001f));
    }
+   else TestFalse(TEXT("An ordinary acknowledgement does not force an immediate reply"),Session->bHaveReportedPosition);
   }
   auto* WallActor=World->SpawnActor<AActor>();auto* Wall=NewObject<UBoxComponent>(WallActor);
   WallActor->SetRootComponent(Wall);Wall->SetBoxExtent(FVector(5,300,300));Wall->SetCollisionResponseToAllChannels(ECR_Block);Wall->RegisterComponent();
