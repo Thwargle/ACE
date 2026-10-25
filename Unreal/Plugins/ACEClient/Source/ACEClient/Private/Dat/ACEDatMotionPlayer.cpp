@@ -17,6 +17,15 @@ const FACEDatAnimation* FACEDatMotionPlayer::LoadAnimation(uint32 AnimId) const
 
 const FACEDatMotionData* FACEDatMotionPlayer::FindCycle(uint32 MotionCommand, uint32 PreferredStyle) const
 {
+	// Turning is an independent modifier. Its authored animation is used while
+	// standing; looking only in Cycles silently returned Ready for local turns.
+	if (MotionCommand==ACEMotion::TurnRight)
+	{
+		const uint32 Style=PreferredStyle?PreferredStyle:MotionTable->DefaultStyle;
+		const auto* Modifier=MotionTable->Modifiers.Find((Style<<16)|(MotionCommand&0xFFFFFFu));
+		if (!Modifier) Modifier=MotionTable->Modifiers.Find(MotionCommand&0xFFFFFFu);
+		if (Modifier && !Modifier->Anims.IsEmpty()) return Modifier;
+	}
 	if (MotionTable->Id == 0 && MotionTable->Cycles.Num() == 0)
 	{
 		return nullptr;

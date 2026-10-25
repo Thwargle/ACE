@@ -4731,6 +4731,43 @@ void FACESession::SendTurbineChat(uint32 ChannelId, uint32 ChatType, const FStri
 	SendGameMessage(ACEOpcode::TurbineChat, W.GetData(), ACEQueue::LoginQueue);
 }
 
+int32 FACESession::FindContainerMergeTarget(int32 ItemGuid, int32 ContainerGuid, int32 Amount) const
+{
+	const auto* Item=WorldObjects.Find(ItemGuid);
+	const auto* Destination=WorldObjects.Find(ContainerGuid);
+	if (!Item || !ContainerGuid || ItemGuid==ContainerGuid || Amount<=0
+		|| !Item->WeenieClassId || Item->MaxStackSize<=1
+		|| Item->ContainerId==ContainerGuid || Item->WielderId || Item->ParentGuid || Item->CurrentWieldedLocation
+		|| Item->StackSize<0 || Amount>FMath::Max(1,Item->StackSize)
+		|| (Destination && !ACEInventoryRules::CheckHookStatus(*Item,*Destination))) return 0;
+	auto Offered=[&](int32 Guid)
+	{
+		for(int32 Depth=0;Guid && Guid!=PlayerGuid && Depth<32;++Depth)
+		{
+			if(TradeSelfItems.Contains(Guid)||TradePartnerItems.Contains(Guid))return true;
+			const auto* Object=WorldObjects.Find(Guid);Guid=Object?Object->ContainerId:0;
+		}
+		return false;
+	};
+	if(Offered(ItemGuid)||Offered(ContainerGuid))return 0;
+	// ItemHolder::AttemptAutoMerge uses the destination's retail item-list order,
+	// then its contained packs. Same-bag moves remain deliberate reorders/splits.
+	TArray<int32> Containers{ContainerGuid};
+	TArray<int32> Packs;GetContainerPackGuids(ContainerGuid,Packs);Containers.Append(Packs);
+	for(int32 Container:Containers)
+	{
+		if(Offered(Container))continue;
+		TArray<int32> Items;GetPackItemGuids(Container,Items);
+		for(int32 Guid:Items)
+		{
+			const auto* Other=WorldObjects.Find(Guid);
+			if(Other && !Other->WielderId && !Other->ParentGuid && !Other->CurrentWieldedLocation
+				&& Other->StackSize>=0 && !Offered(Guid) && ACEInventoryRules::MergeAmount(*Item,*Other)>=Amount)return Guid;
+		}
+	}
+	return 0;
+}
+
 void FACESession::SendPutItemInContainer(int32 ItemGuid, int32 ContainerGuid, int32 Placement)
 {
 	if (State != EACESessionState::InWorld || ItemGuid == 0 || ContainerGuid == 0)
@@ -4743,41 +4780,9 @@ void FACESession::SendPutItemInContainer(int32 ItemGuid, int32 ContainerGuid, in
 	// Placement is an insertion index, never a sparse grid address (IDList::AddAtNum).
 	if (const FACEWorldObject* Item = WorldObjects.Find(ItemGuid))
 	{
-		auto IsInContainer = [&](const FACEWorldObject& Object, int32 Root)
-		{
-			int32 Owner = Object.ContainerId;
-			for (int32 Depth = 0; Owner && Depth < 32; ++Depth)
-			{
-				if (Owner == Root) return true;
-				const auto* Parent = WorldObjects.Find(Owner);
-				Owner = Parent ? Parent->ContainerId : 0;
-			}
-			return false;
-		};
-		const auto* Destination = WorldObjects.Find(ContainerGuid);
-		const bool OwnedDestination = ContainerGuid == PlayerGuid || (Destination && IsInContainer(*Destination, PlayerGuid));
-		// ItemHolder::AttemptAutoMerge searches the destination and its packs for
-		// a same-WCID stack that can hold the entire pickup. Preserve deliberate
-		// rearrangement of already-owned stacks and wait for server inventory ACKs.
-		if (OwnedDestination && !IsInContainer(*Item, PlayerGuid) && Item->WielderId == 0
-			&& Item->CurrentWieldedLocation == 0 && Item->MaxStackSize > 1 && Item->StackSize >= 0
-			&& Item->WeenieClassId != 0 && !TradeSelfItems.Contains(ItemGuid) && !TradePartnerItems.Contains(ItemGuid))
-		{
-			// Retail GetObjectSplitSize treats an omitted/zero count as one item.
-			const int32 PickupCount = FMath::Max(1, Item->StackSize);
-			int32 MergeTo = 0;
-			for (const auto& Pair : WorldObjects)
-			{
-				const auto& Other = Pair.Value;
-				if (Other.Guid == ItemGuid || !IsInContainer(Other, ContainerGuid)
-					|| Other.WielderId || Other.ParentGuid || Other.CurrentWieldedLocation
-					|| Other.WeenieClassId != Item->WeenieClassId || Other.MaxStackSize <= 1
-					|| Other.StackSize < 0 || Other.MaxStackSize - FMath::Max(1, Other.StackSize) < PickupCount
-					|| TradeSelfItems.Contains(Other.Guid) || TradePartnerItems.Contains(Other.Guid)) continue;
-				if (!MergeTo || uint32(Other.Guid) < uint32(MergeTo)) MergeTo = Other.Guid;
-			}
-			if (MergeTo) { SendStackableMerge(ItemGuid, MergeTo, PickupCount); return; }
-		}
+		const int32 Amount=FMath::Max(1,Item->StackSize);
+		if(const int32 MergeTo=FindContainerMergeTarget(ItemGuid,ContainerGuid,Amount))
+		{SendStackableMerge(ItemGuid,MergeTo,Amount);return;}
 		int32 Count = 0;
 		for (const auto& Pair : WorldObjects)
 		{
@@ -4909,6 +4914,14 @@ void FACESession::SendCharacterOptions(uint32 Options1, uint32 Options2)
 	{
 		return;
 	}
+	// The individual appearance options trigger ACE's ObjDesc broadcast. The
+	// bulk preferences packet alone changes the flags without rebuilding gear.
+	for (int32 Option : {0x2F, 0x32})
+		if (const auto* Desc = ACECharacterOptions::Find(Option))
+		{
+			const bool Value = ((Desc->bInOptions2 ? Options2 : Options1) & Desc->Flag) != 0;
+			if (Value != IsCharacterOptionSet(Option)) SendSetSingleCharacterOption(Option, Value);
+		}
 	CharacterOptions1 = Options1;
 	CharacterOptions2 = Options2;
 	// Preserve the server's spell filters when applying other character options.
@@ -6112,6 +6125,7 @@ void FACESession::HandleIdentifyObjectResponse(FACEBinaryReader& Reader)
 			const uint32 CreatureFlags = Reader.ReadUInt32();
 			Info.Health = static_cast<int32>(Reader.ReadUInt32());
 			Info.MaxHealth = static_cast<int32>(Reader.ReadUInt32());
+			Info.bHasCreatureHealth = true;
 			Info.bIsCreature = true;
 			if (CreatureFlags & 0x8) // ShowAttributes — 10 u32 attrs/vitals
 			{
@@ -6127,6 +6141,7 @@ void FACESession::HandleIdentifyObjectResponse(FACEBinaryReader& Reader)
 					Info.Mana = static_cast<int32>(Reader.ReadUInt32());
 					Info.MaxStamina = static_cast<int32>(Reader.ReadUInt32());
 					Info.MaxMana = static_cast<int32>(Reader.ReadUInt32());
+					Info.bHasCreatureAttributes = true;
 					Summary += FString::Printf(
 						TEXT("Str %d  End %d  Qui %d\nCoo %d  Foc %d  Sel %d\nStamina %d/%d  Mana %d/%d\n"),
 						Info.Strength, Info.Endurance, Info.Quickness,

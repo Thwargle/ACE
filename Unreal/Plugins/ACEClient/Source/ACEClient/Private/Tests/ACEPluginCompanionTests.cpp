@@ -52,7 +52,25 @@ bool FACEPluginCompanionTest::RunTest(const FString&)
     FFileHelper::SaveStringToFile(TEXT(R"({"api":1,"mode":"companion","id":"test_tracker","name":"Test Tracker","permissions":["chat","state","ui","markers","waypoint","messaging","commands"]})"),*(Installed/TEXT("plugin.json")));
     FFileHelper::SaveStringToFile(TEXT("{}"),*(Installed/TEXT("default.json")));
     FFileHelper::SaveStringToFile(TEXT("return function(s) return {status='active'} end"),*(Installed/TEXT("main.lua")));
+    const TCHAR* ManifestOptions[]={TEXT(R"({"update_interval":2,"snapshot_fields":["char_ints","health"]})"),
+        TEXT(R"({"update_interval":0.1})"),TEXT(R"({"update_interval":61})"),TEXT(R"({"update_interval":"2"})"),
+        TEXT(R"({"snapshot_fields":[7]})"),TEXT(R"({"snapshot_fields":"health"})")};
+    for(int32 I=0;I<UE_ARRAY_COUNT(ManifestOptions);++I)
+    {
+        auto M=J(ManifestOptions[I]);const FString Id=FString::Printf(TEXT("snapshot_fixture_%d"),I);
+        M->SetStringField(TEXT("id"),Id);M->SetStringField(TEXT("name"),Id);M->SetNumberField(TEXT("api"),2);M->SetStringField(TEXT("mode"),TEXT("companion"));
+        M->SetArrayField(TEXT("permissions"),{MakeShared<FJsonValueString>(TEXT("data"))});
+        const FString Dir=Root/TEXT("Installed")/Id;IFileManager::Get().MakeDirectory(*Dir,true);
+        FString Text;FJsonSerializer::Serialize(M.ToSharedRef(),TJsonWriterFactory<>::Create(&Text));
+        FFileHelper::SaveStringToFile(Text,*(Dir/TEXT("plugin.json")));
+        FFileHelper::SaveStringToFile(TEXT("{}"),*(Dir/TEXT("default.json")));
+        FFileHelper::SaveStringToFile(TEXT("return function() end"),*(Dir/TEXT("main.lua")));
+    }
     H->Discover();auto P=H->Find(TEXT("test_tracker"));if(!TestTrue(TEXT("Companion manifest discovered"),P&&P->Companion))return false;
+    for(int32 I=0;I<UE_ARRAY_COUNT(ManifestOptions);++I)
+        TestEqual(TEXT("Snapshot manifest accepts valid fields/interval and rejects malformed options"),H->Find(FString::Printf(TEXT("snapshot_fixture_%d"),I)).IsValid(),I==0);
+    if(auto Selected=H->Find(TEXT("snapshot_fixture_0")))
+        TestTrue(TEXT("Manifest choices reach the scheduler and snapshot filter"),Selected->UpdateInterval==2&&Selected->SelectiveSnapshot&&Selected->WantsSnapshotField(TEXT("health"))&&!Selected->WantsSnapshotField(TEXT("inventory")));
     C->Session=MakeShared<FACESession>();auto& Session=*C->Session;Session.State=EACESessionState::InWorld;Session.PlayerGuid=0x50000001;Session.ServerName=TEXT("Companion Test");
     Session.PlayerPosition.CellId=0x7D64000D;Session.PlayerPosition.Location=FVector(34,104,12);
     Session.PlayerVitals.bValid=true;Session.PlayerVitals.Health=100;Session.PlayerVitals.MaxHealth=100;
@@ -63,6 +81,22 @@ bool FACEPluginCompanionTest::RunTest(const FString&)
     TestEqual(TEXT("Client feed records before first maintenance tick"),H->PluginChatEvents.Num(),1);
     H->RefreshAutomationData();H->TickCompanions();
     TestTrue(TEXT("Enabled companion starts automatically in world"),P->Running);
+    {
+        auto Second=MakeShared<FACEClientPlugin>();Second->Id=TEXT("schedule_fixture");Second->Name=TEXT("Schedule fixture");
+        Second->Api=2;Second->Companion=true;Second->Running=Second->Enabled=true;
+        Second->Player=P->Player;Second->Server=P->Server;Second->Profile=Empty;
+        Second->VM=MakeShared<FACEPluginVM>();Second->UpdateInterval=4;
+        Second->VM->Load(TEXT("return function() return {status='scheduled'} end"),Error);
+        H->Plugins.Add(Second);P->NextDecision=0;Second->NextDecision=0;
+        H->NextCompanionIndex=0;
+        H->TickCompanions();
+        TestTrue(TEXT("Only one due observer executes in a frame"),(P->NextDecision>0)!=(Second->NextDecision>0));
+        H->TickCompanions();
+        TestTrue(TEXT("The next observer runs on the next frame"),P->NextDecision>0&&Second->NextDecision>0);
+        TestEqual(TEXT("Scheduled callback actually executes"),Second->Status,FString(TEXT("scheduled")));
+        TestTrue(TEXT("Custom interval delays the next poll"),Second->NextDecision-FPlatformTime::Seconds()>3.8);
+        H->Plugins.Remove(Second);
+    }
     auto UCM=H->Find(TEXT("ucm"));H->SetEnabled(TEXT("ucm"),true);TestTrue(TEXT("UCM starts alongside companion"),H->Start(TEXT("ucm")));
     TestTrue(TEXT("Starting UCM does not stop companion"),P->Running);
     H->MovementOwner=TEXT("ucm");H->FastCastOwner=TEXT("ucm");
@@ -191,7 +225,8 @@ bool FACEPluginCompanionTest::RunTest(const FString&)
         FFileHelper::LoadFileToString(ProfileText,*(Base/TEXT("Docs/Plugins/Examples")/Example/TEXT("default.json")));
         FACEPluginVM ExampleVM;TestTrue(TEXT("Shipped example loads"),ExampleVM.Load(Source,Error));
         C->OnChatMessage.Broadcast(TEXT("You have killed 12 of 50 Red Rats."),TEXT(""),ACEChatMessageType::System);
-        Snapshot=H->CompanionSnapshot(*P);TestTrue(TEXT("Shipped example runs on native snapshot"),ExampleVM.Step(Snapshot,J(*ProfileText),Output,Error));
+        Snapshot=H->CompanionSnapshot(*P);const bool Stepped=ExampleVM.Step(Snapshot,J(*ProfileText),Output,Error);
+        TestTrue(*FString::Printf(TEXT("Shipped %s example runs on native snapshot: %s"),Example,*Error),Stepped);
         TestTrue(TEXT("Shipped example output accepted"),Output&&H->ApplyCompanionOutput(*P,Output,Error));
     }
     if(FApp::CanEverRender())

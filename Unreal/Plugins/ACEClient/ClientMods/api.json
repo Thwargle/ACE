@@ -1,5 +1,10 @@
 {
   "lua_api": 2,
+  "companion_manifest_options": {
+    "update_interval": {"type":"number","minimum":0.5,"maximum":60,"default":0.5,"units":"seconds"},
+    "snapshot_fields": {"api":2,"type":"array","items":"top-level snapshot field name","max_items":128,"default":"all permitted fields"},
+    "callbacks_per_frame": 1
+  },
   "services": {
     "local_cosmetics": {
       "api": 1,
@@ -74,6 +79,9 @@
       "character_state",
       "clickable_rows",
       "object_markers",
+      "target_details",
+      "confirmed_target_effects",
+      "world_plates",
       "waypoint_map_markers",
       "waypoint_target",
       "local_messages",
@@ -89,6 +97,9 @@
       "chat_retained_text_bytes": 8388608,
       "ui_rows": 128,
       "markers": 32,
+      "world_plates": 4,
+      "world_plates_global": 16,
+      "world_plate_effects": 16,
       "inbox_events": 64,
       "objects": 512
     }
@@ -134,12 +145,32 @@
       "ui",
       "chat_filters",
       "markers",
+      "world_plates",
       "messages",
       "requests",
       "profile_patch",
       "runtime_route",
       "presentation"
     ],
+    "target_snapshot": {
+      "selection": "Selected object details, or null; no assessment requests are generated",
+      "tracked_targets": "Object details keyed by decimal GUID string: selection and objects with active confirmed timers",
+      "target_effects": "Arrays keyed by decimal GUID string: spell, icon, remaining, duration, source=own_confirmed_cast",
+      "object_fields": ["id", "name", "wcid", "item_type", "object_type", "monster", "dead", "weenie_type", "creature_type", "creature_class", "title", "level", "pk_status", "vitals"],
+      "unknown_fields": "Omitted, including raw weenie_type unless assessment property 9007 was received",
+      "vitals": "health/stamina/mana objects with current/max, or health fraction/max after a newer percent-only update"
+    },
+    "world_plates": {
+      "permissions": ["ui", "markers"],
+      "output": "world_plates",
+      "fields": ["id", "name", "role", "level", "color", "selection_only", "vitals", "effects"],
+      "selection_only_default": true,
+      "max_plates": 4,
+      "max_effects_per_plate": 16,
+      "effects": "spell (optional), icon (0x06xxxxxx DAT ID), remaining (0..86400 seconds)",
+      "lifecycle": "Omission retains; empty array clears; stop, disable, logout, reload and GUID removal clear",
+      "rendering": "Native actor attachment every frame, including stereo VR; no collision or input capture"
+    },
     "ui_controls": [
       "text",
       "button",
@@ -483,6 +514,14 @@
           "amount"
         ]
       },
+      "it_merge": {
+        "permission": "inventory+loot",
+        "fields": [
+          "item",
+          "target",
+          "amount"
+        ]
+      },
       "it_split": {
         "permission": "inventory+loot",
         "fields": [
@@ -676,14 +715,17 @@
       "route_motion_overflow",
       "route_objects",
       "selected",
+      "selection",
       "server_position",
       "skills",
       "species_names",
       "spells",
       "stamina",
+      "target_effects",
       "targets",
       "teleport_sequence",
       "time",
+      "tracked_targets",
       "trained_skills",
       "usable_skills",
       "vendor",

@@ -30,6 +30,7 @@ bool UACEUIGameplayBinder::CanMoveInventoryAmountToContainer(int32 Guid, int32 C
 	}
 	// A full move within the same pack simply reorders its existing slot.
 	if (Item.ContainerId == Container && Amount == FMath::Max(1, Item.StackSize)) return true;
+	if (const auto Session=Client->GetSession();Session && Session->FindContainerMergeTarget(Guid,Container,Amount)) return true;
 	const int32 Capacity = bPack ? Destination.ContainersCapacity : Destination.ItemsCapacity;
 	if (Capacity == -1) return true;
 	return Capacity > (bPack ? Client->GetPlayerPacks().Num() : Client->GetPackItems(Container).Num());
@@ -208,25 +209,13 @@ void UACEUIGameplayBinder::MoveInventoryAmount(int32 Guid, int32 Container, int3
 		return;
 	}
 	Amount = FMath::Min(Amount, FMath::Max(1, Item.StackSize));
+	if(const auto Session=Client->GetSession())
+		if(const int32 Target=Session->FindContainerMergeTarget(Guid,Container,Amount))
+			if(MergeInventoryAmount(Guid,Target,Amount))return;
 	// UIElement_ItemList only removes the source's old position for a full move.
 	// A split inserts a NEW object; the remainder keeps its original slot.
 	if (Amount < Item.StackSize)
 	{
-		// Retail can merge a selected portion during pickup, but an intentional
-		// split of an already-owned stack must still create a separate object.
-		FACEWorldObject Destination;
-		const bool bOwnedDestination = Container == Client->GetPlayerGuid()
-			|| (Client->GetWorldObject(Container, Destination) && Client->IsOwnedInventoryItem(Destination));
-		if (bOwnedDestination && !Item.WielderId && !Client->IsOwnedInventoryItem(Item))
-		{
-			TArray<int32> Containers{Container};
-			if (Container == Client->GetPlayerGuid())
-				for (const auto& Pack : Client->GetPlayerPacks()) Containers.Add(Pack.Guid);
-			for (int32 SearchContainer : Containers)
-				for (const auto& Target : Client->GetPackItems(SearchContainer))
-					if (ACEInventoryRules::MergeAmount(Item, Target) >= Amount
-						&& MergeInventoryAmount(Guid, Target.Guid, Amount)) return;
-		}
 		TrackInventoryStackSplit(InventorySelectionSplit, Item, Amount);
 		InventorySelectionSplit.ContainerGuid = Container;
 		Client->SendStackableSplitToContainer(Guid, Container, Placement, Amount);

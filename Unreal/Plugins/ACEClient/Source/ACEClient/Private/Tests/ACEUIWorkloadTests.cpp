@@ -106,6 +106,26 @@ bool FACEUIWorkloadTest::RunTest(const FString&)
     TestTrue(TEXT("Native sharing never shares mutable Lua tables"),Reader.Step(SecondData,Second.Profile,Output,Error));
     Measure(TEXT("Lua full-data input and empty callback"),30,[&]{if(!Reader.Step(SecondData,Second.Profile,Output,Error))AddError(Error);});
     AddInfo(FString::Printf(TEXT("Lua full-data heap: current %.2f MiB, peak %.2f MiB"),Reader.GetMemoryUsage()/1048576.,Reader.GetPeakMemoryUsage()/1048576.));
+    // Accelerated 20-minute observer workload at the default 2 Hz, including
+    // fresh Lua input tables and normal GC on every callback.
+    double EarlyMs=0,LateMs=0;SIZE_T EarlyPeak=Reader.GetPeakMemoryUsage();
+    for(int32 I=0;I<2400;++I)
+    {
+        const double Start=FPlatformTime::Seconds();
+        if(!Reader.Step(SecondData,Second.Profile,Output,Error)){AddError(Error);return false;}
+        const double Ms=(FPlatformTime::Seconds()-Start)*1000;
+        if(I<100)EarlyMs+=Ms;if(I>=2300)LateMs+=Ms;
+        if(I==99)EarlyPeak=Reader.GetPeakMemoryUsage();
+    }
+    TestTrue(TEXT("Repeated full-data callbacks retain a bounded heap"),Reader.GetPeakMemoryUsage()<=EarlyPeak+1024*1024);
+    AddInfo(FString::Printf(TEXT("2400 full-data callbacks: first 100 avg %.3f ms; last 100 avg %.3f ms; peak %.2f MiB"),EarlyMs/100,LateMs/100,Reader.GetPeakMemoryUsage()/1048576.));
+    First.SelectiveSnapshot=true;First.SnapshotFields={TEXT("health"),TEXT("character_name"),TEXT("char_ints"),TEXT("action_serial")};
+    FACEPluginVM SmallReader;SmallReader.Load(TEXT("return function(s) assert(s.health==100 and s.inventory==nil and s.spells==nil) end"),Error);
+    Measure(TEXT("selective character snapshot plus Lua callback"),100,[&]
+    {
+        if(!SmallReader.Step(Host->PublicSnapshot(First),First.Profile,Output,Error))AddError(Error);
+    });
+    First.SelectiveSnapshot=false;First.SnapshotFields.Reset();
     for(bool Shared:{false,true})
     {
         Measure(Shared?TEXT("eight observers sharing native reads"):TEXT("eight observers rebuilding native reads"),20,[&]
@@ -129,6 +149,7 @@ bool FACEUIWorkloadTest::RunTest(const FString&)
     Second.VM->Load(TEXT("return function(s,p) assert(s.selected==1000);return {status='fresh'} end"),Error);
     Host->CompanionSession=Client->Session;Host->CompanionPlayer=Player.Guid;Host->CompanionServer=Session.ServerName;
     Host->TickCompanions();
+    Host->TickCompanions(); // The second observer is intentionally scheduled in the next frame.
     TestTrue(TEXT("Action invalidation keeps later readers current"),Second.Running&&Second.Status==TEXT("fresh"));
     TestNull(TEXT("Observer cache cannot survive the callback pass"),Host->CompanionReadBatch);
     Session.State=EACESessionState::Disconnected;

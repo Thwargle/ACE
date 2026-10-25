@@ -145,7 +145,7 @@ void UACEPluginSubsystem::StopCompanion(FACEClientPlugin& P,const FString& Reaso
 {
     using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     FlushPluginState(P);P.Running=false;P.CompanionStopped=true;P.VM.Reset();
-    P.Markers.Reset();P.PanelRows.Reset();P.PluginEvents.Reset();P.ChatFilters.Reset();++P.PanelRevision;P.Status=Reason+(P.StateDirty?TEXT("; ")+P.CompanionError:FString());
+    P.Markers.Reset();P.WorldPlates.Reset();++P.WorldPlateRevision;P.PanelRows.Reset();P.PluginEvents.Reset();P.ChatFilters.Reset();++P.PanelRevision;P.Status=Reason+(P.StateDirty?TEXT("; ")+P.CompanionError:FString());
     // Observational plugin lifecycle never cancels UCM movement, casts or attacks.
 }
 
@@ -186,7 +186,8 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::CompanionSnapshot(FACEClientPlugin&
     }
     Out->SetArrayField(TEXT("chat_events"),Chat);
     // No inventory appraisals, spell indexing or visibility raycasts for companions.
-    if(CompanionReadBatch && CompanionReadBatch->Objects)
+    if(!P.WantsSnapshotField(TEXT("objects")) && !P.WantsSnapshotField(TEXT("objects_truncated"))){}
+    else if(CompanionReadBatch && CompanionReadBatch->Objects)
     {
         Out->SetField(TEXT("objects"),CompanionReadBatch->Objects->Values[TEXT("objects")]);
         Out->SetBoolField(TEXT("objects_truncated"),CompanionReadBatch->Objects->GetBoolField(TEXT("objects_truncated")));
@@ -220,6 +221,7 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::CompanionSnapshot(FACEClientPlugin&
             CompanionReadBatch->Objects->SetBoolField(TEXT("objects_truncated"),Nearby.Num()>512);
         }
     }
+    if(P.WantsSnapshotField(TEXT("selection")) || P.WantsSnapshotField(TEXT("tracked_targets")) || P.WantsSnapshotField(TEXT("target_effects")))AddTargetDetails(Out);
     auto Peers=MakeShared<FJsonObject>();for(const auto& Other:Plugins){auto Info=MakeShared<FJsonObject>();Info->SetBoolField(TEXT("enabled"),Other->Enabled);Info->SetBoolField(TEXT("running"),Other->Running);Peers->SetObjectField(Other->Id,Info);}Out->SetObjectField(TEXT("plugins"),Peers);
     return Out;
 }
@@ -288,6 +290,14 @@ bool UACEPluginSubsystem::ApplyCompanionOutput(FACEClientPlugin& P,const TShared
         if(!ValidatePluginChatFilters(*ChatFilters,ParsedFilters,Error))return false;
     }
     TArray<FACEPluginMarker> Parsed;
+    const TArray<TSharedPtr<FJsonValue>>* Plates=nullptr;
+    TArray<FACEPluginWorldPlate> ParsedPlates;
+    if(O->HasField(TEXT("world_plates")))
+    {
+        if(!P.Permissions.Contains(TEXT("ui"))||!P.Permissions.Contains(TEXT("markers"))||!List(O,TEXT("world_plates"),4,Plates))
+        {Error=TEXT("world_plates requires ui and markers permissions and at most four plates");return false;}
+        if(!ACEPluginWorldPlate::Parse(*Plates,ParsedPlates,Error,FPlatformTime::Seconds()))return false;
+    }
     if(O->HasField(TEXT("markers")))
     {
         if(!P.Permissions.Contains(TEXT("markers"))||!List(O,TEXT("markers"),32,Markers)){Error=TEXT("Markers require markers permission and at most 32 entries");return false;}
@@ -309,6 +319,7 @@ bool UACEPluginSubsystem::ApplyCompanionOutput(FACEClientPlugin& P,const TShared
     if(State&&(!P.SavedState||!FJsonValue::CompareEqual(FJsonValueObject(P.SavedState),FJsonValueObject(*State)))){P.SavedState=*State;P.StateDirty=true;}
     if(Rows&&!FJsonValue::CompareEqual(FJsonValueArray(P.PanelRows),FJsonValueArray(*Rows))){P.PanelRows=*Rows;++P.PanelRevision;}
     if(Markers)P.Markers=MoveTemp(Parsed);
+    if(Plates){P.WorldPlates=MoveTemp(ParsedPlates);++P.WorldPlateRevision;}
     if(Messages)for(const auto& V:*Messages)
     {
         const auto M=V->AsObject();auto Peer=Find(S(M,TEXT("to")));
@@ -336,8 +347,9 @@ bool UACEPluginSubsystem::RunPluginCommand(const FString& Arguments)
 void UACEPluginSubsystem::TickCompanions()
 {
     TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginObservers);
-    FCompanionReadBatch Batch;
-    TGuardValue<FCompanionReadBatch*> ReadGuard(CompanionReadBatch,&Batch);
+    FCompanionReadBatch LocalBatch;
+    TGuardValue<FCompanionReadBatch*> ReadGuard(CompanionReadBatch,CompanionReadBatch?CompanionReadBatch:&LocalBatch);
+    auto& Batch=*CompanionReadBatch;
     using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     UpdateCompanionChatContext();
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
@@ -351,8 +363,16 @@ void UACEPluginSubsystem::TickCompanions()
             if(Changed)P->CompanionStopped=false;
         }
         if(InWorld&&P->Enabled&&!P->Running&&!P->CompanionStopped)StartCompanion(*P);
-        if(!P->Running)continue;
-        const double Now=FPlatformTime::Seconds();if(Now<P->NextDecision)continue;P->NextDecision=Now+.5;
+    }
+    // One observer callback per frame, round-robin. Starting several companions
+    // together must not concentrate their JSON/Lua/GC work into a half-second hitch.
+    const int32 Count=Plugins.Num(),Start=Count?NextCompanionIndex%Count:0;
+    for(int32 Offset=0;Offset<Count;++Offset)
+    {
+        const int32 Index=(Start+Offset)%Count;const auto P=Plugins[Index];
+        if(!P->Companion||!P->Running)continue;
+        const double Now=FPlatformTime::Seconds();if(Now<P->NextDecision)continue;
+        NextCompanionIndex=(Index+1)%Count;P->NextDecision=Now+P->UpdateInterval;
         TSharedPtr<FJsonObject> Output;FString Error;
         bool Ok=P->VM->Step(P->Api>=2?PublicSnapshot(*P):CompanionSnapshot(*P),P->Profile,Output,Error);
         // Commands and services can change selection, inventory, policy or
@@ -363,9 +383,11 @@ void UACEPluginSubsystem::TickCompanions()
         if(Mutates)Batch.Reset();
         if(!Ok)StopCompanion(*P,TEXT("Script error: ")+Error);
         if(Now>=P->NextStateSave){FlushPluginState(*P);P->NextStateSave=Now+5;}
+        break;
     }
     CompanionSession=C->GetSession();CompanionPlayer=InWorld?C->GetPlayerGuid():0;CompanionServer=C->GetServerName();
     DrawPluginMarkers();
+    UpdatePluginWorldPlates();
 }
 
 TArray<FACEPluginMarker> UACEPluginSubsystem::GetPluginMarkers() const

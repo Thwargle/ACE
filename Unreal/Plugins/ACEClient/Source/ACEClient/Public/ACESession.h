@@ -70,6 +70,7 @@ DECLARE_MULTICAST_DELEGATE_FourParams(FACEOnCombatFeedback, const FString&, int3
  */
 class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 {
+    friend class FACEPluginWorldPlateTest;
 	friend class FACERetailLogoutTest;
 	friend class FACECollisionSizingTest;
 	friend class FACEPvPCombatParityTest;
@@ -415,6 +416,8 @@ public:
 
 	/** GameAction PutItemInContainer (0x0019) — drag & drop into a pack (Placement = slot index). */
 	void SendPutItemInContainer(int32 ItemGuid, int32 ContainerGuid, int32 Placement);
+	/** Retail auto-merge: first destination stack that can hold the entire selected amount. */
+	int32 FindContainerMergeTarget(int32 ItemGuid, int32 ContainerGuid, int32 Amount) const;
 
 	/** GameAction StackableMerge (0x0054) — combine stackables by guid (amount of From into To). */
 	void SendStackableMerge(int32 MergeFromGuid, int32 MergeToGuid, int32 Amount);

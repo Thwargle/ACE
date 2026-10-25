@@ -103,6 +103,15 @@ static FORCENOINLINE void CheckCameraPreview(FAutomationTestBase& Test, UACEUIGa
         ACERuntimeOptions::Set(TEXT("FieldOfViewDegrees"),90.f);Video->ResetVideo();
     }
     else Test.AddError(TEXT("FOV slider is missing"));
+    if(auto* Slope=Cast<UCheckBox>(Video->WidgetTree->FindWidget(TEXT("CameraAlignToSlope"))))
+    {
+        Slope->SetIsChecked(false);Test.TestTrue(TEXT("Slope checkbox participates in pending changes"),Video->HasPendingChanges());
+        Video->ApplyRuntimeOptions();Video->ResetVideo();
+        Test.TestEqual(TEXT("Slope checkbox saves and reloads its preference"),ACERuntimeOptions::Get(TEXT("CameraAlignToSlope")),0.f);
+        Test.TestFalse(TEXT("Saved slope option is reflected in the UI"),Slope->IsChecked());
+        ACERuntimeOptions::Set(TEXT("CameraAlignToSlope"),1);Video->ResetVideo();
+    }
+    else Test.AddError(TEXT("Camera slope checkbox is missing"));
 }
 
 static FORCENOINLINE void CheckKeyboardCapture(FAutomationTestBase& Test, UACERetailKeySelector* Key)
@@ -1112,12 +1121,17 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     Gameplay->LastAppraisal.SpellIds={1};
     for (int32 I=0; I<40; ++I) Gameplay->LastAppraisal.Summary+=TEXT("Authored bitmap text wraps and scrolls within the body.\n");
     Gameplay->LastAppraisal.Inscription=TEXT("Inscription stays in the paper strip.");
+    Gameplay->LastAppraisal.StringProperties.Add(8,TEXT("Test Scribe"));
     Gameplay->ShowExamination(true); Gameplay->RefreshExaminationOverlay();
     const auto ItemText=Manager->FindElementUnder(TEXT("ItemExamineUI"),TEXT("ItemDisplayText"));
     TestEqual(TEXT("Inspection body keeps DAT y=0, without guessed icon band"),ItemText->Y,0);
     TestEqual(TEXT("Inspection body keeps DAT x=4"),ItemText->X,4);
     TestFalse(TEXT("Inspection does not graft obsolete item icon"),Manager->FindElementUnder(TEXT("ItemExamineUI"),TEXT("ItemIcon")).IsValid());
     CaptureScreen(TEXT("GameplayInspection"));
+    const auto Signature=Manager->FindElementUnder(TEXT("ItemExamineUI"),TEXT("ItemInscriptionSignatureText"));
+    TestEqual(TEXT("Inscription displays its author"),Gameplay->ExamInscriptionSignature->GetText().ToString(),FString(TEXT("--Test Scribe")));
+    TestEqual(TEXT("Inscription author uses retail's right alignment"),CastChecked<UACERetailTextBlock>(Gameplay->ExamInscriptionSignature)->GetTextJustification(),ETextJustify::Right);
+    TestTrue(TEXT("Inscription signature remains inside the resized examination panel"),Signature&&Signature->Y>=0&&Signature->Y+Signature->Height<=Manager->FindElementByName(TEXT("ItemExamineUI"))->Height);
     TestTrue(TEXT("Long appraisal is scrollable instead of overflowing"),Gameplay->ExamScroll && Gameplay->ExamScroll->GetScrollOffsetOfEnd()>0.f);
     const auto InscriptionBar=Manager->FindElementUnder(TEXT("ItemExamineUI"),TEXT("ItemInscriptionScrollbar"));
     TestTrue(TEXT("Short inscriptions hide their unused arrow controls"),InscriptionBar && !InscriptionBar->bVisible);
@@ -2950,6 +2964,8 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 TestEqual(TEXT("Every displayed shortcut has an independent hit target"),Gameplay->HitTestShortcutSlot(Local),Index);
                 TestTrue(TEXT("Both rows lie within toolbar clipping bounds"),O.Y+El->Height<=Toolbar->GetScreenOrigin().Y+Toolbar->Height-5);
                 TestTrue(TEXT("Both rows paint icons/backgrounds"),Gameplay->ShortcutIcons[Index]->GetVisibility()!=ESlateVisibility::Collapsed);
+                if(Index>=9 && Index<17)
+                    TestTrue(TEXT("Every empty second-row shortcut uses retail blue art"),Gameplay->ShortcutSlotBgs[Index]->Background.GetResourceObject()==Resources->ResolveIconTexture(0x060074CF));
             }
             Session.bUseBusy=false; Session.CachedC2SPackets.Reset(); Gameplay->LastInvClickGuid=0;
             NativeClick(TEXT("ShortcutBar2_Shortcut9Button"));

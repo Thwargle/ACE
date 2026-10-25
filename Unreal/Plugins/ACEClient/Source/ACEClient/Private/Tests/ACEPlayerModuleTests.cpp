@@ -72,6 +72,18 @@ bool FACEPlayerModuleParityTest::RunTest(const FString&)
 	FACEBinaryReader Options(OptionsPacket->Payload); Options.Skip(28);
 	TestEqual(TEXT("Other option saves explicitly preserve filters"),Options.ReadUInt32(),0x60u);
 	Options.ReadUInt32(); Options.ReadUInt32(); TestEqual(TEXT("Saved filter mask is retained"),Options.ReadUInt32(),0x2024u);
+	const uint32 AppearanceStart=Session.NextPacketSequence;
+	Session.SendCharacterOptions(123,456|0x00100000u|0x00800000u);
+	TestEqual(TEXT("Bulk appearance edit sends helm, cloak, then preferences"),Session.NextPacketSequence-AppearanceStart,3u);
+	for(uint32 Index=0;Index<2;++Index)
+	{
+		const auto* AppearancePacket=Session.CachedC2SPackets.Find(AppearanceStart+Index);
+		if(!TestNotNull(TEXT("Appearance option packet exists"),AppearancePacket))continue;
+		FACEBinaryReader Appearance(AppearancePacket->Payload);Appearance.Skip(24);
+		TestEqual(TEXT("Appearance change uses server refresh action"),Appearance.ReadUInt32(),ACEGameAction::SetSingleCharacterOption);
+		TestEqual(TEXT("Correct head/cloak option index"),Appearance.ReadUInt32(),Index?0x32u:0x2Fu);
+		TestEqual(TEXT("Appearance toggle sends enabled state"),Appearance.ReadUInt32(),1u);
+	}
 	Sockets->DestroySocket(Receiver);
 	return !HasAnyErrors();
 }

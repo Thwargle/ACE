@@ -11,6 +11,7 @@ class ACECLIENT_API UACEOrbitCameraBoom : public USpringArmComponent
 	GENERATED_BODY()
 
 public:
+	float SlopePitch = 0.f;
 	virtual FRotator GetDesiredRotation() const override;
 
 protected:

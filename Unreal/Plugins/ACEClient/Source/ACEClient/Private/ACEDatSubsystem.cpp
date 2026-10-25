@@ -3707,7 +3707,7 @@ UMaterialInstanceDynamic* UACEDatSubsystem::CreateSkyParticleMaterial(UMaterialI
 }
 
 UMaterialInterface* UACEDatSubsystem::GetOrCreateResolvedMaterial(
-	uint32 SurfaceId, int32 PartIndex, const FACEObjDesc& Appearance, float ObjectTranslucency, uint8 WrapAxes)
+	uint32 SurfaceId, int32 PartIndex, const FACEObjDesc& Appearance, float ObjectTranslucency, uint8 WrapAxes, uint32 PartPaletteId)
 {
 	if (SurfaceId == 0 || !TextureResolver)
 	{
@@ -3723,6 +3723,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateResolvedMaterial(
 	// translucent body become opaque when its PhysicsDesc translucency was zero.
 
 	uint64 Key = HashCombine(GetTypeHash(SurfaceId), GetTypeHash(PartIndex));
+	Key = HashCombine(Key, GetTypeHash(PartPaletteId));
 	Key = HashCombine(Key, GetTypeHash(WrapAxes));
 	Key = HashCombine(Key, GetTypeHash(Appearance.PaletteBaseId));
 	Key = HashCombine(Key, GetTypeHash(FMath::RoundToInt(ObjectOpacity * 255.f)));
@@ -3785,7 +3786,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateResolvedMaterial(
 	}
 	FACEDatDecodedSurface Decoded;
 	const FACEObjDesc* AppearancePtr = bSurfaceOverrides ? &Appearance : nullptr;
-	if (!TextureResolver->ResolveSurfaceWithAppearance(SurfaceId, PartIndex, AppearancePtr, Decoded))
+	if (!TextureResolver->ResolveSurfaceWithAppearance(SurfaceId, PartIndex, AppearancePtr, Decoded, PartPaletteId))
 	{
 		return GetOrCreateTexturedMaterial(SurfaceId);
 	}
@@ -5127,7 +5128,7 @@ bool UACEDatSubsystem::ApplySetupParts(const TArray<UProceduralMeshComponent*>& 
 				if (UV.Y < -KINDA_SMALL_NUMBER || UV.Y > 1.0 + KINDA_SMALL_NUMBER) WrapAxes |= 2;
 			}
 			UMaterialInterface* Mat = GetOrCreateResolvedMaterial(
-				Sec.SurfaceId, P, Appearance, ObjectTranslucency, WrapAxes);
+				Sec.SurfaceId, P, Appearance, ObjectTranslucency, WrapAxes, Part.OriginalPaletteId);
 			bool bSoftAlpha = Sec.bClipMap || Sec.bFullyTransparent;
 			bool bAdditive = false;
 			if (bResolvedSurface)

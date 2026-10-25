@@ -138,6 +138,19 @@ TFunction<void()> CheckStackTransfers = [&]()
     }
     Gameplay->HideExternalContainer(false);
     // Select the newly created stack only after both halves of the split arrive.
+    {
+        auto BagStack=Match;BagStack.Guid=99419;BagStack.ContainerId=Bag.Guid;BagStack.StackSize=240;
+        Session.WorldObjects.Add(BagStack.Guid,BagStack);Session.WorldObjects[Bag.Guid].ItemsCapacity=1;
+        TestTrue(TEXT("A full bag accepts a selected amount that fits its matching stack"),Gameplay->CanMoveInventoryAmountToContainer(Notes.Guid,Bag.Guid,7));
+        TestFalse(TEXT("A full bag rejects a quantity larger than remaining stack room"),Gameplay->CanMoveInventoryAmountToContainer(Notes.Guid,Bag.Guid,11));
+        Session.CachedC2SPackets.Reset();Gameplay->MoveInventoryAmount(Notes.Guid,Bag.Guid,0,7);
+        LastWire(ACEGameAction::StackableMerge,{uint32(Notes.Guid),uint32(BagStack.Guid),7});
+        TestEqual(TEXT("Bag auto-merge selects the surviving stack"),Client->GetSelectedObject().Guid,BagStack.Guid);
+        TestEqual(TEXT("Bag auto-merge waits for the server quantity"),Session.WorldObjects[BagStack.Guid].StackSize,240);
+        Session.TradeSelfItems.Add(BagStack.Guid);
+        TestFalse(TEXT("An offered stack cannot make a full bag accept a merge"),Gameplay->CanMoveInventoryAmountToContainer(Notes.Guid,Bag.Guid,7));
+        Session.TradeSelfItems.Reset();Session.WorldObjects.Remove(BagStack.Guid);Session.WorldObjects[Bag.Guid].ItemsCapacity=24;
+    }
     SelectAmount(7); Gameplay->MoveInventoryAmount(Notes.Guid,Bag.Guid,0,7);
     auto SplitPart=Notes; SplitPart.Guid=99420; SplitPart.ContainerId=Bag.Guid; SplitPart.StackSize=7;
     Session.WorldObjects.Add(SplitPart.Guid,SplitPart); Gameplay->UpdateInventorySplitSelection();

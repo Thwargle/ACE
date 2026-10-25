@@ -524,7 +524,7 @@ public:
 	 * Prefer this over vertex-color fallback so clothing/armor keep proper surface detail.
 	 */
 	/** WrapAxes: bit 0 = U, bit 1 = V. Preserve authored tiling without wrapping face-patch edges. */
-	UMaterialInterface* GetOrCreateResolvedMaterial(uint32 SurfaceId, int32 PartIndex, const FACEObjDesc& Appearance, float ObjectTranslucency = 0.f, uint8 WrapAxes = 0);
+	UMaterialInterface* GetOrCreateResolvedMaterial(uint32 SurfaceId, int32 PartIndex, const FACEObjDesc& Appearance, float ObjectTranslucency = 0.f, uint8 WrapAxes = 0, uint32 PartPaletteId = 0);
 	/** Dedicated retail CreatureMode vertex lighting, isolated from world fog and materials. */
 	UMaterialInterface* CreateExaminationMaterial(UMaterialInterface* Source, UObject* Outer);
 	UMaterialInterface* GetUniformInteriorMaterial(UMaterialInterface* Source);

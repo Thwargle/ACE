@@ -48,7 +48,7 @@ void UACEPluginSubsystem::UpdateItemToolsCharacter()
 
 bool UACEPluginSubsystem::StartItemTools(const FString& Mode)
 {
-    if(!TArray<FString>{TEXT("give"),TEXT("shop"),TEXT("profile"),TEXT("chest"),TEXT("restock")}.Contains(Mode))return false;
+    if(!TArray<FString>{TEXT("give"),TEXT("shop"),TEXT("profile"),TEXT("chest"),TEXT("restock"),TEXT("merge")}.Contains(Mode))return false;
     auto P=Find(TEXT("itemtools"));if(!P)return false;
     UpdateItemToolsCharacter();
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
@@ -69,8 +69,8 @@ bool UACEPluginSubsystem::RunItemToolsCommand(const FString& Arguments)
     if(Command.IsEmpty()){TogglePluginWindow(TEXT("itemtools"));return true;}
     if(Command==TEXT("stop")){Stop(TEXT("itemtools"),TEXT("Stopped by player"));return true;}
     if(Command==TEXT("recomp"))return StartItemTools(TEXT("restock"));
-    if(TArray<FString>{TEXT("give"),TEXT("shop"),TEXT("profile"),TEXT("chest"),TEXT("restock")}.Contains(Command))return StartItemTools(Command);
-    Notice=TEXT("/acueitems [give | shop | profile | chest | restock | stop].");return false;
+    if(TArray<FString>{TEXT("give"),TEXT("shop"),TEXT("profile"),TEXT("chest"),TEXT("restock"),TEXT("merge")}.Contains(Command))return StartItemTools(Command);
+    Notice=TEXT("/acueitems [give | shop | profile | chest | restock | merge | stop].");return false;
 }
 
 bool UACEPluginSubsystem::SelectItemToolsObject(const FString& Key,const FString& Kind)
@@ -207,6 +207,12 @@ bool UACEPluginSubsystem::ExecuteItemTools(FACEClientPlugin& P,const TSharedPtr<
     {
         if(!Found||!Transferable(C,Item)||!Vendor||Vendor!=Guid(I,TEXT("vendor"))||!Session->CanVendorBuyItem(Item)||Amount!=FMath::Max(1,Item.StackSize))return Fail(TEXT("Sale changed; no items sold. Partial stacks must be split first."));
         C->SendSellItems(Vendor,{{Amount,Id}});
+    }
+    else if(Action==TEXT("it_merge"))
+    {
+        if(!Found||!HasTarget||!Transferable(C,Item)||!Transferable(C,Target)
+            ||Amount>ACEInventoryRules::MergeAmount(Item,Target))return Fail(TEXT("Merge items or stack space changed; merge stopped."));
+        C->SendStackableMerge(Id,TargetId,Amount);
     }
     else if(Action==TEXT("it_split"))
     {

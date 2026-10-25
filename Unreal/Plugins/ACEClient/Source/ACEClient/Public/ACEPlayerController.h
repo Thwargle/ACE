@@ -465,6 +465,10 @@ protected:
 	bool bLookDownHasSaved = false;
 
 	void UpdateOrbitCamera(float DeltaTime);
+	void UpdateCameraSlope(USpringArmComponent* Boom, float DeltaTime);
+	TArray<FVector> CameraSlopeVelocities;
+	FVector CameraSlopeLastPosition = FVector::ZeroVector;
+	bool bHaveCameraSlopePosition = false;
 	void ApplyRetailCameraFov();
 	void ApplyRetailCameraPivot(USpringArmComponent* Boom, UCapsuleComponent* Capsule) const;
 	void ApplyCameraOffset(USpringArmComponent* Boom, float OffsetYAc, float OffsetZAc, float PitchDegrees, bool bKeepYaw);

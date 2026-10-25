@@ -192,6 +192,27 @@ bool FACEItemToolsTest::RunTest(const FString&)
         S.SocketC2S=Sockets->CreateSocket(NAME_DGram,TEXT("ItemTools sender"),false);S.ServerC2SAddr=Address;S.IssacClient=MakeUnique<FACEIsaac>(123u);
         ON_SCOPE_EXIT{S.SocketC2S->Close();Sockets->DestroySocket(S.SocketC2S);S.SocketC2S=nullptr;S.ServerC2SAddr.Reset();S.IssacClient.Reset();Receiver->Close();Sockets->DestroySocket(Receiver);};
         auto CountAction=[&](uint32 Opcode){int32 Count=0;for(const auto& Packet:S.CachedC2SPackets){FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.ReadUInt32()==Opcode)++Count;}return Count;};
+        {
+            auto Target=Item;Target.Guid=19;Target.MaxStackSize=100;Target.StackSize=90;
+            S.WorldObjects.Add(Target.Guid,Target);S.WorldObjects[10].MaxStackSize=100;
+            auto Merge=ITJson(TEXT(R"({"action":"it_merge","item":10,"target":19,"amount":3})"));
+            H->ExecuteItemTools(*P,Merge);
+            TestEqual(TEXT("Bulk merge uses the retail StackableMerge action"),CountAction(ACEGameAction::StackableMerge),1);
+            TestEqual(TEXT("Bulk merge does not predict the resulting count"),S.WorldObjects[19].StackSize,90);
+            S.CachedC2SPackets.Reset();S.WorldObjects[19].StackSize=99;H->ExecuteItemTools(*P,Merge);
+            TestEqual(TEXT("Stale capacity prevents a bulk merge"),CountAction(ACEGameAction::StackableMerge),0);
+            S.WorldObjects[19].StackSize=90;S.WorldObjects[19].WeenieClassId=101;H->ExecuteItemTools(*P,Merge);
+            TestEqual(TEXT("Same name with different WCID cannot merge"),CountAction(ACEGameAction::StackableMerge),0);
+            S.WorldObjects[19].WeenieClassId=100;S.TradeSelfItems.Add(19);H->ExecuteItemTools(*P,Merge);
+            TestEqual(TEXT("Offered target cannot merge"),CountAction(ACEGameAction::StackableMerge),0);S.TradeSelfItems.Reset();
+            S.WorldObjects[19].ObjectDescriptionFlags=ACEObjectDescFlag::Retained;H->ExecuteItemTools(*P,Merge);
+            TestEqual(TEXT("Retained target cannot be merged by Item Tools"),CountAction(ACEGameAction::StackableMerge),0);
+            S.WorldObjects[19].ObjectDescriptionFlags=0;S.WorldObjects[19].WielderId=S.PlayerGuid;H->ExecuteItemTools(*P,Merge);
+            TestEqual(TEXT("Equipped target cannot be merged by Item Tools"),CountAction(ACEGameAction::StackableMerge),0);
+            S.WorldObjects[19].WielderId=0;S.WorldObjects[19].ContainerId=999;H->ExecuteItemTools(*P,Merge);
+            TestEqual(TEXT("Unowned target cannot be merged by Item Tools"),CountAction(ACEGameAction::StackableMerge),0);
+            S.WorldObjects.Remove(19);S.WorldObjects[10].MaxStackSize=Item.MaxStackSize;++S.InventoryDataRevision;
+        }
         auto Give=ITJson(TEXT(R"({"action":"it_give","item":10,"target":20,"amount":2})"));
         H->ExecuteItemTools(*P,Give);TestEqual(TEXT("Native giving uses retail GiveObject"),CountAction(ACEGameAction::GiveObjectRequest),1);
         S.CachedC2SPackets.Reset();S.WorldObjects[10].Bonded=1;H->ExecuteItemTools(*P,Give);
@@ -329,6 +350,55 @@ bool FACEItemToolsTest::RunTest(const FString&)
         TestTrue(TEXT("128 items x 1000 rules finish cooperatively"),Complete);
         TestTrue(TEXT("Large rule processing stays under sandbox memory cap"),VM.GetPeakMemoryUsage()<8*1024*1024);
         AddInfo(FString::Printf(TEXT("Large profile scan: %d callbacks; peak %.2f MiB"),Calls,VM.GetPeakMemoryUsage()/1048576.));
+    }
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEItemToolsMergeTest,"ACE.Plugins.ItemTools.Merge",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEItemToolsMergeTest::RunTest(const FString&)
+{
+    FString Source,Error;
+    FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/itemtools/main.lua")));
+    auto Snapshot=[](){return ITJson(TEXT(R"({"time":100,"ready":true,"inventory":[{"id":11,"wcid":100,"name":"Gem","count":60,"max_stack":100,"container":1,"transferable":true},{"id":12,"wcid":100,"name":"Gem","count":70,"max_stack":100,"container":2,"transferable":true},{"id":13,"wcid":100,"name":"Renamed gem","count":50,"max_stack":100,"container":3,"transferable":true},{"id":14,"wcid":100,"name":"Gem","count":100,"max_stack":100,"transferable":true},{"id":15,"wcid":101,"name":"Gem","count":12,"max_stack":100,"transferable":true},{"id":16,"wcid":100,"name":"Gem","count":80,"max_stack":100,"transferable":false},{"id":17,"wcid":100,"name":"Gem","count":1,"max_stack":1,"transferable":true}]})"));};
+    auto P=ITJson(TEXT(R"({"mode":"merge","delay_ms":0})"));
+    auto Step=[&](FACEPluginVM& VM,auto S){TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
+    auto Action=[](auto I){return ACEItemTools::String(I,TEXT("action"));};
+    for(bool TargetFirst:{false,true})
+    {
+        FACEPluginVM VM;TestTrue(TEXT("Merge policy loads"),VM.Load(Source,Error));auto S=Snapshot();
+        auto I=Step(VM,S);
+        for(int32 Operation=0;Operation<2;++Operation)
+        {
+            if(!TestEqual(TEXT("Partial stacks across packs are merged"),Action(I),FString(TEXT("it_merge"))))break;
+            TestEqual(TEXT("Smallest partial stack is the source"),ACEItemTools::Guid(I,TEXT("item")),13);
+            TestEqual(TEXT("Fill the fullest partial stack first"),ACEItemTools::Guid(I,TEXT("target")),Operation==0?12:11);
+            TestEqual(TEXT("Merge stops at maximum capacity"),int32(ACEItemTools::Number(I,TEXT("amount"))),Operation==0?30:20);
+            S->SetNumberField(TEXT("action_serial"),Operation+1);
+            TestTrue(TEXT("UseDone alone cannot confirm merging"),Action(Step(VM,S)).IsEmpty());
+            auto Inventory=S->GetArrayField(TEXT("inventory"));
+            auto UpdateSource=[&](){if(Operation==0)Inventory[2]->AsObject()->SetNumberField(TEXT("count"),20);else Inventory.RemoveAt(2);S->SetArrayField(TEXT("inventory"),Inventory);};
+            auto UpdateTarget=[&](){Inventory[Operation==0?1:0]->AsObject()->SetNumberField(TEXT("count"),Operation==0?100:80);};
+            if(TargetFirst)UpdateTarget();else UpdateSource();
+            TestTrue(TEXT("One side of a merge cannot start another transaction"),Action(Step(VM,S)).IsEmpty());
+            if(TargetFirst)UpdateSource();else UpdateTarget();
+            I=Step(VM,S);
+        }
+        TestEqual(TEXT("Merge finishes once no partial pair remains"),Action(I),FString(TEXT("stop")));
+        TestEqual(TEXT("Both confirmed merges are counted"),ACEItemTools::Number(I,TEXT("operations")),2.);
+        TestTrue(TEXT("Run reports merge completion"),ACEItemTools::String(I,TEXT("status")).StartsWith(TEXT("Merge complete")));
+        const auto& Inventory=S->GetArrayField(TEXT("inventory"));
+        TestEqual(TEXT("Already-full stack stays intact"),ACEItemTools::Number(Inventory[2]->AsObject(),TEXT("count")),100.);
+        TestEqual(TEXT("Same-name other item type stays separate"),ACEItemTools::Number(Inventory[3]->AsObject(),TEXT("count")),12.);
+        TestEqual(TEXT("Protected stack stays intact"),ACEItemTools::Number(Inventory[4]->AsObject(),TEXT("count")),80.);
+    }
+    for(bool Reject:{false,true})
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot();auto I=Step(VM,S);
+        if(Reject){S->SetNumberField(TEXT("it_failure_serial"),1);S->SetNumberField(TEXT("it_failure_item"),12);}
+        else S->SetNumberField(TEXT("time"),121);
+        I=Step(VM,S);
+        TestEqual(TEXT("Rejection or timeout stops without another merge"),Action(I),FString(TEXT("stop")));
+        TestEqual(TEXT("Unconfirmed merges are not counted"),ACEItemTools::Number(I,TEXT("operations")),0.);
     }
     return true;
 }

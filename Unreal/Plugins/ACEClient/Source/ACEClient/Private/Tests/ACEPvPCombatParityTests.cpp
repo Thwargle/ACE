@@ -272,6 +272,68 @@ bool FACEPvPCombatParityTest::RunTest(const FString&)
  TestFalse(TEXT("Plugin-issued attack cannot leave a duplicate retarget queued"),Binder->bCombatRetargetPending);
  Binder->CancelCombatAttack();Client->SelectObject(Enemy.Guid);
 
+ // UCM selects targets before finishing stance/equipment transitions. The
+ // native power-bar observer must not attack on that selection, bypassing the
+ // plugin's own line-of-sight, pursuit-distance and looting decisions.
+ Client->SendSetSingleCharacterOption(0x00,true);
+ for(int32 Mode:{int32(ACECombatMode::Melee),int32(ACECombatMode::Missile)})
+ {
+  Binder->CombatMode=Mode;Binder->bCombatAutoRepeat=true;
+  Client->SelectObject(Enemy.Guid);Binder->ShowPluginAttack(Enemy.Guid,ACEAttackHeight::Medium,.5f);
+  Session->bServerAttackInProgress=true;Session->CachedC2SPackets.Reset();
+  Client->SelectObject(Other.Guid);AttackDone();Binder->TickCombatAutoAttack(0);
+  auto Requests=Packets();Requests.RemoveAll([](const auto& Packet){return Packet.Key==ACEGameAction::QueryHealth;});
+  TestFalse(TEXT("Plugin target selection does not queue a native repeat"),Binder->bCombatRetargetPending);
+  TestEqual(TEXT("Plugin switching targets only cancels the old attack"),Requests.Num(),1);
+  if(Requests.Num()==1)TestEqual(TEXT("Only plugin policy may send the replacement attack"),Requests[0].Key,ACEGameAction::CancelAttack);
+ }
+
+ // Death-driven auto-selection must not inherit a held/repeating attack.
+ // Retail can select across rooms/radar range; selection alone cannot charge
+ // toward that creature or fire at the wall separating it from the player.
+ Client->SendSetSingleCharacterOption(0x0D,true);
+ for(int32 Mode:{int32(ACECombatMode::Melee),int32(ACECombatMode::Missile)})
+ for(int32 DeathNotice:{0,1,2})
+ {
+  Binder->CancelCombatAttack();AttackDone();
+  Session->WorldObjects.Add(Enemy.Guid,Enemy);
+  Session->WorldObjects[Enemy.Guid].ObjectDescriptionFlags=ACEObjectDescFlag::PlayerKiller;
+  Binder->CombatMode=Mode;Binder->bCombatAutoRepeat=true;
+  Client->SelectObject(Enemy.Guid);Binder->PendingAutoTargetLoss=0;
+  Binder->LastSelection=Client->GetSelectedObject();Binder->LastCombatAttackTarget=Enemy.Guid;
+  Binder->bCombatRepeatActive=Binder->bCombatRequestSent=true;
+  Binder->bCombatAttackHeld=Binder->bCombatAttackRequestPending=Binder->bCombatPowerCharging=true;
+  Session->bServerAttackInProgress=true;
+  MissilePose(ACEMotion::StanceBowCombat,3);
+  Session->CachedC2SPackets.Reset();
+  if(DeathNotice==0)
+  {
+   // Health can reach zero before the death animation or deletion arrives.
+   auto Dead=Client->GetSelectedObject();Dead.bShowHealth=true;Dead.HealthFraction=0;
+   Binder->HandleSelectionChanged(Dead);
+   // Session's ordinary health notification also updates its selection cache.
+   Session->SelectedObject=Dead;
+  }
+  else if(DeathNotice==1)
+  {
+   Session->WorldObjects[Enemy.Guid].bDying=true;Client->SelectObject(0);
+  }
+  else
+  {
+   FACEBinaryWriter W;W.WriteUInt32(Enemy.Guid);FACEBinaryReader R(W.GetData());Session->HandleObjectDelete(R);
+  }
+  Binder->TickCombatAutoAttack(0);AttackDone();
+  for(int32 Frame=0;Frame<4;++Frame)Binder->TickCombatAutoAttack(.016f);
+  TestEqual(TEXT("Death auto-target selects the next eligible opponent"),Client->GetSelectedObject().Guid,Other.Guid);
+  TestFalse(TEXT("Automatic selection clears held, pending and repeated attacks"),
+   Binder->bCombatRetargetPending || Binder->bCombatRepeatActive || Binder->bCombatAttackRequestPending || Binder->bCombatAttackHeld);
+  auto Automatic=Packets();Automatic.RemoveAll([](const auto& Packet){return Packet.Key==ACEGameAction::QueryHealth;});
+  TestEqual(TEXT("Post-kill auto-target sends only cancellation, never a new attack"),Automatic.Num(),1);
+  if(Automatic.Num()==1)TestEqual(TEXT("Post-kill packet cancels old attack"),Automatic[0].Key,ACEGameAction::CancelAttack);
+ }
+ Session->WorldObjects.Add(Enemy.Guid,Enemy);Client->SendSetSingleCharacterOption(0x0D,false);
+ Binder->CancelCombatAttack();AttackDone();Client->SelectObject(Enemy.Guid);
+
  // Independently expected 1.5 rad/s from the retail TurnRight motion. Rate
  // multiplication, shortest direction and completion must not depend on FPS.
  for(float FPS:{30.f,60.f,144.f,240.f})for(float Speed:{.5f,1.f,2.f})for(bool Run:{false,true})

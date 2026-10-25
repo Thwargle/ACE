@@ -1,4 +1,5 @@
 #include "ACEOrbitCameraBoom.h"
+#include "ACECameraRetail.h"
 #include "PhysicsEngine/PhysicsSettings.h"
 #include "Misc/ScopeExit.h"
 #include "ACEPlayerController.h"
@@ -64,13 +65,21 @@ FRotator UACEOrbitCameraBoom::GetDesiredRotation() const
 void UACEOrbitCameraBoom::UpdateDesiredArmLocation(bool bDoTrace, bool bDoLocationLag, bool bDoRotationLag, float DeltaTime)
 {
 	// Resolve the pawn/control/inheritance rules before smoothing in world space.
-	const FRotator Target = GetTargetRotation();
+	FRotator Target = GetTargetRotation();
+	if (GetOwner() && !FMath::IsNearlyZero(SlopePitch))
+	{
+		const float Yaw = GetOwner()->GetActorRotation().Yaw + ACECameraRetail::BoomYawToFaceAcForward;
+		Target = (FRotator(0,Yaw,0).Quaternion() * FRotator(SlopePitch,0,0).Quaternion()
+			* FRotator(Target.Pitch,Target.Yaw-Yaw,0).Quaternion()).Rotator();
+	}
 	OrbitRotation = FRotator(Target.Pitch, Target.Yaw, 0.f);
 	if (bDoRotationLag && CameraRotationLagSpeed > 0.f)
 	{
 		float Dt = FMath::Max(0.f, DeltaTime);
 		if (bClampToMaxPhysicsDeltaTime) Dt = FMath::Min(Dt, UPhysicsSettings::Get()->MaxPhysicsDeltaTime);
-		const float Alpha = 1.f - FMath::Exp(-CameraRotationLagSpeed * Dt);
+		// CameraManager::UseTime applies the same linear stiffness fraction to
+		// translation and rotation; full stiffness bypasses interpolation.
+		const float Alpha = CameraRotationLagSpeed >= 9.998f ? 1.f : FMath::Clamp(CameraRotationLagSpeed * Dt, 0.f, 1.f);
 		// Retail CameraManager::UpdateCamera -> Frame::set_vector_heading builds
 		// an upright heading/pitch frame. Quaternion interpolation between two
 		// upright endpoints can introduce severe roll near the downward pole.
@@ -95,5 +104,5 @@ void UACEOrbitCameraBoom::UpdateDesiredArmLocation(bool bDoTrace, bool bDoLocati
 	bApplyingOrbitRotation = true;
 	bUsePawnControlRotation = false;
 	bInheritPitch = bInheritYaw = bInheritRoll = true;
-	Super::UpdateDesiredArmLocation(bDoTrace, bDoLocationLag, false, DeltaTime);
+	Super::UpdateDesiredArmLocation(bDoTrace, bDoLocationLag && CameraLagSpeed < 9.998f, false, DeltaTime);
 }

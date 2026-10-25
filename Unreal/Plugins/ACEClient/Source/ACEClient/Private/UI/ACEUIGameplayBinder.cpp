@@ -2976,7 +2976,7 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 			}
 			// ClientCombatSystem::HandleAttackDone only replaces a server repeat when
 			// the desired slider power changed. Sending every second restarted melee turns.
-			if (!AdvancedCombat && !bCombatMovementBlocked && IsCombatPoseReady() && bCombatPowerCharging && bCombatRepeatActive && !bCombatAttackRequestPending
+			if (!bCombatPluginAttack && !AdvancedCombat && !bCombatMovementBlocked && IsCombatPoseReady() && bCombatPowerCharging && bCombatRepeatActive && !bCombatAttackRequestPending
 				&& !FMath::IsNearlyEqual(LastCombatAttackPower, RequestedAttackPower, .01f))
 			{
 				CombatPowerOrAccuracy = RequestedAttackPower;
@@ -3046,6 +3046,7 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 void UACEUIGameplayBinder::ShowPluginAttack(int32 Target, uint32 Height, float Power)
 {
 	bCombatRetargetPending = false;
+	bCombatPluginAttack = true;
 	// Observe the already-sent action. Never send a second attack from the UI.
 	CombatAttackHeight = Height;
 	RequestedAttackPower = LastCombatAttackPower = CombatPowerOrAccuracy = FMath::Clamp(Power, 0.f, 1.f);
@@ -3078,6 +3079,7 @@ void UACEUIGameplayBinder::BeginCombatPowerCharge(uint32 AttackHeight, bool bHel
 	}
 	CombatAttackHeight = AttackHeight;
 	bCombatRetargetPending = false;
+	bCombatPluginAttack = false; // a manual attack takes over from automation
 	if (PlayerController)
 	{
 		PlayerController->PrepareManualCombat(true);
@@ -3112,6 +3114,7 @@ void UACEUIGameplayBinder::CancelCombatAttack()
 {
 	const bool bWasRetargeting = bCombatRetargetPending;
 	bCombatRetargetPending = false;
+	bCombatPluginAttack = false;
 	if (!bWasRetargeting && !bCombatAttackRequestPending && !bCombatRepeatActive && !bCombatAttackHeld && !bCombatRequestSent) return;
 	bCombatRequestSent = false;
 	bCombatAttackHeld = bCombatPointerHeld = bCombatKeyboardHeld = false;
@@ -3195,6 +3198,11 @@ void UACEUIGameplayBinder::TryAutoTargetOnCombatEnter(int32 ExcludeGuid)
             && !Fellowship.Members.ContainsByPredicate([&](const auto& M) { return M.Guid==Guid; });
     };
     if (Eligible(Client->GetSelectedObject().Guid)) return;
+    // Retail AutoTarget only changes selection. End the previous attack before
+    // broadcasting the new selection, otherwise HandleSelectionChanged treats
+    // a kill as a deliberate target switch and queues another melee charge or
+    // missile shot (including at enemies behind walls).
+    CancelCombatAttack();
     const auto Session = Client->GetSession();
     const int32 Attacker = Session->GetLastAttackerGuid();
     // Retaliate on combat entry only. After a kill, choose the nearest eligible
@@ -6555,8 +6563,11 @@ void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Sele
 		&& (CombatMode == int32(ACECombatMode::Melee) || CombatMode == int32(ACECombatMode::Missile))
 		&& bCombatAutoRepeat && (bCombatRepeatActive || bCombatRetargetPending))
 	{
+		// UCM must choose its next action through its own range, sight and loot
+		// checks. Showing its power bar does not grant the UI a repeat request.
+		const bool bAllowRetarget = !bCombatPluginAttack;
 		CancelCombatAttack();
-		bCombatRetargetPending = Selection.bValid && Client->GetSession()->IsCombatTarget(Selection.Guid);
+		bCombatRetargetPending = bAllowRetarget && Selection.bValid && Client->GetSession()->IsCombatTarget(Selection.Guid);
 	}
 	if (!Selection.bValid && LastSelection.bValid && Client)
 	{
@@ -8337,8 +8348,8 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 		}
 		else
 		{
-			if (SlotIndex0 < 10) SetIconDid(Bg, SlotIndex0 < 9 ? 0x060010FA + SlotIndex0 : 0x060074CF);
-			else SetItemSlotBackground(Bg, nullptr);
+			// DAT ItemSlot_Shortcut_10..18 all use the same blue empty art.
+			SetIconDid(Bg, SlotIndex0 < 9 ? 0x060010FA + SlotIndex0 : 0x060074CF);
 		}
 		PlaceShortcut(Bg, El, 0);
 		Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
@@ -11661,6 +11672,7 @@ void UACEUIGameplayBinder::RefreshExaminationOverlay()
 			PlaceTextUnder(ExamInscriptionSignature, TEXT("RootGameplay_FloatyExamination_Field"),
 				TEXT("ItemInscriptionSignatureText"), bPrompt || Scribe.IsEmpty() ? FString() : TEXT("--")+Scribe,
 				8, FLinearColor::Black, ExamOverlayZ+4);
+			ExamInscriptionSignature->SetJustification(ETextJustify::Right);
 			if (EditingInscriptionGuid == LastAppraisal.ObjectGuid && ExamInscriptionEditor)
 			{
 				ExamInscriptionLabel->SetVisibility(ESlateVisibility::Collapsed);

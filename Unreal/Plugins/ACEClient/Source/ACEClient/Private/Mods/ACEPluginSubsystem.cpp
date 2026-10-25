@@ -277,6 +277,7 @@ void UACEPluginSubsystem::Deinitialize()
     if(RouteMesh){RouteMesh->DestroyComponent();RouteMesh=nullptr;}
     if(RouteActor){RouteActor->Destroy();RouteActor=nullptr;}
     if(PluginMarkerActor){PluginMarkerActor->Destroy();PluginMarkerActor=nullptr;PluginMarkerMesh=nullptr;}
+    if(WorldPlateActor){WorldPlateActor->Destroy();WorldPlateActor=nullptr;WorldPlateComponents.Reset();}
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnAppraisalObserved.RemoveDynamic(this,&UACEPluginSubsystem::ObserveAppraisal);
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnChatMessage.RemoveDynamic(this,&UACEPluginSubsystem::ObservePluginChat);
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnVitalsUpdated.RemoveDynamic(this,&UACEPluginSubsystem::ObserveLedgerVitals);
@@ -428,7 +429,26 @@ void UACEPluginSubsystem::Discover()
                 if(String(M,TEXT("service"))==TEXT("local_cosmetics")&&!P->Permissions.Contains(TEXT("local_tools"))) Valid=false;
             }
             else if(P->Permissions.Contains(TEXT("local_cosmetics"))||P->Permissions.Contains(TEXT("local_tools"))) Valid=false;
-            if (!Valid) { Notice += TEXT("Unsupported permissions or local service API: ") + Id + TEXT("\n"); continue; }
+            if(M->HasField(TEXT("update_interval")))
+            {
+                Valid &= P->Companion && M->HasTypedField<EJson::Number>(TEXT("update_interval"))
+                    && M->TryGetNumberField(TEXT("update_interval"),P->UpdateInterval)
+                    && FMath::IsFinite(P->UpdateInterval) && P->UpdateInterval>=.5 && P->UpdateInterval<=60;
+            }
+            if(M->HasField(TEXT("snapshot_fields")))
+            {
+                const TArray<TSharedPtr<FJsonValue>>* Fields=nullptr;
+                P->SelectiveSnapshot=true;
+                if(!P->Companion || P->Api<2 || !M->TryGetArrayField(TEXT("snapshot_fields"),Fields) || Fields->Num()>128)Valid=false;
+                else for(const auto& Field:*Fields)
+                {
+                    FString Key;
+                    if(!Field || Field->Type!=EJson::String || !Field->TryGetString(Key) || Key.IsEmpty() || Key.Len()>64) {Valid=false;break;}
+                    for(TCHAR Ch:Key)if(!FChar::IsAlnum(Ch)&&Ch!='_')Valid=false;
+                    P->SnapshotFields.Add(Key);
+                }
+            }
+            if (!Valid) { Notice += TEXT("Unsupported permissions, snapshot fields, update interval or local service API: ") + Id + TEXT("\n"); continue; }
             // Bind consent to the actual capability set, including after plugin upgrades.
             P->Permissions.Sort();
             const FString Grant = FString::Join(P->Permissions, TEXT(","));
@@ -594,7 +614,7 @@ void UACEPluginSubsystem::Stop(const FString& Id, const FString& Reason, bool Pr
         if(OwnsPolicy){RestoreWorldRendering();bTrackRouteMovement=false;RouteMovementSamples.Reset();bRouteMovementOverflow=false;
             FollowMovementSamples.Reset();FollowMovementTarget=0;bFollowMovementOverflow=false;}
         if(P->Companion){StopCompanion(*P,Reason);return;}
-        if(P->HasPresentation()){FlushPluginState(*P);P->Markers.Reset();P->PanelRows.Reset();P->PluginEvents.Reset();++P->PanelRevision;}
+        if(P->HasPresentation()){FlushPluginState(*P);P->Markers.Reset();P->WorldPlates.Reset();++P->WorldPlateRevision;P->PanelRows.Reset();P->PluginEvents.Reset();++P->PanelRevision;}
         P->TargetingStatus.Empty();
         P->MetaStatus.Empty();if(!PreserveMeta)P->MetaState.Empty();
         if(P->LocalService)
@@ -1410,9 +1430,11 @@ bool UACEPluginSubsystem::Tick(float)
     auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     UpdateItemToolsCharacter();
     TickAutoCraft();
-    TickCompanions();
     UpdateBuffDispatch();
     CheckPendingSpellTimeout();
+    FCompanionReadBatch Batch;
+    TGuardValue<FCompanionReadBatch*> ReadGuard(CompanionReadBatch,&Batch);
+    TickCompanions();
     // VT ManaChargesWhenOff is deliberately independent of Start/Stop. Use a
     // separate VM restricted to equipment recharge; no meta/combat/nav can run.
     TSharedPtr<FACEClientPlugin> IdlePolicy;
@@ -1569,6 +1591,7 @@ void UACEPluginSubsystem::ReportActivityFailure(FACEClientPlugin& P, const TShar
 }
 void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObject>& I)
 {
+    if(CompanionReadBatch)CompanionReadBatch->Reset();
     if(InventoryInteractionPending())return;
     // Only another validated buff may overlap the previous buff's recoil.
     // Hold other policy intents without stepping Lua again until its untagged

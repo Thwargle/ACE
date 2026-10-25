@@ -37,6 +37,23 @@ is no permission to override casting delays, teleport, bypass collision or send
 raw packets. Each VM has 8 MiB and 250,000 instructions per callback. Use
 `workavailable()` to split large jobs across callbacks.
 
+Companion manifests may set `"update_interval": 2.0` (seconds, 0.5–60;
+default 0.5). Due callbacks are scheduled round-robin, at most one companion
+per rendered frame. Input events may wake a callback earlier. Native snapshot
+data is shared with other readers in that host tick and invalidated by actions;
+each Lua VM still receives its own tables.
+
+API 2 companions may opt into `"snapshot_fields"`, an array of top-level field
+names. For example, `"snapshot_fields":["character_name","level","char_ints",
+"action_serial","health","max_health"]` avoids building inventory, spells,
+target scans, and vendor data. With no list, the existing full snapshot remains
+available. `api`, `time`, `unix_time`, `player`, `server`, `state`, `error`,
+`events`, and `capabilities` are always retained. Permissions still apply;
+listing a field never grants access. Character qualities, `character_name`,
+`level`, and action results require `data`. Inventory and other full automation
+fields currently build the shared full snapshot before filtering; use only
+the fields your observer needs to reduce native work and Lua allocations.
+
 ## Plugin title and toolbar icon
 
 Every plugin can set a default display title and its own artwork in `plugin.json`:
@@ -180,6 +197,79 @@ See the runnable [Chat Tools example](Examples/chat_tools/main.lua) and its
 [manifest](Examples/chat_tools/plugin.json): optional two-minute quest polling,
 on-demand server commands, readable responses, and no native Start/Stop or
 Settings and profiles section.
+
+## Target data and object-attached plates
+
+All companion snapshots (API 1 and 2) include `selection` (a target object, or
+nil), `tracked_targets` (objects keyed by the decimal string of their GUID),
+and `target_effects` (effect arrays keyed the same way). Tracked objects include
+the selection and every still-known object with an unexpired confirmed timer,
+independently of the 512 nearby-object limit. Reading these fields does not send
+appraisals or health queries and does not require enabling UCM or Action Deck.
+
+Target fields:
+
+- `id`, `name`, `wcid`, `item_type`, `monster`, `dead`.
+- `object_type`: descriptor-derived `player`, `creature`, `vendor`, `portal`,
+  `container` (bags/chests), `lifestone`, `door`, `corpse`, or `item`.
+  The database's raw `weenie_type` is **only** included if an assessment supplies
+  property 9007. Standard ACE public object descriptions do not transmit that
+  database enum; `object_type` is the usable client classification.
+- `creature_type` and localized `creature_class` (for example, Banderling),
+  `title` (for example, Royal Guard), and `level`, when assessed and known.
+- `pk_status`: `NPK`, `PK`, or `PK Lite` for players, from the public descriptor.
+- `vitals.health`, `.stamina`, `.mana`: omitted when unknown. Each known pair
+  contains `current` and `max`; zero current is a known value. A newer health
+  update supplies `fraction` (0–1) and, if assessed, `max`, but omits `current`:
+  the health packet is a percentage, not an integer hit-point count. A new
+  assessment restores the exact pair. No values are copied from the player.
+
+Each `target_effects[string.format("%.0f", id)]` entry has `spell`, DAT `icon`, `remaining`
+(seconds), `duration`, and `source="own_confirmed_cast"`. These are the same
+records used by Action Deck: successful server cast confirmations start timers;
+resists, fizzles, and ambiguous same-name confirmations do not. They are duration
+estimates from local spell data, not authoritative target enchantments. Casts by
+other players, early dispels, and custom server durations cannot be inferred.
+Changing selection preserves other targets' timers. Expiry, death, loss of
+awareness, GUID reuse, and character/session changes clear them.
+
+With **both `ui` and `markers` permissions**, return `world_plates`:
+
+```lua
+local t = s.selection
+return {world_plates = t and {{
+    id = t.id, name = t.name, role = t.title or t.creature_class or t.object_type,
+    level = t.level, color = "yellow", selection_only = true,
+    vitals = t.vitals, effects = s.target_effects[string.format("%.0f", t.id)] or {}
+}} or {}}
+```
+
+The native renderer draws brackets around the rendered actor, a role/name/level
+heading, known health/stamina/mana bars, and DAT effect icons with countdowns.
+It updates the billboard transform after world movement every frame, with a
+stereo world-space surface in VR; Lua never needs camera coordinates. Countdown
+labels advance locally between callbacks. Hidden or unloaded actors, corpses,
+portal transitions and stopped plugins do not leave floating plates behind.
+Plates are visual only: they do not intercept clicks, controller rays or movement.
+
+An omitted `world_plates` retains this plugin's list; `{}` clears it. A supplied
+list atomically replaces it. `selection_only` defaults to true, hiding the old
+target immediately when selection changes; set false for an additional tracked
+target. Stop, disable, reload, logout and character changes remove the plates.
+At most 4 plates per plugin and 16 globally are rendered. Object IDs must be
+unique within a plugin. Names are at most 128 single-line characters, roles 80;
+long text is ellipsized. Optional `level` is a nonnegative integer. Colors are
+`yellow`, `red`, `blue`, `green`, `white`, `purple`. Missing vitals are hidden;
+each supplied vital needs a valid `current/max` pair or a `fraction` in [0,1].
+Effects are limited to 16 per plate, with a `0x06xxxxxx` DAT icon ID and
+`remaining` in [0,86400] seconds; optional `spell` identifies the spell. Zero
+remaining hides that icon. Plugins choose which effects to show. This surface
+accepts no custom meshes, shaders, file paths or native code.
+
+The runnable [Target Plate example](Examples/target_plate/main.lua) caps effects
+and passes only known fields. Copy its folder into `Saved/ClientPlugins/Installed`,
+refresh Manage Plugins and enable it. It is an API example, not an enabled-by-default
+HUD and does not modify another companion's configuration.
 
 ## Inventory-style icons
 
@@ -345,8 +435,12 @@ cover:
 - `open_corpse`, `close_corpse`, `loot`, `salvage`, `combine_salvage`, `read`,
   `sell`, `buy`, `split_note`, `sell_note`. `combine_salvage.items` is a comma
   separated list of 2-64 distinct salvage-bag GUIDs, with an owned `tool` Ust.
-- `it_give`, `it_buy`, `it_sell`, `it_split`, `it_open`, `it_key`,
+- `it_give`, `it_buy`, `it_sell`, `it_merge`, `it_split`, `it_open`, `it_key`,
   `it_refresh_chest`, `it_close`, `it_pickup`: the Item Tools transaction paths.
+  `it_merge` takes `item` (source GUID), `target` (receiving GUID), and `amount`;
+  both must be owned, unequipped, unoffered, non-retained stacks of the same WCID,
+  with enough source units and destination space. Wait for both stack updates
+  before issuing another merge; `UseDone` alone does not confirm it.
 - `say`, `fellowship`, `confirm` (current `type,context,accept`). Recall destinations
   are marketplace, lifestone, allegiance, house and mansion; spell recalls use cast.
 - `profile_load` for validated imported dependencies (`kind`: nav/utl/met/usd),

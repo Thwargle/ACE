@@ -513,6 +513,7 @@ private:
 	float ReleasedAttackPower = 0.f;
 	bool bCombatRepeatActive = false;
 	bool bCombatRetargetPending = false;
+	bool bCombatPluginAttack = false;
 	uint32 LastCombatEventRevision = 0;
 	int32 LastCombatAttackTarget = 0;
 	float LastCombatAttackPower = 0.f;

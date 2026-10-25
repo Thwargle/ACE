@@ -617,7 +617,11 @@ bool UACEUIGameplayBinder::TryHandleOptionsListClick(FVector2D CanvasLocalPos)
 	if (ActiveOptionsTab == TEXT("CharacterSettingsPage"))
 	{
 		if (const auto* Option=ACECharacterOptions::Find(OptionRowOptions[Row]))
+		{
 			(Option->bInOptions2 ? OptionsDraft2 : OptionsDraft1)^=Option->Flag;
+			if (Client && (Option->Option==0x2F || Option->Option==0x32))
+				Client->SendSetSingleCharacterOption(Option->Option, ((Option->bInOptions2 ? OptionsDraft2 : OptionsDraft1)&Option->Flag)!=0);
+		}
 		RefreshOptionsOverlays();
 	}
 	else ToggleCharacterOption(OptionRowOptions[Row]);
@@ -823,6 +827,8 @@ bool UACEUIGameplayBinder::HandleOptionsNamedClick(const FString& Name)
 		if (Client && ActiveOptionsTab == TEXT("CharacterSettingsPage"))
 		{
 			OptionsDraft1=OptionsSnapshot1; OptionsDraft2=OptionsSnapshot2;
+			for (int32 Id : {0x2F,0x32}) if (const auto* O=ACECharacterOptions::Find(Id))
+				Client->SendSetSingleCharacterOption(Id, ((O->bInOptions2 ? OptionsDraft2 : OptionsDraft1)&O->Flag)!=0);
 			PostInventorySystemMessage(TEXT("Options reset."));
 		}
 		RefreshOptionsOverlays();

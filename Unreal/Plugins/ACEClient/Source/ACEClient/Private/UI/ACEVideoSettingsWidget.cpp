@@ -108,6 +108,8 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  ActiveSoundOnly=WidgetTree->ConstructWidget<UCheckBox>(); ActiveSoundOnly->SetWidgetStyle(RoundToggle); ActiveSoundOnly->SetContent(Label(TEXT("Play Sounds Only When Active"))); Box->AddChild(Fixed(ActiveSoundOnly,272,20));
  Section(TEXT("Camera Options"));
  for (int32 I=4;I<7;++I) AddValue(ACERuntimeOptions::Values[I]);
+ CameraAlignToSlope=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("CameraAlignToSlope"));
+ CameraAlignToSlope->SetWidgetStyle(RoundToggle); CameraAlignToSlope->SetContent(Label(TEXT("Align camera to slope"))); Box->AddChild(Fixed(CameraAlignToSlope,272,20));
  Section(TEXT("Graphics Options"));
  DesktopScale=Combo(TEXT("Desktop UI scale"));
  DesktopScale->Rename(TEXT("DesktopUIScale"));
@@ -268,6 +270,7 @@ void UACEVideoSettingsWidget::ResetVideo()
  ChangeScreenContrast(ValueSliders[TEXT("Contrast")]->GetValue());
  ChangeEffectLightLimit(ValueSliders[TEXT("EffectLightLimit")]->GetValue());
  ActiveSoundOnly->SetIsChecked(ACERuntimeOptions::Get(TEXT("ActiveSoundOnly"))>.5f);
+ CameraAlignToSlope->SetIsChecked(ACERuntimeOptions::Get(TEXT("CameraAlignToSlope"))>.5f);
  Filtering->SetSelectedIndex(FMath::Clamp(FMath::FloorLog2(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("Anisotropy")))),0,4));
  if(auto* GI=GetGameInstance()) if(auto* Client=GI->GetSubsystem<UACEClientSubsystem>()) for(auto& P:CharacterChecks)P.Value->SetIsChecked(Client->IsCharacterOptionSet(P.Key));
  if(MouseTurnSpeed)MouseTurnSpeed->SetValue(ACECameraSettings::GetMouseTurnSpeed());
@@ -334,6 +337,7 @@ bool UACEVideoSettingsWidget::HasPendingChanges() const
  if(auto* GI=GetGameInstance()) if(auto* Client=GI->GetSubsystem<UACEClientSubsystem>())
   for(const auto& P:CharacterChecks) if(P.Value->IsChecked()!=Client->IsCharacterOptionSet(P.Key)) return true;
  return InvertMouseX->IsChecked()!=ACECameraSettings::GetInvertMouseX()
+  || CameraAlignToSlope->IsChecked()!=(ACERuntimeOptions::Get(TEXT("CameraAlignToSlope"))>.5f)
   || ToggleMouseLook->IsChecked()!=ACECameraSettings::GetToggleMouseLook()
   || InvertMouseY->IsChecked()!=ACECameraSettings::GetInvertMouseY()
   || DesktopScale->GetSelectedIndex()!=FMath::RoundToInt((ACERuntimeOptions::Get(TEXT("DesktopUIScale"))-1.f)*4.f)
@@ -389,6 +393,7 @@ void UACEVideoSettingsWidget::ApplyRuntimeOptions()
  ACERuntimeOptions::Set(TEXT("DynamicLightingQuality"),DynamicLighting->GetSelectedIndex());
  ApplyInterfaceOptions();
  ACERuntimeOptions::Set(TEXT("ActiveSoundOnly"),ActiveSoundOnly->IsChecked()?1:0);
+ ACERuntimeOptions::Set(TEXT("CameraAlignToSlope"),CameraAlignToSlope->IsChecked()?1:0);
  ACERuntimeOptions::Set(TEXT("Anisotropy"),float(1<<FMath::Clamp(Filtering->GetSelectedIndex(),0,4)));
  if(auto* GI=GetGameInstance()) if(auto* Client=GI->GetSubsystem<UACEClientSubsystem>()) for(auto& P:CharacterChecks)Client->SendSetSingleCharacterOption(P.Key,P.Value->IsChecked());
  ACERuntimeOptions::Apply();
@@ -473,6 +478,7 @@ void UACEVideoSettingsWidget::DefaultsVideo()
  ChangeScreenBrightness(ValueSliders[TEXT("ScreenBrightness")]->GetValue());
  ChangeScreenContrast(ValueSliders[TEXT("Contrast")]->GetValue());
  ActiveSoundOnly->SetIsChecked(true); Filtering->SetSelectedIndex(4);
+ CameraAlignToSlope->SetIsChecked(true);
  for(UComboBoxString* C:QualityLevels)C->SetSelectedIndex(2);
  DynamicLighting->SetSelectedIndex(2);
  for(auto& P:CharacterChecks) if(const auto* O=ACECharacterOptions::Find(P.Key)) P.Value->SetIsChecked(((O->bInOptions2?ACECharacterOptions::Options2Default:ACECharacterOptions::Options1Default)&O->Flag)!=0);

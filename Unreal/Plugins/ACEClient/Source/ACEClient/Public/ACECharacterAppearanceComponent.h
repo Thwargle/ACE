@@ -42,6 +42,8 @@ class ACECLIENT_API UACECharacterAppearanceComponent : public UActorComponent
 public:
 	// Controllers and remote actors consume authored displacement before collision.
 	void SetWalkingTransitionsEnabled(bool bEnabled);
+	void SetTurnInput(float Turn);
+	bool IsMovementLockedByAction() const;
 	FTransform AdvanceWalkingMotion(float Dt, float& CycleSeconds);
 	void SetRemoteWalkingFrame(const ACEWalkingMotion::FLink& Link, float CycleSeconds, bool bHadTransition, float CycleTime = -1.f);
 	bool HasWalkingTransition() const { return WalkingMotion.HasPending(); }
@@ -293,6 +295,7 @@ protected:
 	bool bNeedsInitialPropPose = false;
 	float LocomotionForward = 0.f;
 	ACEWalkingMotion::FSequence WalkingMotion;
+	float LocomotionTurn = 0.f;
 	bool bWalkingTransitionsEnabled = true;
 	bool bWalkingExternallyAdvanced = false;
 	bool bRemoteWalkingFramePending = false;

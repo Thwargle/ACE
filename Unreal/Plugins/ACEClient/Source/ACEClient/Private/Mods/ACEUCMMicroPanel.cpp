@@ -173,6 +173,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
 
         .OnClicked_Lambda([Host](){if(Host.IsValid())Host->TogglePluginWindow(TEXT("ucm.log"));return FReply::Handled();})
         [SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",15)).Text(FText::FromString(TEXT("Open UCM Log")))]];
-    return SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->Background).Padding(10)
+    // The shared plugin window owns the background and its opacity.
+    return SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("NoBrush")).Padding(10)
         [SNew(SScrollBox)+SScrollBox::Slot()[Rows]];
 }

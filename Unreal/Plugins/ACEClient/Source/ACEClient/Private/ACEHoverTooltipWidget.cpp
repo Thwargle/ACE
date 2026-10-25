@@ -23,10 +23,24 @@ namespace
 	class SACECursorSafeTooltip : public SBox
 	{
 	public:
-		SACECursorSafeTooltip() { SetCanTick(true); }
+		SACECursorSafeTooltip() { SetCanTick(true); ForceVolatile(true); }
+		virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& Geometry, const FSlateRect& Culling,
+			FSlateWindowElementList& Elements, int32 Layer, const FWidgetStyle& Style, bool Enabled) const override
+		{
+			// Slate can reposition its popup after the widget tick. Enforce cursor
+			// clearance at the final paint as well. Paint geometry is window-local:
+			// move the window, never translate/clamp the text within that window.
+			EnsureCursorClearance();
+			return SBox::OnPaint(Args,Geometry,Culling,Elements,Layer,Style,Enabled);
+		}
 		virtual void Tick(const FGeometry& Geometry, double Time, float Delta) override
 		{
 			SBox::Tick(Geometry, Time, Delta);
+			EnsureCursorClearance();
+		}
+	private:
+		void EnsureCursorClearance() const
+		{
 			auto& Slate = FSlateApplication::Get();
 			const auto Window = Slate.FindWidgetWindow(AsShared());
 			// World hovers are positioned in the viewport by their controller.

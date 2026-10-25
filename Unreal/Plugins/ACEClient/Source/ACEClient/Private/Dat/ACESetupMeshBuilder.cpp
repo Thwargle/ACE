@@ -126,6 +126,8 @@ void FACESetupMeshBuilder::AppendGfxObjLocal(const FACEDatGfxObj& Gfx, int32 Par
     const FACEObjDesc* Appearance, float WorldScale, FACEBuiltSetupPart& OutPart)
 {
     OutPart.DrawMode = Gfx.DrawMode;
+    if (Textures) for (uint32 Surface : Gfx.Surfaces)
+        if ((OutPart.OriginalPaletteId = Textures->GetOriginalPaletteId(Surface)) != 0) break;
     OutPart.SortCenter = FACEPosition::AceVectorToUnreal(FVector(Gfx.SortCenter), WorldScale);
     OutPart.DrawingSphere = FSphere(FACEPosition::AceVectorToUnreal(Gfx.DrawingSphere.Center, WorldScale),
         Gfx.DrawingSphere.W * WorldScale);

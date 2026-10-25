@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "Misc/ScopeExit.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
@@ -10,6 +11,8 @@
 #include "ACECharacterAppearanceComponent.h"
 #include "ACEInputBindings.h"
 #include "ACEHoverTooltipWidget.h"
+#include "ACEOrbitCameraBoom.h"
+#include "ACERuntimeOptions.h"
 #include "Dat/ACEDatCursor.h"
 #include "ACEWorldEntityActor.h"
 #include "Components/CapsuleComponent.h"
@@ -38,7 +41,7 @@ bool FACEWalkingStepTest::RunTest(const FString&)
  ON_SCOPE_EXIT{GI->Shutdown();GEngine->DestroyWorldContext(World);World->DestroyWorld(false);};
  auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();auto* Client=GI->GetSubsystem<UACEClientSubsystem>();
  auto Session=Client->GetSession();
- if(!TestTrue(TEXT("Retail DAT loads"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+ if(!TestTrue(TEXT("Retail DAT loads"),Dat->LoadDatDirectory(ACETestDatDirectory())))return false;
  // CSequence excludes High on forward exit and enters the next positive
  // clip at Low. Reverse traversal subtracts every frame, including Low.
  double RetailStep=0,ReverseStep=0,ExitFirst=0;
@@ -144,10 +147,52 @@ bool FACEWalkingStepTest::RunTest(const FString&)
  PC->bJumpAirborne=true;Tick(1.f/90);
  TestFalse(TEXT("Jump discards ground-only step motion"),App->HasWalkingTransition());
  Reset();Key(EKeys::LeftShift,true);Key(EKeys::W,true);Tick(1.f/90);Key(EKeys::LeftShift,false);Tick(1.f/90);
- TestFalse(TEXT("Starting a run cancels pending walk links"),App->HasWalkingTransition());
+ TestTrue(TEXT("Walk to run preserves the authored transition"),App->HasWalkingTransition());
  Reset();Key(EKeys::LeftShift,true);Key(EKeys::W,true);Tick(1.f/90);
  Session->State=EACESessionState::CharacterSelect;Tick(1.f/90);
  TestFalse(TEXT("Leaving the world discards the unfinished step"),App->HasWalkingTransition());
+ Session->State=EACESessionState::InWorld;
+ Reset();Key(EKeys::W,true);Tick(1.f/90);Key(EKeys::W,false);
+ Tick(1.f/90);
+ TestTrue(TEXT("Run release retains an authored step"),App->HasWalkingTransition());
+ for(int I=0;I<180;++I)Tick(1.f/90);
+ TestFalse(TEXT("Run exit eventually returns to idle"),App->HasWalkingTransition());
+ Reset();Key(EKeys::D,true);Tick(1.f/90);
+ TestTrue(TEXT("Local turn input reaches the animation channel"),!FMath::IsNearlyZero(App->LocomotionTurn));
+ TArray<FTransform> TurnA,TurnB;int32 TurnCount=0;
+ TestTrue(TEXT("Actual retail turn motion evaluates"),Dat->EvaluateMotionCommand(0x09000001,ACEMotion::TurnRight,.05,App->GetPartCount(),TurnA,100,TurnCount,nullptr,nullptr,ACEMotion::StanceNonCombat));
+ Dat->EvaluateMotionCommand(0x09000001,ACEMotion::TurnRight,.3,App->GetPartCount(),TurnB,100,TurnCount,nullptr,nullptr,ACEMotion::StanceNonCombat);
+ bool Changed=false;for(int I=0;I<FMath::Min(TurnA.Num(),TurnB.Num());++I)Changed|=!TurnA[I].Equals(TurnB[I],.01);
+ TestTrue(TEXT("Turning has animated frames, not an idle pose"),Changed);
+ Reset();App->PlayActionMotion(0x1000005B,1,ACEMotion::StanceSwordCombat);
+ Key(EKeys::W,true);Tick(1.f/90);
+ TestTrue(TEXT("Active melee swing locks player translation"),FVector::Dist2D(Pawn->GetActorLocation(),StartFeet)<.01);
+ TestTrue(TEXT("Melee lock follows the live action"),App->IsMovementLockedByAction());
+ App->ClearActionMotion();Tick(1.f/90);
+ TestTrue(TEXT("Movement resumes when the swing finishes"),PC->ForwardAxis>0);
+ Reset();App->PreferredStyle=ACEMotion::StanceSwordCombat;App->SetPreferredStyle(ACEMotion::StanceNonCombat);
+ TestTrue(TEXT("Returning to peace plays the stance linkage and pauses movement"),App->IsMovementLockedByAction());
+ Reset();
+ auto* Boom=NewObject<UACEOrbitCameraBoom>(Pawn);Boom->SetupAttachment(Capsule);Boom->RegisterComponent();
+ Boom->SetRelativeRotation(FRotator(0,90,0));
+ const float SavedSlope=ACERuntimeOptions::Get(TEXT("CameraAlignToSlope"));
+ ACERuntimeOptions::Set(TEXT("CameraAlignToSlope"),1);
+ PC->bHaveCameraSlopePosition=false;PC->CameraSlopeVelocities.Reset();
+ Floor->SetActorLocation(StartFeet-FVector(0,0,50));Floor->SetActorRotation(FRotator(15,0,0));
+ PC->UpdateCameraSlope(Boom,1.f/60);
+ Pawn->AddActorWorldOffset(FVector(10,0,0));PC->UpdateCameraSlope(Boom,1.f/60);
+ TestTrue(TEXT("Rear camera follows a physical slope along AC's forward axis without mouse input"),FMath::IsNearlyEqual(Boom->SlopePitch,15.f,.05f));
+ Boom->SetRelativeRotation(FRotator(0,180,0));PC->UpdateCameraSlope(Boom,1.f/60);
+ TestEqual(TEXT("Side camera keeps the chosen orientation"),Boom->SlopePitch,0.f);
+ Boom->SetRelativeRotation(FRotator(0,90,0));
+ PC->bHaveCameraSlopePosition=false;PC->CameraSlopeVelocities.Reset();
+ PC->bJumpAirborne=true; // Airborne fallback follows the smoothed velocity with retail's 0.1 Z factor.
+ PC->UpdateCameraSlope(Boom,1.f/60);
+ Pawn->AddActorWorldOffset(FVector(10,10,10));PC->UpdateCameraSlope(Boom,1.f/60);
+ TestTrue(TEXT("Slope camera adjusts without any mouse input"),Boom->SlopePitch>0);
+ ACERuntimeOptions::Set(TEXT("CameraAlignToSlope"),0);PC->UpdateCameraSlope(Boom,1.f/60);
+ TestEqual(TEXT("Slope option disables automatic pitch"),Boom->SlopePitch,0.f);
+ ACERuntimeOptions::Set(TEXT("CameraAlignToSlope"),SavedSlope);
  return true;
 }
 #endif

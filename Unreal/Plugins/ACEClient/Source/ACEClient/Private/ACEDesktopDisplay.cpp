@@ -19,7 +19,7 @@
 
 namespace
 {
-constexpr const TCHAR* Section = TEXT("ACEDesktopDisplay");
+constexpr const TCHAR* DisplaySettingsSection = TEXT("ACEDesktopDisplay");
 struct FModePreview
 {
     bool Pending = false;
@@ -51,16 +51,16 @@ class FDisplayInput final : public IInputProcessor
     void SavePosition(const FVector2D& Position)
     {
         if (!GConfig) return;
-        GConfig->SetInt(Section,TEXT("WindowX"),FMath::RoundToInt(Position.X),GGameUserSettingsIni);
-        GConfig->SetInt(Section,TEXT("WindowY"),FMath::RoundToInt(Position.Y),GGameUserSettingsIni);
+        GConfig->SetInt(DisplaySettingsSection,TEXT("WindowX"),FMath::RoundToInt(Position.X),GGameUserSettingsIni);
+        GConfig->SetInt(DisplaySettingsSection,TEXT("WindowY"),FMath::RoundToInt(Position.Y),GGameUserSettingsIni);
         GConfig->Flush(false,GGameUserSettingsIni);
     }
 
     void RestorePosition(const TSharedPtr<SWindow>& Window)
     {
         int32 X, Y;
-        if (!GConfig || !GConfig->GetInt(Section,TEXT("WindowX"),X,GGameUserSettingsIni)
-            || !GConfig->GetInt(Section,TEXT("WindowY"),Y,GGameUserSettingsIni)) return;
+        if (!GConfig || !GConfig->GetInt(DisplaySettingsSection,TEXT("WindowX"),X,GGameUserSettingsIni)
+            || !GConfig->GetInt(DisplaySettingsSection,TEXT("WindowY"),Y,GGameUserSettingsIni)) return;
         // Keep the title bar accessible after unplugging or rearranging monitors.
         const auto& Metrics = FSlateApplication::Get().GetCachedDisplayMetricsByRef();
         bool Visible = false;
@@ -266,8 +266,8 @@ void FACEDesktopDisplay::ResetGraphics(AACEPlayerController* PC)
                 Window->MoveWindowTo(Position);
                 if (GConfig)
                 {
-                    GConfig->SetInt(Section,TEXT("WindowX"),int32(Position.X),GGameUserSettingsIni);
-                    GConfig->SetInt(Section,TEXT("WindowY"),int32(Position.Y),GGameUserSettingsIni);
+                    GConfig->SetInt(DisplaySettingsSection,TEXT("WindowX"),int32(Position.X),GGameUserSettingsIni);
+                    GConfig->SetInt(DisplaySettingsSection,TEXT("WindowY"),int32(Position.Y),GGameUserSettingsIni);
                     GConfig->Flush(false,GGameUserSettingsIni);
                 }
                 break;

@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "HAL/FileManager.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
@@ -487,6 +488,7 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             bool Found=false;for(const auto& V:Snapshot->GetArrayField(TEXT("inventory")))if(V->AsObject()->GetNumberField(TEXT("id"))==Blade.Guid)
             {Found=true;TestEqual(TEXT("UCM sees tether changes without relog or appraisal"),V->AsObject()->GetBoolField(TEXT("auto_wield_left")),Left);}
             TestTrue(TEXT("Tethered weapon is in inventory snapshot"),Found);
+            H->Appraisals.Add(Blade.Guid,BladeInfo); // changed inventory qualities require reassessment
             Session.PendingCombatMode=0;Session.ApplyServerCombatMode(1);Session.CachedC2SPackets.Reset();H->ExecuteInventory(*P,Equip,TEXT("equip"));
             bool Sent=false;for(const auto& Packet:Session.CachedC2SPackets)
             {FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.ReadUInt32()!=ACEGameAction::GetAndWieldItem)continue;Sent=true;TestEqual(TEXT("Equip packet identifies blade"),R.ReadUInt32(),uint32(Blade.Guid));TestEqual(TEXT("Equip packet uses retail right/left location"),R.ReadUInt32(),uint32(Left?ACEEquipMask::Shield:ACEEquipMask::MeleeWeapon));}
@@ -497,7 +499,7 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         for(int Protection=0;Protection<4;++Protection)
         {
             auto& Live=Session.WorldObjects[Blade.Guid];Live=Blade;Live.MaterialType=59;Live.Structure=200;
-            H->Appraisals[Blade.Guid]=BladeInfo;
+            H->Appraisals.Add(Blade.Guid,BladeInfo); // equip invalidates the previous appraisal
             if(Protection==1)H->Appraisals[Blade.Guid].IntProperties.Add(171,1);
             if(Protection==2)H->Appraisals[Blade.Guid].StringProperties.Add(8,TEXT("Owner"));
             if(Protection==3)Live.ObjectDescriptionFlags|=ACEObjectDescFlag::Retained;
@@ -1310,7 +1312,20 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
                 Session.OnObjectHealth.Broadcast(970,0);
                 TestEqual(TEXT("Repeated zero-health packets do not extend the wait"),H->LastCombatDeath->GetNumberField(TEXT("time")),DeathAt);
             }
-            H->Execute(*P,AttackIntent(971,Mode));TestEqual(TEXT("Next opponent attack is sent immediately after death"),AttackCount(),Before+1);
+            // Even after a kill wakes the policy, a replacement attack must
+            // still pass physical sight at dispatch time. This wall ignores
+            // camera traces just like doors; no missile or charge may escape.
+            auto* Wall=World->SpawnActor<AActor>();auto* Obstacle=NewObject<UBoxComponent>(Wall);
+            Wall->SetRootComponent(Obstacle);Obstacle->SetBoxExtent(FVector(20,300,300));
+            Obstacle->SetCollisionEnabled(ECollisionEnabled::QueryOnly);Obstacle->SetCollisionResponseToAllChannels(ECR_Block);
+            Obstacle->SetCollisionResponseToChannel(ECC_Camera,ECR_Ignore);Obstacle->RegisterComponent();
+            Wall->SetActorLocation((Session.PlayerPosition.ToUnrealLocation()+NextEnemy.Position.ToUnrealLocation())*.5+FVector(0,0,120));
+            TestFalse(TEXT("Next opponent is physically behind the wall"),H->HasClearCombatSight(NextEnemy));
+            H->Execute(*P,AttackIntent(971,Mode));
+            TestEqual(TEXT("Post-kill plugin attack cannot bypass a wall"),AttackCount(),Before);
+            Obstacle->SetCollisionEnabled(ECollisionEnabled::NoCollision);Wall->Destroy();
+            P->NextAction=0; // advance past the rejected action's normal decision throttle
+            H->Execute(*P,AttackIntent(971,Mode));TestEqual(TEXT("Visible next opponent attack is sent immediately after death"),AttackCount(),Before+1);
             auto State=H->Snapshot();bool DeadInSnapshot=false;for(const auto& V:State->GetArrayField(TEXT("targets")))DeadInSnapshot|=V->AsObject()->GetNumberField(TEXT("id"))==970;
             TestTrue(TEXT("Policy snapshot includes confirmed death for post-combat loot"),State->HasTypedField<EJson::Object>(TEXT("combat_death")));
             TestFalse(TEXT("Dead opponent stays excluded after selection moves to next opponent"),DeadInSnapshot);
@@ -1685,7 +1700,7 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
     if(FParse::Param(FCommandLine::Get(),TEXT("WaypointRender")))
     {
         auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
-        if(TestTrue(TEXT("Waypoint uses retail DAT geometry"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))
+        if(TestTrue(TEXT("Waypoint uses retail DAT geometry"),Dat->LoadDatDirectory(ACETestDatDirectory())))
         {
             auto Waypoint=H->Find(TEXT("waypoint"));Waypoint->Enabled=true;Waypoint->Profile=MakeShared<FJsonObject>();
             Waypoint->Profile->SetNumberField(TEXT("east"),-99.);Waypoint->Profile->SetNumberField(TEXT("north"),-48.5);

@@ -9,6 +9,7 @@
 #include "Mods/ACEUCMLog.h"
 #include "Mods/ACELedger.h"
 #include "Mods/ACEPluginLocalService.h"
+#include "Mods/ACEPluginWorldPlate.h"
 #include "ACEPluginSubsystem.generated.h"
 
 class FACEPluginVM;
@@ -46,6 +47,11 @@ struct FACEClientPlugin
     TSharedPtr<FJsonObject> ProfileLinks, ProfileBaseline;
     FString Id, Name, Version, Description, Directory, Status = TEXT("Stopped"), ProfileName = TEXT("Default");
     TArray<FString> Permissions;
+    // Omitted fields preserve the original API; an explicit list is opt-in.
+    TSet<FString> SnapshotFields;
+    bool SelectiveSnapshot = false;
+    double UpdateInterval = .5;
+    bool WantsSnapshotField(const TCHAR* Field) const { return !SelectiveSnapshot || SnapshotFields.Contains(Field); }
     TSharedPtr<FJsonObject> Manifest, Profile, Presentation;
     TSharedPtr<class FACEPluginImageCache> Images;
     FString DisplayTitle() const;
@@ -76,6 +82,8 @@ struct FACEClientPlugin
     TSharedPtr<FJsonObject> SavedState;
     TArray<TSharedPtr<FJsonValue>> PanelRows, PluginEvents;
     TArray<FACEPluginMarker> Markers;
+    TArray<FACEPluginWorldPlate> WorldPlates;
+    uint32 WorldPlateRevision=0;
     uint64 ChatCursor=0;
     TArray<FACEPluginChatFilter> ChatFilters;
     uint32 PanelRevision=0;
@@ -106,6 +114,8 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEUCMIdleWorkloadTest;
     friend class FACELedgerTest;
     friend class FACEPluginCompanionTest;
+    friend class FACEPluginWorldPlateTest;
+    friend class UACEPluginWorldPlateComponent;
     friend class FACEThirdEyeTest;
     friend class FACEPluginPublicAPITest;
     friend class FACEPluginEquipmentTest;
@@ -333,6 +343,7 @@ private:
     bool ApplyPublicOutput(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Output, FString& Error);
     bool StartCompanion(FACEClientPlugin& Plugin);
     void TickCompanions();
+    int32 NextCompanionIndex = 0;
     void UpdateCompanionChatContext();
     TWeakPtr<class FACESession> PluginChatSession;
     int32 PluginChatPlayer=0;
@@ -347,13 +358,21 @@ private:
     // tables, reader cursors, events or state. Discard after any action/request.
     struct FCompanionReadBatch
     {
-        TSharedPtr<FJsonObject> Data, Objects;
-        void Reset() { Data.Reset(); Objects.Reset(); }
+        TSharedPtr<FJsonObject> Data, Objects, TargetDetails;
+        void Reset() { Data.Reset(); Objects.Reset(); TargetDetails.Reset(); }
     };
     FCompanionReadBatch* CompanionReadBatch = nullptr;
     bool ApplyCompanionOutput(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Output, FString& Error);
     bool CompanionAction(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Action, FString& Error);
     void DrawPluginMarkers();
+    void AddTargetDetails(const TSharedPtr<FJsonObject>& Snapshot);
+    void UpdatePluginWorldPlates();
+    void ClearPluginTarget(int32 Guid);
+    struct FTargetHealthSample { float Fraction=0; double ReceivedAt=0; };
+    TMap<int32,FTargetHealthSample> TargetHealthSamples;
+    TMap<int32,double> TargetAppraisalTimes;
+    UPROPERTY(Transient) TObjectPtr<AActor> WorldPlateActor;
+    UPROPERTY(Transient) TArray<TObjectPtr<UACEPluginWorldPlateComponent>> WorldPlateComponents;
     TWeakPtr<class FACESession> CompanionSession;
     int32 CompanionPlayer=0;
     FString CompanionServer;

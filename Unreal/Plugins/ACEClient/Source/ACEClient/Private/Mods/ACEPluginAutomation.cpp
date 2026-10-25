@@ -103,6 +103,7 @@ bool UACEPluginSubsystem::IsOwnedPluginItem(const FACEWorldObject& Item) const
 }
 void UACEPluginSubsystem::ObserveAppraisal(const FACEAppraisalInfo& Info)
 {
+    TargetAppraisalTimes.Add(Info.ObjectGuid,FPlatformTime::Seconds());
     Appraisals.Add(Info.ObjectGuid,Info);DirtyInventoryAppraisals.Add(Info.ObjectGuid);++DataRevision;
     for(const auto& P:Plugins)if(P->WaitAction==TEXT("identify")&&P->WaitItem==Info.ObjectGuid)
     {
@@ -181,7 +182,8 @@ void UACEPluginSubsystem::RecordCombatDeath(int32 Guid)
 }
 void UACEPluginSubsystem::ObserveTargetHealth(int32 Guid,float Fraction)
 {
-    if(!FMath::IsFinite(Fraction))return;
+    if(!FMath::IsFinite(Fraction)||Fraction<0||Fraction>1)return;
+    TargetHealthSamples.Add(Guid,{Fraction,FPlatformTime::Seconds()});
     FACEWorldObject Object;auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     if(Fraction>0)
     {
@@ -199,9 +201,10 @@ void UACEPluginSubsystem::ObserveTargetMotion(int32 Guid,const FACEObjectMotionS
         {RecordCombatDeath(Guid);ReleaseCombatTarget(Guid);}
 }
 void UACEPluginSubsystem::ObserveTargetDeleted(int32 Guid)
-{CorpseFirstSeen.Remove(Guid);DefeatedTargets.Remove(Guid);ReleaseCombatTarget(Guid);ForgetTargetEffects(Guid);}
+{ClearPluginTarget(Guid);CorpseFirstSeen.Remove(Guid);DefeatedTargets.Remove(Guid);ReleaseCombatTarget(Guid);ForgetTargetEffects(Guid);}
 void UACEPluginSubsystem::ObserveTargetCreated(const FACEWorldObject& Object)
 {
+    ClearPluginTarget(Object.Guid);
     ForgetTargetEffects(Object.Guid);
     DefeatedTargets.Remove(Object.Guid);
     if(LastCombatDeath&&int32(uint32(N(LastCombatDeath,TEXT("id"))))==Object.Guid)LastCombatDeath.Reset();
@@ -473,7 +476,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
         SaveItemBuffTimers();
         CombatTarget=0;DefeatedTargets.Empty();LastCombatDeath.Reset();LastCombatVitals=FIntVector(-1,-1,-1);
         ConfirmedBuffAckAt=BuffRetryAt=0;ConfirmedBuffOwner.Empty();DeferredBuffIntent.Reset();DeferredBuffOwner.Empty();PendingBuffResultDriven=false;
-        DataPlayer=0;Appraisals.Empty();CorpseFirstSeen.Empty();LootedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();CachedInventory.Empty();CachedInventoryIndices.Empty();DirtyInventoryAppraisals.Empty();ClearBuffRequests();
+        DataPlayer=0;Appraisals.Empty();TargetAppraisalTimes.Empty();TargetHealthSamples.Empty();CorpseFirstSeen.Empty();LootedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();CachedInventory.Empty();CachedInventoryIndices.Empty();DirtyInventoryAppraisals.Empty();ClearBuffRequests();
         PendingSpell=0;PendingSpellOwner.Empty();FastCastOwner.Empty();PendingManaRefresh=false;PendingResourceRefresh.Empty();Debuffs.Empty();PendingDebuffCasts.Empty();OffensiveCasts.Empty();InventoryRevision=MAX_uint64;C->BackgroundAppraisals.Empty();return;
     }
     if(DataPlayer!=C->GetPlayerGuid()||DataServer!=C->GetServerName()||ObservedSession.Pin()!=Session)
@@ -494,7 +497,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
         CombatVitalsHandle=Session->OnVitalsUpdated.AddUObject(this,&UACEPluginSubsystem::ObserveCombatVitals);
         PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();CombatOutcomes.Empty();OffensiveCasts.Empty();
         TellHandle=Session->OnPlayerTell.AddUObject(this,&UACEPluginSubsystem::ObservePlayerTell);ClearBuffRequests();
-        DataPlayer=C->GetPlayerGuid();DataServer=C->GetServerName();NextAppraisalScan=0;Appraisals.Empty();CachedSpeciesNames.Reset();CorpseFirstSeen.Empty();LootedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();
+        DataPlayer=C->GetPlayerGuid();DataServer=C->GetServerName();NextAppraisalScan=0;Appraisals.Empty();TargetAppraisalTimes.Empty();TargetHealthSamples.Empty();CachedSpeciesNames.Reset();CorpseFirstSeen.Empty();LootedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();
         LoadItemBuffTimers();
         CachedInventory.Empty();CachedInventoryIndices.Empty();DirtyInventoryAppraisals.Empty();
         PendingSpell=0;PendingSpellOwner.Empty();FastCastOwner.Empty();PendingResourceRefresh.Empty();PendingManaRefresh=false;Debuffs.Empty();PendingDebuffCasts.Empty();InventoryRevision=MAX_uint64;++DataRevision;C->BackgroundAppraisals.Empty();
@@ -876,7 +879,12 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
         // rather than requiring appraisal or a known shield WCID.
         if(ACEVTObjectClass::Classify(Obj)==2)
         {if(Obj.WielderId)ArmoredParents.Add(Obj.WielderId);if(Obj.ParentGuid)ArmoredParents.Add(Obj.ParentGuid);}
-        if(Obj.PetOwnerId==C->GetPlayerGuid()&&Obj.bHasPosition&&!Obj.bDying&&!Obj.IsCorpse()&&!Obj.bPhysicsDescriptionPending)OwnedPet=true;
+        // Hidden/despawned pets can linger in awareness until the delete message.
+        // Only a live, present creature prevents another summon.
+        if(Obj.PetOwnerId==C->GetPlayerGuid() && Obj.IsSelectableWorldObject()
+            && (Obj.ItemType&ACEItemType::Creature) && !Obj.IsCorpse() && !Obj.bPhysicsDescriptionPending
+            && !DefeatedTargets.Contains(Obj.Guid)
+            && FVector::DistSquared(Obj.Position.ToUnrealLocation(),P.ToUnrealLocation())<=FMath::Square(24000.))OwnedPet=true;
         if(Obj.IsCorpse()&&!CorpseFirstSeen.Contains(Obj.Guid))CorpseFirstSeen.Add(Obj.Guid,Now);
         if(C->GetOpenExternalContainerGuid() && Obj.ContainerId==C->GetOpenExternalContainerGuid()){Contents.Add(ItemJson(Obj));continue;}
         if(!Obj.IsSelectableWorldObject() || FVector::DistSquared(Obj.Position.ToUnrealLocation(),P.ToUnrealLocation())>FMath::Square(24000.))continue;
@@ -1030,6 +1038,7 @@ bool UACEPluginSubsystem::PrepareCombatAction(FACEClientPlugin& P,const TSharedP
 void UACEPluginSubsystem::UpdateCombatTransition(FACEClientPlugin& P)
 {
     if(!P.CombatTransitionIntent)return;
+    if(CompanionReadBatch)CompanionReadBatch->Reset();
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Session=C->GetSession();
     auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
     const double Now=FPlatformTime::Seconds();

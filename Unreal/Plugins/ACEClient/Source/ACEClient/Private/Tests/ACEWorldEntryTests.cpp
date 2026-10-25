@@ -1302,6 +1302,13 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
     Floor->SetActorRotation(FRotator::ZeroRotator);
     auto* App=NewObject<UACECharacterAppearanceComponent>(Pawn);
     Pawn->AddInstanceComponent(App); App->RegisterComponent(); App->bAlignMeshToCapsuleBottom=true;
+    // Manual controller stepping must also advance action/style links, as the
+    // world's component tick does in-game; an unticked link locks movement.
+    auto TickPlayer=[&](float Dt)
+    {
+        Controller->PlayerTick(Dt);
+        App->TickComponent(Dt,LEVELTICK_All,nullptr);
+    };
     Pawn->SetActorScale3D(FVector(.7)); App->EnsureMeshRoot();
     TestTrue(TEXT("Scaled player visual foot does not apply actor scale twice"),
         App->MeshRoot->GetComponentLocation().Equals(Capsule->GetComponentLocation()-FVector(0,0,Capsule->GetScaledCapsuleHalfHeight()),.01));
@@ -1310,6 +1317,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
     // Object.Scale and must neither compound capsule size nor move visual feet.
     const int32 PreviousGuid = Session->PlayerGuid;
     FACEWorldObject SelfObject; SelfObject.Guid = 12345; SelfObject.SetupId = 0x02000001;
+    SelfObject.MotionTableId = 0x09000001; // real stance links must advance during movement tests
     SelfObject.ItemType = 0x10; SelfObject.Name = TEXT("Scaled local player");
     Session->PlayerGuid = SelfObject.Guid;
     Pawn->SetActorLocation(Feet + FVector(0,0,Capsule->GetScaledCapsuleHalfHeight()));
@@ -1345,8 +1353,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
     Pawn->SetActorLocation(Feet+FVector(0,0,Capsule->GetScaledCapsuleHalfHeight()+20));
     for (int32 Frame=0;Frame<30;++Frame)
     {
-        Controller->PlayerTick(.016f);
-        App->TickComponent(.016f,LEVELTICK_All,nullptr);
+        TickPlayer(.016f);
     }
     FBox GroundedBounds(ForceInit); App->GetVisualWorldBounds(GroundedBounds);
     AddInfo(FString::Printf(TEXT("Grounded outfit floor=%.3f capsuleFeet=%.3f visualMin=%.3f"),Feet.Z,
@@ -1370,11 +1377,11 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
         Controller->LastServerPose=FallPose; Controller->bHaveLastServerPose=true; Controller->bHavePredictedPose=false;
         Controller->StepHoldSeconds=0; Session->SetLocalPosition(FallPose);
         Pawn->SetActorLocation(FallFeet+FVector(0,0,Capsule->GetScaledCapsuleHalfHeight()));
-        Controller->PlayerTick(.016f);
+        TickPlayer(.016f);
         TestTrue(TEXT("Unsupported idle player enters falling without a Jump action"),Controller->bJumpAirborne);
-        for (int32 Frame=0;Frame<40;++Frame) Controller->PlayerTick(.016f);
+        for (int32 Frame=0;Frame<40;++Frame) TickPlayer(.016f);
         TestTrue(TEXT("Fall continues without keyboard input"),Pawn->GetActorLocation().Z<FallFeet.Z-100);
-        for (int32 Frame=0;Frame<160;++Frame) Controller->PlayerTick(.016f);
+        for (int32 Frame=0;Frame<160;++Frame) TickPlayer(.016f);
         TestFalse(TEXT("Stationary fall lands on the lower floor"),Controller->bJumpAirborne);
         TestFalse(TEXT("Landing expires the stale server pose above the cliff"),Controller->bHaveLastServerPose);
         TestTrue(TEXT("Client reaches the bottom of a thirty metre drop"),FMath::Abs(Pawn->GetActorLocation().Z-Capsule->GetScaledCapsuleHalfHeight()-(FallFeet.Z-3000))<3);
@@ -1423,7 +1430,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
                 Controller->PlayerInput->ProcessInputStack({},.016f,false);
                 Pawn->SetActorTransform(StartTransform);Controller->PredictedPose=StartPose;
                 TestBoom->SetRelativeRotation(FRotator(-15,150,0));
-                Controller->PlayerTick(.016f);
+                TickPlayer(.016f);
                 const float ExpectedTurn=(Key==EKeys::A || Key==EKeys::Left)?-1.f:1.f;
                 TestEqual(TEXT("A/D and arrows remain turn inputs in both mouse modes"),Controller->TurnAxis,ExpectedTurn);
                 TestEqual(TEXT("Turn keys never become sidestep inputs"),Controller->RightAxis,0.f);
@@ -1440,7 +1447,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             Controller->PlayerInput->ProcessInputStack({},.016f,false);
             Pawn->SetActorTransform(StartTransform);Controller->PredictedPose=StartPose;
             TestBoom->SetRelativeRotation(FRotator(-15,90,0));
-            Controller->PlayerTick(.016f);
+            TickPlayer(.016f);
             TestEqual(TEXT("Retail Z/C sidestep bindings"),Controller->RightAxis,Key==EKeys::Z?-1.f:1.f);
             TestEqual(TEXT("Sidestep does not supply keyboard turn input"),Controller->TurnAxis,0.f);
         }
@@ -1464,7 +1471,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             Controller->PlayerInput->ProcessInputStack({},.016f,false);
             Pawn->SetActorTransform(StartTransform);Controller->PredictedPose=StartPose;Controller->bHavePredictedPose=true;
             Controller->bCameraDefaultsCaptured=true;TestBoom->SetRelativeRotation(FRotator(-15,0,0));
-            Controller->PlayerTick(.016f);
+            TickPlayer(.016f);
             TestTrue(TEXT("Numpad camera input never supplies player movement in either Num Lock state"),
                 Controller->ForwardAxis==0 && Controller->RightAxis==0 && Controller->TurnAxis==0);
             TestFalse(TEXT("Numpad still moves the camera in either Num Lock state"),TestBoom->GetRelativeRotation().Equals(FRotator(-15,0,0),.001));
@@ -1479,15 +1486,15 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             Controller->SyncUserCameraArmLength(TestBoom);
             PressKey(Key);Controller->PlayerInput->ProcessInputStack({},.1f,false);
             const float Before=TestBoom->TargetArmLength;
-            Controller->PlayerTick(.1f);
+            TickPlayer(.1f);
             TestTrue(TEXT("Physical keypad +/- zoom the camera with retail direction"),Key==EKeys::Subtract ? TestBoom->TargetArmLength<Before : TestBoom->TargetArmLength>Before);
             Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.1f,false);
         }
         PressKey(ACEInputBindings::NumpadEnterKey());Controller->PlayerInput->ProcessInputStack({},.016f,false);
-        Controller->PlayerTick(.016f);
+        TickPlayer(.016f);
         TestTrue(TEXT("Physical keypad Enter toggles overhead mode"),Controller->bCameraMapMode);
-        Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.016f,false);Controller->PlayerTick(.016f);
-        PressKey(ACEInputBindings::NumpadEnterKey());Controller->PlayerInput->ProcessInputStack({},.016f,false);Controller->PlayerTick(.016f);
+        Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.016f,false);TickPlayer(.016f);
+        PressKey(ACEInputBindings::NumpadEnterKey());Controller->PlayerInput->ProcessInputStack({},.016f,false);TickPlayer(.016f);
         TestFalse(TEXT("Second physical keypad Enter returns to normal view"),Controller->bCameraMapMode);
         Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.016f,false);
         // Tiny mouse turns are below the packet-send threshold but still belong
@@ -1502,12 +1509,12 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
         PressKey(EKeys::RightMouseButton);
         Controller->PlayerInput->ProcessInputStack({},.016f,false);
         TestBoom->SetRelativeRotation(FRotator(-15,.1f,0));
-        Controller->PlayerTick(.016f);
+        TickPlayer(.016f);
         const FQuat TinyTurn=Pawn->GetActorQuat();
         TestTrue(TEXT("Sub-threshold mouse turn retains prediction"),Controller->bHavePredictedPose && Controller->bLocalPredicting);
         TestFalse(TEXT("Sub-threshold mouse turn actually changes facing"),TinyTurn.Equals(StartTransform.GetRotation(),.000001f));
         Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.016f,false);
-        Controller->PlayerTick(.016f);
+        TickPlayer(.016f);
         TestTrue(TEXT("Sub-threshold mouse turn survives the next idle frame"),Pawn->GetActorQuat().Equals(TinyTurn,.00001f));
         FSlateApplication::Get().SetCursorPos(SavedCursor);
         // The double-click interaction path must arrive and send Use with any orbit offset.
@@ -1556,25 +1563,25 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
                 // orbit represents a chosen view that the body must catch up
                 // to, not excess mouse input that should be discarded.
                 Controller->ApplyMouseLookDelta(1000,0,TestBoom);
-                Controller->PlayerTick(1.f/FPS);
+                TickPlayer(1.f/FPS);
                 TestTrue(TEXT("Mouse-facing character obeys retail's angular rate at every FPS"),
                     FMath::IsNearlyEqual(Before.AngularDistance(Controller->PredictedPose.GetAcQuat()),3.375f/FPS,.0001f));
             }
             const int32 Reports=CountAction(ACEGameAction::MoveToState);
             TestTrue(FString::Printf(TEXT("Mouse turn uses half-second reports at %d FPS (got %d)"),FPS,Reports),Reports>=2 && Reports<=3);
             const FQuat AtRest=Controller->PredictedPose.GetAcQuat();
-            Controller->PlayerTick(1.f/FPS);
+            TickPlayer(1.f/FPS);
             TestTrue(TEXT("Stopped mouse does not leave a queued camera-facing turn"),
                 AtRest.Equals(Controller->PredictedPose.GetAcQuat(),.00001f));
             Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},1.f/FPS,false);
-            Controller->MouseTurnReportSeconds=.5f;Controller->PlayerTick(1.f/FPS);
+            Controller->MouseTurnReportSeconds=.5f;TickPlayer(1.f/FPS);
 
             // Airborne rotation is legal in retail while the jump translation
             // remains ballistic. Do not show a local turn but send zero turn.
             Controller->PredictedPose.Location.Z+=5;Controller->bJumpAirborne=true;
             Session->SetLocalPosition(Controller->PredictedPose);
             PressKey(EKeys::D);Controller->PlayerInput->ProcessInputStack({},1.f/FPS,false);
-            Session->CachedC2SPackets.Reset();Controller->PlayerTick(1.f/FPS);
+            Session->CachedC2SPackets.Reset();TickPlayer(1.f/FPS);
             bool SawAirTurn=false;
             for(const auto& Pair:Session->CachedC2SPackets)
             {
@@ -1637,7 +1644,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("Use is sent before walking so the server can supply approach rules"),CountAction(ACEGameAction::Use),1);
             Session->CachedC2SPackets.Reset();
             for (int32 Frame=0;Frame<240 && Controller->UseApproachPhase!=AACEPlayerController::EACEUseApproachPhase::Holding;++Frame)
-                Controller->PlayerTick(.016f);
+                TickPlayer(.016f);
             TestEqual(TEXT("Approach never resends Use on arrival"),CountAction(ACEGameAction::Use),0);
             TestEqual(TEXT("Autonomous approach never cancels the server chain with MoveToState"),CountAction(ACEGameAction::MoveToState),0);
             const FVector Arrived=Controller->PredictedPose.ToUnrealLocation(100);
@@ -1658,7 +1665,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             Controller->InteractWithSelectedObject();
             TestTrue(TEXT("Chess boards and corpses start a use approach"), Controller->bServerMoveToActive);
             for (int32 Frame=0; Frame<6.f/Dt && Controller->UseApproachPhase!=AACEPlayerController::EACEUseApproachPhase::Holding; ++Frame)
-                Controller->PlayerTick(Dt);
+                TickPlayer(Dt);
             TestEqual(TEXT("Chess/corpse arrival sends exactly one retail interaction"),
                 CountAction(bCorpse ? ACEGameAction::Use : ACEGameAction::ChessJoin), 1);
             TestEqual(TEXT("Chess boards use JoinGame instead of generic Use"),
@@ -1683,7 +1690,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             ApproachVR->Head->SetWorldRotation(FRotator(0,Yaw,0));
             Controller->InteractWithObject(UseTarget.Guid);
             for(int32 Frame=0;Frame<540 && Controller->UseApproachPhase!=AACEPlayerController::EACEUseApproachPhase::Holding;++Frame)
-                Controller->PlayerTick(1.f/90);
+                TickPlayer(1.f/90);
             TestEqual(TEXT("VR corpse approach sends exactly one Use"),CountAction(ACEGameAction::Use),1);
             TestTrue(TEXT("Neutral stick permits VR corpse approach to the full server cylinder range"),
                 Controller->GetUseCylinderDistanceCm(UseTarget,Controller->PredictedPose.ToUnrealLocation(100),
@@ -1693,12 +1700,12 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("VR approach leaves tracked head yaw unchanged"),ApproachVR->Head->GetComponentRotation().Yaw,double(Yaw));
         }
         ResetApproach(FVector(300,0,0));Controller->InteractWithObject(UseTarget.Guid);
-        ApproachVR->MoveStick=FVector2D(.5f,0);Controller->PlayerTick(1.f/90);
+        ApproachVR->MoveStick=FVector2D(.5f,0);TickPlayer(1.f/90);
         TestFalse(TEXT("Manual VR stick cancels automatic approach immediately"),Controller->bServerMoveToActive);
         TestFalse(TEXT("Manual VR cancellation clears the pending world Use"),Client->IsUseBusy());
         ApproachVR->MoveStick=FVector2D::ZeroVector;
         ResetApproach(FVector(300,0,0));Controller->InteractWithObject(UseTarget.Guid);
-        ApproachVR->bTracking=false;Controller->PlayerTick(1.f/90);
+        ApproachVR->bTracking=false;TickPlayer(1.f/90);
         TestFalse(TEXT("Losing tracking cancels VR automatic translation"),Controller->bServerMoveToActive);
         ApproachVR->Head->DestroyComponent();ApproachVR->bActive=false;ApproachVR->DestroyComponent();
         UseTarget.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
@@ -1718,6 +1725,45 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             W.WriteFloat(1);W.WriteFloat(15);W.WriteFloat(0);W.WriteFloat(1);
             FACEBinaryReader R(W.GetData());Session->HandleUpdateMotion(R);
         };
+        // A corpse can already be inside its advertised radius when clicked,
+        // while ACE later requests a tighter radius (magic stance crouch).
+        // Use actual human Setup dimensions and delay the echo past Holding's
+        // old 0.2-second gate. The one Use request must survive resumed movement.
+        UseTarget.SetupId=0x02000001;UseTarget.UseRadius=.6f;
+        UseTarget.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck|ACEObjectDescFlag::Corpse;
+        UseTarget.ItemType=ACEItemType::Container;UseTarget.ItemUseable=1;
+        UseTarget.InitialMotionCommand=ACEMotion::Dead;
+        float CorpseStep=0,CorpseHeight=0,CorpseRadius=0;uint32 CorpseAnim=0;
+        TestTrue(TEXT("Corpse range fixture loads retail Setup dimensions"),
+            Dat->TryGetSetupPhysics(UseTarget.SetupId,CorpseStep,CorpseHeight,CorpseRadius,CorpseAnim));
+        const float InitialOffset=(Controller->PlayerSetupRadiusAc*Controller->GetLocalCreatureScale()+CorpseRadius+.5f)*100.f;
+        for(float EchoDelay:{.0f,.5f,1.5f}) for(float Dt:{1.f/30,1.f/144})
+        {
+            ResetApproach(FVector(InitialOffset,0,0));
+            Controller->InteractWithObject(UseTarget.Guid);
+            TestEqual(TEXT("Corpse inside advertised range initially holds"),Controller->UseApproachPhase,
+                AACEPlayerController::EACEUseApproachPhase::Holding);
+            for(int32 Frame=0;Frame<EchoDelay/Dt;++Frame)TickPlayer(Dt);
+            ReceiveApproach(MAX_flt,.4f);
+            TestTrue(TEXT("Delayed server radius requires a closer corpse approach"),
+                Controller->GetUseCylinderDistanceCm(UseTarget,Controller->PredictedPose.ToUnrealLocation(100),
+                    UseTarget.Position.ToUnrealLocation(100))>40.f);
+            const int32 MovesBefore=CountAction(ACEGameAction::MoveToState);
+            for(int32 Frame=0;Frame<3.f/Dt;++Frame)
+            {
+                TickPlayer(Dt);
+                if(Controller->UseApproachPhase==AACEPlayerController::EACEUseApproachPhase::Holding
+                    &&Controller->GetUseCylinderDistanceCm(UseTarget,Controller->PredictedPose.ToUnrealLocation(100),
+                        UseTarget.Position.ToUnrealLocation(100))<=40.f)break;
+            }
+            TestTrue(FString::Printf(TEXT("Delayed corpse approach reaches server radius without another click (delay %.1f, FPS %.0f)"),EchoDelay,1.f/Dt),
+                Controller->GetUseCylinderDistanceCm(UseTarget,Controller->PredictedPose.ToUnrealLocation(100),
+                    UseTarget.Position.ToUnrealLocation(100))<=40.f);
+            TestEqual(TEXT("Delayed corpse approach never repeats Use"),CountAction(ACEGameAction::Use),1);
+            TestEqual(TEXT("Resuming approach does not cancel the server's pending Use"),CountAction(ACEGameAction::MoveToState),MovesBefore);
+        }
+        UseTarget.SetupId=0;UseTarget.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
+        UseTarget.ItemType=0;UseTarget.ItemUseable=32;UseTarget.InitialMotionCommand=ACEMotion::Ready;
         int32 ChargeErrors=0;
         const auto ChatHandle=Session->OnChatMessage.AddLambda([&](const FString& Message,const FString&,int32 Type)
         {
@@ -1736,7 +1782,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             ReceiveApproach(15);
             TestTrue(TEXT("Server echo does not reset the charge starting position"),
                 Controller->ApproachStartPose.ToUnrealLocation(100).Equals(OriginalStart.ToUnrealLocation(100),.001));
-            Session->CachedC2SPackets.Reset();Controller->PlayerTick(.016f);
+            Session->CachedC2SPackets.Reset();TickPlayer(.016f);
             TestEqual(FString::Printf(TEXT("Charge distance includes vertical travel %.1f cm and only fails beyond limit"),Displacement),Controller->bServerMoveToActive,Displacement<=1500);
             TestEqual(TEXT("Exceeding charge limit reports failure once"),ChargeErrors,Displacement>1500?1:0);
             TestEqual(TEXT("Failed or distant approach never uses the object"),CountAction(ACEGameAction::Use),0);
@@ -1744,11 +1790,11 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             {
                 TestTrue(TEXT("Failed approach sends stop to the server"),CountAction(ACEGameAction::MoveToState)>0);
                 TestFalse(TEXT("Failure releases forced position reporting"),Session->bForcePositionReporting);
-                Controller->PlayerTick(.016f);TestEqual(TEXT("Later ticks cannot repeat the failure"),ChargeErrors,1);
+                TickPlayer(.016f);TestEqual(TEXT("Later ticks cannot repeat the failure"),ChargeErrors,1);
             }
         }
         ResetApproach(FVector(2000,0,0));ReceiveApproach(15);ChargeErrors=0;
-        Controller->PredictedPose=UseTarget.Position;Controller->PlayerTick(.016f);
+        Controller->PredictedPose=UseTarget.Position;TickPlayer(.016f);
         TestEqual(TEXT("Arrival wins over charge distance at target"),ChargeErrors,0);
         ResetApproach(FVector(10000,0,0));ReceiveApproach(250);
         TestEqual(TEXT("Finite server limits above 100 are preserved"),Controller->ServerMoveToFailDistance,250.f);
@@ -1772,7 +1818,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
         TestBoom->DestroyComponent();
         Client->SendSetSingleCharacterOption(0x31,MouseTurningBefore);
         Pawn->SetActorTransform(StartTransform);Controller->PredictedPose=StartPose;
-        Controller->PlayerTick(.016f);
+        TickPlayer(.016f);
     }
     ACEInputBindings::Reload();
     for (uint32 Stance : {ACEMotion::StanceNonCombat,ACEMotion::StanceMagic})
@@ -1822,7 +1868,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             int32 Reversals=0, LastVertical=0, SeatPenetrations=0;
             for (int32 Frame=0;Frame<45;++Frame)
             {
-                Controller->PlayerTick(.016f);
+                TickPlayer(.016f);
                 const float Z=Pawn->GetActorLocation().Z-Capsule->GetScaledCapsuleHalfHeight();
                 const int32 Vertical=Z>PreviousZ+2?1:(Z<PreviousZ-2?-1:0);
                 if (Vertical && LastVertical && Vertical!=LastVertical) ++Reversals;
@@ -1859,8 +1905,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
     Pawn->SetActorLocation(YaraqFeet+FVector(0,0,Capsule->GetScaledCapsuleHalfHeight()));
     for (int32 Frame=0;Frame<30;++Frame)
     {
-        Controller->PlayerTick(.016f);
-        App->TickComponent(.016f,LEVELTICK_All,nullptr);
+        TickPlayer(.016f);
     }
     float YaraqGround=0;
     TestTrue(TEXT("Reported Yaraq floor can be sampled"),Dat->SampleOutdoorGroundZ(YaraqFeet.X,YaraqFeet.Y,100,YaraqGround));

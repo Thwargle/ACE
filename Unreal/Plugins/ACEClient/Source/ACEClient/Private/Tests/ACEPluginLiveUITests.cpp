@@ -472,6 +472,7 @@ bool FACETooltipCursorClearanceTest::RunTest(const FString&)
             {
                 Slate.SetApplicationScale(UIScale);Window->SlatePrepass(UIScale);
                 const FVector2D TipSize=Window->GetDesiredSizeDesktopPixels();
+                Window->Resize(TipSize); // Slate's 3D renderer skips windows with a zero native size.
                 for(float Scale:{.5f,1.f,2.f,3.f})
                 for(FVector2D Point:{FVector2D(WorkArea.Left+100,WorkArea.Top+100),
                     FVector2D(WorkArea.Right-100,WorkArea.Top+100),
@@ -492,6 +493,16 @@ bool FACETooltipCursorClearanceTest::RunTest(const FString&)
                     const FSlateRect CursorArt(Point,Point+FVector2D(Texture->GetSizeX(),Texture->GetSizeY())*Scale);
                     TestFalse(FString::Printf(TEXT("Final popup clears cursor art at scale %.1f UI %.1f (%.0f,%.0f)"),Scale,UIScale,Point.X,Point.Y),FSlateRect::DoRectanglesIntersect(Bounds,CursorArt));
                     TestTrue(TEXT("Final popup remains inside the monitor work area"),Bounds.Left>=WorkArea.Left&&Bounds.Top>=WorkArea.Top&&Bounds.Right<=WorkArea.Right&&Bounds.Bottom<=WorkArea.Bottom);
+                    TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);
+                    TestTrue(TEXT("Tooltip pixels can be read"),Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags));
+                    int32 TextPixels=0,FramePixels=0;
+                    for(const auto& Pixel:Pixels)
+                    {
+                        if(Pixel.R>160 && Pixel.G>160 && Pixel.B>160)++TextPixels;
+                        if(Pixel.R>100 && Pixel.G>60 && Pixel.R>Pixel.B*1.5f)++FramePixels;
+                    }
+                    TestTrue(TEXT("Repositioning preserves visible tooltip text"),TextPixels>40);
+                    TestTrue(TEXT("Repositioning preserves the gold tooltip frame"),FramePixels>40);
                 }
             }
             Tip->OnClosed();

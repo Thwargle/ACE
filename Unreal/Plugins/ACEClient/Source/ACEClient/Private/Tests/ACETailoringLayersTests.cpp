@@ -3,6 +3,8 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
+#include "Misc/FileHelper.h"
+#include "ImageUtils.h"
 #include "ACECharacterCreation.h"
 #include "ACESession.h"
 #include "ACEOpcodes.h"
@@ -111,6 +113,35 @@ bool FACETailoringLayersTest::RunTest(const FString&)
 
     FACECharacterCreation Creation; FString Error;
     if (!TestTrue(TEXT("Load retail clothing tables"),Creation.Load(Portal,Error))) return false;
+    // Standard ACE Asenala (49518): Empyrean / Geomancer, PinkPurple template.
+    FACEObjDesc Asenala; Asenala.PaletteBaseId=0x0400007E;
+    TestTrue(TEXT("Asenala's actual DAT clothing resolves"),Creation.ApplyClothing(0x100007BD,0x02001A10,82,0,Asenala));
+    FACEBuiltSetupMesh AsenalaMesh;
+    TestTrue(TEXT("Asenala builds with her server appearance"),Builder.BuildSetupWithAppearance(0x02001A10,Asenala,100.f,AsenalaMesh));
+    int32 Recolored=0;
+    if (AsenalaMesh.Parts.IsValidIndex(16))
+    {
+        const auto& Head=AsenalaMesh.Parts[16];
+        AddInfo(FString::Printf(TEXT("Asenala head %08X palette %08X"),Head.GfxObjId,Head.OriginalPaletteId));
+        for (const auto& Section:Head.Sections)
+        {
+            FACEDatDecodedSurface Old,Fixed;
+            Textures.ResolveSurfaceWithAppearance(Section.SurfaceId,16,&Asenala,Old);
+            Textures.ResolveSurfaceWithAppearance(Section.SurfaceId,16,&Asenala,Fixed,Head.OriginalPaletteId);
+            if (Old.Pixels!=Fixed.Pixels) ++Recolored;
+            if (Section.SurfaceId==0x080009D1)
+            {
+                for (int32 Pass=0;Pass<2;++Pass)
+                {
+                    const auto& Image=Pass?Fixed:Old;TArray64<uint8> Png;
+                    FImageUtils::PNGCompressImageArray(Image.Width,Image.Height,Image.Pixels,Png);
+                    FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/FString::Printf(TEXT("Asenala-head-%s.png"),Pass?TEXT("retail-palette"):TEXT("old"))));
+                }
+            }
+            AddInfo(FString::Printf(TEXT("Asenala head surface %08X palette %08X changed=%d"),Section.SurfaceId,Textures.GetOriginalPaletteId(Section.SurfaceId),Old.Pixels!=Fixed.Pixels));
+        }
+    }
+    TestTrue(TEXT("Asenala's secondary headgear surface receives the part palette"),Recolored>0);
     Creation.SelectHeritage(1); Creation.SelectSex(1);
     auto& Sex=Creation.Heritages[1].Sexes[1];
     // Local preview composition must preserve the creature palette just as

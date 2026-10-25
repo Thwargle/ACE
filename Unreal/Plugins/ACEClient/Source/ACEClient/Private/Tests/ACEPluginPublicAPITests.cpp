@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
@@ -65,6 +66,21 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
     TestTrue(TEXT("Custom ID owns native policy data"),H->PolicyPlugin()==P);H->RefreshAutomationData();
     C->OnChatMessage.Broadcast(TEXT("Quest message"),TEXT(""),ACEChatMessageType::System);
     auto Snapshot=H->PublicSnapshot(*P);
+    {
+        FACEClientPlugin Observer;Observer.Api=2;Observer.Companion=true;Observer.SelectiveSnapshot=true;
+        Observer.Permissions={TEXT("data")};Observer.SnapshotFields={TEXT("char_ints"),TEXT("health"),TEXT("character_name"),TEXT("action_serial")};
+        UACEPluginSubsystem::FCompanionReadBatch Batch;
+        TGuardValue<UACEPluginSubsystem::FCompanionReadBatch*> Guard(H->CompanionReadBatch,&Batch);
+        const auto Small=H->PublicSnapshot(Observer);
+        TestTrue(TEXT("Selective data exposes character qualities and action counter"),Small->HasField(TEXT("char_ints"))&&Small->HasField(TEXT("action_serial")));
+        TestEqual(TEXT("Selective data keeps requested health"),Small->GetNumberField(TEXT("health")),100.);
+        TestFalse(TEXT("Character observer never builds full gameplay data"),Batch.Data.IsValid());
+        TestFalse(TEXT("Unused inventory never crosses into Lua"),Small->HasField(TEXT("inventory")));
+        TestFalse(TEXT("Unused nearby objects never cross into Lua"),Small->HasField(TEXT("objects")));
+        TestTrue(TEXT("Events and capability envelope survive field selection"),Small->HasField(TEXT("events"))&&Small->HasField(TEXT("capabilities")));
+        Observer.Permissions.Reset();const auto Restricted=H->PublicSnapshot(Observer);
+        TestFalse(TEXT("Field requests cannot grant data permission"),Restricted->HasField(TEXT("char_ints"))||Restricted->HasField(TEXT("action_serial")));
+    }
     for(const TCHAR* Field:{TEXT("inventory"),TEXT("spells"),TEXT("skills"),TEXT("targets"),TEXT("corpses"),TEXT("vendor_stock"),TEXT("fellowship"),TEXT("it_objects"),TEXT("packs"),TEXT("chat_events"),TEXT("events"),TEXT("capabilities")})TestTrue(FString(TEXT("Public snapshot includes "))+Field,Snapshot->HasField(Field));
     TestEqual(TEXT("Chat independent of UCM"),Snapshot->GetArrayField(TEXT("chat_events")).Num(),1);
     for(int32 I=0;I<300;++I)C->OnChatMessage.Broadcast(FString::FromInt(I),TEXT(""),ACEChatMessageType::System);
@@ -78,6 +94,14 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
         TestEqual(TEXT("Public snapshot exposes remaining chat"),Batch->GetNumberField(TEXT("chat_pending")),double(300-QuestLine));
     }
     FString Error;TSharedPtr<FJsonObject> Output;
+    {
+        FACEWorldObject Pet=Rat;Pet.Guid=999;Pet.PetOwnerId=Session.PlayerGuid;
+        Session.WorldObjects.Add(Pet.Guid,Pet);
+        TestTrue(TEXT("Live owned pet suppresses another summon"),H->PublicSnapshot(*P)->GetBoolField(TEXT("owned_pet")));
+        Session.WorldObjects[Pet.Guid].PhysicsState|=ACEPhysicsState::NoDraw;
+        TestFalse(TEXT("Despawned pet awaiting delete no longer blocks summoning"),H->PublicSnapshot(*P)->GetBoolField(TEXT("owned_pet")));
+        Session.WorldObjects.Remove(Pet.Guid);
+    }
     {
         FACEPluginVM FilterScript;
         TestTrue(TEXT("Chat-filter Lua loads"),FilterScript.Load(TEXT("return function() return {chat_filters={{id='quests',contains=' solves (',sender='',chat_type=6,window=0,seconds=10}}} end"),Error));
@@ -300,7 +324,7 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
         TestTrue(TEXT("Default scrolling restored without replacing controls"),FindVisible(Panel,TEXT("PluginScroll"))&&FindVisible(Panel,TEXT("PluginControl.pagination_probe"))==RetainedInput);
         H->ApplyPublicOutput(*P,UI,Error);
         {
-            auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();TestTrue(TEXT("Inventory icon test loads DAT artwork"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
+            auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();TestTrue(TEXT("Inventory icon test loads DAT artwork"),Dat->LoadDatDirectory(ACETestDatDirectory()));
             FACESupplyEntry Item;Item.Icon=0x06004CF7;Item.ItemType=ACEItemType::Container;Item.Overlay=0x06006C37;Item.Underlay=0x060010F9;Item.Effects=1;
             auto Row=MakeShared<FJsonObject>();Row->SetStringField(TEXT("id"),TEXT("inventory_icon"));Row->SetStringField(TEXT("type"),TEXT("item_icon"));
             Row->SetNumberField(TEXT("icon"),uint32(Item.Icon));Row->SetNumberField(TEXT("item_type"),uint32(Item.ItemType));Row->SetNumberField(TEXT("overlay"),uint32(Item.Overlay));Row->SetNumberField(TEXT("effects"),Item.Effects);

@@ -14,6 +14,9 @@ void ACEPolygonMeshBuilder::Append(const TMap<uint16, FACEDatPolygon>& Polygons,
     TMap<uint32, FACEDatDecodedSurface> PartSurfaces;
     TSet<uint32> FailedSurfaces;
     const bool bDefaultSurface = !Appearance || !Appearance->HasSurfaceOverrides(PartIndex);
+    uint32 PartPaletteId = 0;
+    if (!bDefaultSurface && Textures) for (uint32 Surface : Surfaces)
+        if ((PartPaletteId = Textures->GetOriginalPaletteId(Surface)) != 0) break;
     for (const auto& Pair : Polygons)
     {
         const FACEDatPolygon& Poly = Pair.Value;
@@ -45,7 +48,7 @@ void ACEPolygonMeshBuilder::Append(const TMap<uint16, FACEDatPolygon>& Polygons,
             if (!Decoded && Textures && !FailedSurfaces.Contains(SurfaceId))
             {
                 FACEDatDecodedSurface Surface;
-                if (Textures->ResolveSurfaceWithAppearance(SurfaceId, PartIndex, Appearance, Surface))
+                if (Textures->ResolveSurfaceWithAppearance(SurfaceId, PartIndex, Appearance, Surface, PartPaletteId))
                     Decoded = &PartSurfaces.Add(SurfaceId, MoveTemp(Surface));
                 else FailedSurfaces.Add(SurfaceId);
             }

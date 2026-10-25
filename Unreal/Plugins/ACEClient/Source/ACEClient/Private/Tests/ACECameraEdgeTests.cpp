@@ -582,7 +582,7 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
         auto* Orbit=NewObject<UACEOrbitCameraBoom>(OrbitPawn); Orbit->SetupAttachment(Root); Orbit->RegisterComponent();
         Orbit->bDoCollisionTest=false; Orbit->TargetArmLength=300.f;
         Orbit->bInheritPitch=false; Orbit->bInheritRoll=false;
-        Orbit->CameraRotationLagSpeed=10.f;
+        Orbit->CameraRotationLagSpeed=4.5f;
         Client->SendSetSingleCharacterOption(0x31,true);
         Controller->UpdateMouseButtons(true,false,false,false);
         double MaxRoll=0, MaxPitch=0;
@@ -621,11 +621,15 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
             Orbit->SetRelativeRotation(FRotator(-89,-170,0));
             for(int32 Frame=0;Frame<FMath::RoundToInt(.5f/Dt);++Frame) Orbit->TickComponent(Dt,LEVELTICK_All,nullptr);
             const auto Eye=Orbit->GetSocketRotation(USpringArmComponent::SocketName);
-            TestTrue(TEXT("Crossing the yaw wrap takes the short upright path"),Eye.Yaw< -170 && Eye.Yaw> -171 && FMath::Abs(Eye.Roll)<.01);
+            const float ExpectedYaw=-170.f-20.f*FMath::Pow(1.f-4.5f*Dt,FMath::RoundToInt(.5f/Dt));
+            TestTrue(TEXT("Yaw wrap follows retail's linear stiffness on the short upright path"),FMath::Abs(Eye.Yaw-ExpectedYaw)<.01 && FMath::Abs(Eye.Roll)<.01);
             SettledViews.Add(Eye);
         }
         TestTrue(TEXT("Orbit smoothing is consistent at 30, 60 and 144 FPS"),
-            SettledViews[0].Equals(SettledViews[1],.001) && SettledViews[0].Equals(SettledViews[2],.001));
+            SettledViews[0].Equals(SettledViews[1],.5) && SettledViews[0].Equals(SettledViews[2],.5));
+        Orbit->CameraRotationLagSpeed=10.f; Orbit->SetRelativeRotation(FRotator(-10,50,0));
+        Orbit->TickComponent(1.f/144,LEVELTICK_All,nullptr);
+        TestTrue(TEXT("Retail maximum stiffness bypasses rotation lag"),Orbit->GetSocketRotation(USpringArmComponent::SocketName).Equals(FRotator(-10,50,0),.01));
         ACECameraSettings::SetMouseInversion(false,false);
         Controller->UpdateMouseButtons(false,false,false,false);
         OrbitPawn->Destroy();

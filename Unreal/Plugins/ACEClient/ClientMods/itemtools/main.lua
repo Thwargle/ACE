@@ -38,7 +38,8 @@ local function issue(s,p,action,item,amount,target,kind)
   local recipient=find(s.it_objects,target)
   pending.recipient_name=recipient and recipient.name
  end
- local r=status((action=='it_give' and 'Giving ' or action=='it_buy' and 'Buying ' or action=='it_sell' and 'Selling ' or action=='it_pickup' and 'Taking ' or action=='it_split' and 'Splitting ' or action=='it_key' and 'Unlocking with ' or 'Opening ')..(item and item.name or 'chest'),action)
+ if action=='it_merge' then pending.target_before=find(s.inventory,target).count end
+ local r=status((action=='it_give' and 'Giving ' or action=='it_buy' and 'Buying ' or action=='it_sell' and 'Selling ' or action=='it_pickup' and 'Taking ' or action=='it_merge' and 'Merging ' or action=='it_split' and 'Splitting ' or action=='it_key' and 'Unlocking with ' or 'Opening ')..(item and item.name or 'chest'),action)
  r.item=item and item.id;r.amount=amount;r.target=target;r.vendor=s.vendor;r.delay_ms=p.delay_ms or 250
  return r
 end
@@ -111,6 +112,12 @@ return function(s,p)
   -- Quest NPCs can consume one unit even when offered a whole stack.
   -- Confirm only the amount actually removed; keep its remainder queued.
   if q.kind=='it_give' then done=given>0
+  elseif q.kind=='it_merge' then
+   local target=find(inv,q.target)
+   -- Both inventory receipts are required, in either order. UseDone and an
+   -- unrelated stack update cannot start another merge using stale counts.
+   done=target and target.wcid==q.wcid and target.count==q.target_before+q.amount
+    and (not i or i.wcid==q.wcid) and (i and i.count or 0)==q.before-q.amount
   elseif q.kind=='it_sell' then done=not i or (i.count or 1)<=q.before-q.amount
   elseif q.kind=='it_buy' or q.kind=='it_pickup' then done=count(inv,q.name,q.wcid)>=q.owned+q.amount
   elseif q.kind=='it_split' then
@@ -151,7 +158,7 @@ return function(s,p)
     end end
    end
    pending=nil;next_at=s.time+math.max(0,math.min(5000,p.delay_ms or 250))/1000
-  elseif (s.it_failure_serial or 0)~=q.failure_serial and s.it_failure_item==q.id then
+  elseif (s.it_failure_serial or 0)~=q.failure_serial and (s.it_failure_item==q.id or (q.kind=='it_merge' and s.it_failure_item==q.target)) then
    local err=s.it_failure_error or 0
    -- ACE sends an item-specific rejection (often error 0) while an NPC
    -- finishes its reward emotes, without a UseDone. Retry only explicit
@@ -176,6 +183,31 @@ return function(s,p)
  end
  if split and split.id then local i=find(inv,split.id);split=nil;if not usable(i) then return stop('Split item changed; sale cancelled.') end;return issue(s,p,'it_sell',i,i.count,s.vendor) end
  local mode=p.mode or 'give'
+ if mode=='merge' then
+  -- Keep full stacks intact. Fill the fullest partial stack from the smallest
+  -- matching one, then rebuild from server-confirmed inventory on the next step.
+  local partial={}
+  for _,i in ipairs(inv) do
+   if usable(i) and (i.wcid or 0)>0 and (i.max_stack or 0)>1
+    and (i.count or 0)>0 and i.count<i.max_stack then partial[#partial+1]=i end
+  end
+  table.sort(partial,function(a,b)
+   if a.wcid~=b.wcid then return a.wcid<b.wcid end
+   if a.count~=b.count then return a.count>b.count end
+   return a.id<b.id
+  end)
+  local first=1
+  while first<#partial do
+   local last=first
+   while last<#partial and partial[last+1].wcid==partial[first].wcid do last=last+1 end
+   if last>first then
+    local target,source=partial[first],partial[last]
+    return issue(s,p,'it_merge',source,math.min(source.count,target.max_stack-target.count),target.id)
+   end
+   first=last+1
+  end
+  return stop('Merge complete: '..operations..' confirmed merges.')
+ end
  if mode=='give' or mode=='profile' then
   local target,isplayer=give_target(s,p,'target');if not target then return stop('Select a nearby recipient (within 5 m).') end
   if not queue then

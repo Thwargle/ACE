@@ -1179,6 +1179,20 @@ void UACECharacterAppearanceComponent::SetRemoteWalkingFrame(const ACEWalkingMot
 	AnimTime = CycleTime >= 0.f ? CycleTime : AnimTime + CycleSeconds * LocomotionPlayRate;
 }
 
+void UACECharacterAppearanceComponent::SetTurnInput(float Turn)
+{
+	if (FMath::Sign(Turn)!=FMath::Sign(LocomotionTurn) && AnimMode==EACEAnimMode::Locomotion
+		&& FMath::IsNearlyZero(LocomotionForward) && FMath::IsNearlyZero(LocomotionStrafe))
+	{ AnimTime=0.f; ResetHookTracking(); }
+	LocomotionTurn=Turn;
+}
+
+bool UACECharacterAppearanceComponent::IsMovementLockedByAction() const
+{
+	return AnimMode==EACEAnimMode::ActionOneShot && !bHoldActionFinal
+		&& (ACEAttackMotion::IsAction(ActionCommand) || (ActionCommand&0xFF000000u)==0x80000000u);
+}
+
 void UACECharacterAppearanceComponent::SetLocomotionInput(float Forward, float Strafe, bool bRunning, float PlayRate, bool bInterpretedRate)
 {
 	if (AnimMode == EACEAnimMode::DoorTransition)
@@ -1197,13 +1211,19 @@ void UACECharacterAppearanceComponent::SetLocomotionInput(float Forward, float S
 	SetComponentTickEnabled(true);
 	}
 	if (!bWalkingTransitionsEnabled || bVRPoseControlled || bInterpretedRate
-		|| AnimMode != EACEAnimMode::Locomotion || (bRunning && !FMath::IsNearlyZero(Forward)))
+		|| AnimMode != EACEAnimMode::Locomotion)
 		WalkingMotion.Reset();
 	else if (UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr)
 		if (auto* Dat = GI->GetSubsystem<UACEDatSubsystem>())
-			WalkingMotion.SetDirection(FMath::IsNearlyZero(Forward) ? 0 : Forward > 0.f ? 1 : -1,
+			WalkingMotion.SetDirection(FMath::IsNearlyZero(Forward) ? 0 : Forward < 0.f ? -1 : bRunning ? 2 : 1,
 				[&](int8 From, int8 To, ACEWalkingMotion::FLink& Link)
-				{ return Dat->BuildWalkingLink(MotionTableId, From, To, PreferredStyle, Link); });
+				{
+					if (!Dat->BuildWalkingLink(MotionTableId, From, To, PreferredStyle, Link)) return false;
+					const float Scale = To ? FMath::Max(.05f,PlayRate) : 1.f;
+					for (auto& Clip:Link.Clips) Clip.Framerate*=Scale;
+					for (auto& Key:Link.Root.Keys) Key.Time/=Scale;
+					return true;
+				});
 	// CMotionTable replaces the previous cyclic sequence at its starting frame.
 	// This applies to forward movement as well as sidesteps: repeated short nav
 	// segments otherwise spend most of their travel blending out of idle.
@@ -1305,11 +1325,11 @@ void UACECharacterAppearanceComponent::SetPreferredStyle(int32 Style)
 	PoseBlendDuration = StanceBlendDuration;
 	const uint32 PreviousStyle = PreferredStyle;
 	PreferredStyle = Expanded;
-	if (PreviousStyle != 0 && (ACEIsLauncherStyle(PreviousStyle) || ACEIsLauncherStyle(Expanded))
+	if (PreviousStyle != 0
 		&& AnimMode != EACEAnimMode::DoorTransition && ActionCommand != ACEMotion::Dead)
 	{
-		// Retail changes style through its authored linkage before entering the
-		// new Ready cycle. Cross-fading directly to drawn-bow Ready skips this.
+		// Every stance change uses its authored linkage, including sheathing
+		// melee weapons. The linkage owns the pause before the next Ready cycle.
 		PlayActionMotion(Expanded, 1.f, PreviousStyle, false);
 	}
 }
@@ -2552,6 +2572,8 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 			bOk = Evaluate(WalkForward, AnimTime, Animated, AnimatedCount, true, &Hooks);
 		}
 	}
+	if (!bMoving && !FMath::IsNearlyZero(LocomotionTurn))
+		bOk = Evaluate(ACEMotion::TurnRight, AnimTime*LocomotionTurn, Animated, AnimatedCount, true, &Hooks);
 	if (!bOk)
 	{
 		const uint64 IdleTrackKey = (5ull << 60) | static_cast<uint32>(MotionTableId)

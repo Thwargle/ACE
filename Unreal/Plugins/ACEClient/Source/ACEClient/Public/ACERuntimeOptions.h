@@ -22,6 +22,7 @@ inline constexpr FOption Values[] = {
  {TEXT("ObjectGlow"),TEXT("Custom object highlighting"),1,0,1},
  {TEXT("ConstrainUIWindows"),TEXT("Keep UI windows on screen"),1,0,1},
  {TEXT("DynamicLightingQuality"),TEXT("Dynamic lights"),2,0,2},
+ {TEXT("CameraAlignToSlope"),TEXT("Align camera to slope"),1,0,1},
  {TEXT("EffectLightLimit"),TEXT("Effect light limit"),8,0,64}
 };
 ACECLIENT_API float Get(const TCHAR* Key);

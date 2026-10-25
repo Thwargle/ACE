@@ -42,6 +42,7 @@ struct FACEBuiltSetupLevel : FACEDatGfxLevel
 
 struct FACEBuiltSetupPart
 {
+	uint32 OriginalPaletteId = 0;
 	uint32 GfxObjId = 0;
 	uint32 DrawMode = 1;
 	FVector SortCenter = FVector::ZeroVector;

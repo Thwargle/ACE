@@ -96,7 +96,8 @@ public:
 	bool ResolveSurfaceRenderFlags(uint32 SurfaceId, FACEDatSurfaceRenderFlags& Out);
 	/** Per-resolver diagnostic; worker resolvers own their counters. */
 	uint64 GetSurfaceResolveCount() const { return SurfaceResolveCount; }
-	bool ResolveSurfaceWithAppearance(uint32 SurfaceId, int32 PartIndex, const FACEObjDesc* Appearance, FACEDatDecodedSurface& Out);
+	uint32 GetOriginalPaletteId(uint32 SurfaceId) const;
+	bool ResolveSurfaceWithAppearance(uint32 SurfaceId, int32 PartIndex, const FACEObjDesc* Appearance, FACEDatDecodedSurface& Out, uint32 PartPaletteId = 0);
 	/** Surface DIDs are 0x08...; bit 30 distinguishes tiled geometry from clamped cards.
 	 * Bit 31 remains reserved for direct UI images in the same texture cache. */
 	static uint32 WorldTextureKey(uint32 SurfaceId, bool bWrapTexture) { return SurfaceId | (bWrapTexture ? 0x40000000u : 0u); }
@@ -131,7 +132,7 @@ public:
 	/** Drop world/UI runtime UTextures (not sky) so DXT transients are rebuilt as RGBA. */
 	void DiscardNonSkyRuntimeTextures();
 	/** Drop cached Surface decode results (e.g. after FullyTransparent rules change). */
-	void InvalidateSurfaceCache() { SurfaceCache.Reset(); }
+	void InvalidateSurfaceCache() { SurfaceCache.Reset(); OriginalPaletteCache.Reset(); }
 	/**
 	 * LRU-evict world/UI UTextures and decoded SurfaceCache entries. Recently used
 	 * entries stay. SkyTextureObjects are never evicted (always on camera).
@@ -196,6 +197,7 @@ private:
 	FACEDatDatabase* HighRes = nullptr;
 	UObject* GcOwner = nullptr;
 	TMap<uint32, FACEDatDecodedSurface> SurfaceCache;
+	mutable TMap<uint32, uint32> OriginalPaletteCache;
 	TMap<uint32, TObjectPtr<UTexture2D>> TextureObjects;
 	TMap<uint32, TObjectPtr<UTexture2D>> IconTextureObjects;
 	TMap<uint32, double> IconLastUsed;

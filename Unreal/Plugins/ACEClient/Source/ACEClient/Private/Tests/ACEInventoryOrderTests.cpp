@@ -101,7 +101,29 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
         Session.TradeSelfItems.Add(501); Send(500,100,3); Session.TradeSelfItems.Reset();
         Session.WorldObjects[501].StackSize=95; Send(500,100,3);
         Session.WorldObjects[501].StackSize=50; Session.WorldObjects[500].ContainerId=100;
-        Send(500,10,0); // Explicitly rearranging an owned stack must not merge it.
+        auto Merge=[&](int32 Container)
+        {
+            Session.CachedC2SPackets.Reset();Session.SendPutItemInContainer(500,Container,0);
+            uint32 Sequence=0;for(const auto& P:Session.CachedC2SPackets)Sequence=FMath::Max(Sequence,P.Key);
+            if(!TestTrue(TEXT("Bag transfer sends an action"),Sequence!=0))return;
+            FACEBinaryReader R(Session.CachedC2SPackets[Sequence].Payload);R.Skip(24);
+            TestEqual(TEXT("Moving an owned stack to another bag auto-merges"),R.ReadUInt32(),ACEGameAction::StackableMerge);
+            TestEqual(TEXT("Owned merge source"),R.ReadUInt32(),500u);
+            TestEqual(TEXT("Owned merge destination"),R.ReadUInt32(),501u);
+            TestEqual(TEXT("Owned merge amount"),R.ReadUInt32(),12u);
+        };
+        Merge(10);
+        TestEqual(TEXT("Auto-merge does not predict source containment"),Session.WorldObjects[500].ContainerId,100);
+        Session.WorldObjects[500].ContainerId=10;Send(500,10,1); // Reordering within a bag stays a move.
+        TestEqual(TEXT("A same-bag partial split is not auto-merged"),Session.FindContainerMergeTarget(500,10,7),0);
+        Send(500,20,0); // Matching items in another bag are outside this destination.
+        Session.WorldObjects[500].ContainerId=100;
+        Session.TradeSelfItems.Add(10);Send(500,10,0);Session.TradeSelfItems.Reset();
+        Session.WorldObjects[501].StackSize=95;Send(500,10,0);
+        TestEqual(TEXT("A selected portion may fit when the whole stack does not"),Session.FindContainerMergeTarget(500,10,5),501);
+        TestEqual(TEXT("Auto-merge requires room for all selected units"),Session.FindContainerMergeTarget(500,10,6),0);
+        Session.WorldObjects[501].StackSize=50;
+        Session.TradePartnerItems.Add(501);Send(500,10,0);Session.TradePartnerItems.Reset();
         for(int Id:{499,500,501}) Session.WorldObjects.Remove(Id);
     }
     Send(3,100,0); Send(2,100,0);

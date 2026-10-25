@@ -850,7 +850,7 @@ void UACEUIElementManager::ApplyFloatyResizeLayout(const TSharedPtr<FACEUIElemen
 					Sub->Height = FMath::Max(32, Child->Height - Sub->Y - 4);
 				else if (N == TEXT("ItemExamBackground_Divider_Lower")) Sub->Y = Child->Height - 79;
 				else if (N == TEXT("ItemExamBackground_Paper") || N == TEXT("ItemInscriptionText")) Sub->Y = Child->Height - 74;
-				else if (N == TEXT("ItemSignatureText")) Sub->Y = Child->Height - 17;
+				else if (N == TEXT("ItemInscriptionSignatureText")) Sub->Y = Child->Height - 17;
 				else if (N == TEXT("BasicCreatureExamBackground")) Sub->Height = Child->Height;
 				else if (N == TEXT("BasicCreatureExam_ExtraInfo")) Sub->Height = FMath::Max(1, Child->Height - Sub->Y);
 			}

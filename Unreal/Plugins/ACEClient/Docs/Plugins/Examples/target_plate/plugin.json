@@ -1,0 +1,10 @@
+{
+  "api": 2,
+  "mode": "companion",
+  "id": "target_plate_example",
+  "name": "Target Plate Example",
+  "version": "1.0.0",
+  "description": "Object-attached target details and locally confirmed debuff timers.",
+  "permissions": ["ui", "markers"],
+  "presentation": {"controls": "toggle", "settings": false}
+}
