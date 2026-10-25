@@ -23,9 +23,14 @@ DECLARE_CYCLE_STAT_EXTERN(TEXT("Sky world lighting"), STAT_ACESkyLighting, STATG
 
 DECLARE_CYCLE_STAT_EXTERN(TEXT("Player movement / input"), STAT_ACEPlayer, STATGROUP_ACE, ACECLIENT_API);
 
+DECLARE_CYCLE_STAT_EXTERN(TEXT("DAT cache maintenance"), STAT_ACEDatMaintenance, STATGROUP_ACE, ACECLIENT_API);
+DECLARE_CYCLE_STAT_EXTERN(TEXT("Effect script hooks"), STAT_ACEEffectScripts, STATGROUP_ACE, ACECLIENT_API);
+DECLARE_CYCLE_STAT_EXTERN(TEXT("Particle simulation/presentation"), STAT_ACEEffectSimulation, STATGROUP_ACE, ACECLIENT_API);
+DECLARE_CYCLE_STAT_EXTERN(TEXT("Shared effect lights"), STAT_ACEEffectLights, STATGROUP_ACE, ACECLIENT_API);
+DECLARE_CYCLE_STAT_EXTERN(TEXT("Particle render submissions"), STAT_ACEParticleUpload, STATGROUP_ACE, ACECLIENT_API);
 namespace ACEProfiling
 {
-enum class EScope : uint8 { Network,World,Terrain,Visibility,Remote,Animation,Appearance,Effects,HUD,Sky,SkyFog,SkyLighting,Player,Plugins,PluginSnapshot,PluginLua,Count };
+enum class EScope : uint8 { Network,World,Terrain,Visibility,Remote,Animation,Appearance,Effects,HUD,Sky,SkyFog,SkyLighting,Player,Plugins,PluginSnapshot,PluginLua,DatMaintenance,EffectScripts,EffectSimulation,EffectLights,ParticleUpload,Count };
 // Fixed storage, no history or per-frame allocation. These are inclusive CPU
 // times; nested categories must not be added together as a total frame time.
 struct FFrameCosts

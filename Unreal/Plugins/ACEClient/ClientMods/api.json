@@ -6,6 +6,22 @@
     "callbacks_per_frame": 1
   },
   "services": {
+    "content": {
+      "api": 2,
+      "permission": "admin_content",
+      "operations": {
+        "command": {"fields": ["text", "target"], "rate_seconds": 1, "result": "command queued; server response arrives in chat"},
+        "list": {"fields": ["kind", "format", "filter", "offset"], "page_size": 128, "result": ["root", "files", "total"]},
+        "edit": {"fields": ["name"], "formats": ["json", "sql"]}
+      },
+      "kinds": ["weenies", "landblocks", "quests", "recipes"],
+      "commands": ["create", "ci", "createinst", "getinfo", "nudge", "rotate", "removeinst", "addenc", "removeenc", "delete", "import-json", "import-sql", "export-json", "export-sql", "loc", "myloc", "clearcache", "reload-landblock", "fetchstring content_folder"],
+      "target_commands": ["getinfo", "nudge", "rotate", "removeinst", "removeenc", "delete"],
+      "folder_button_action": "content_folder",
+      "folder_event": {"type": "content_root", "root": "user chosen absolute folder"},
+      "default_folder": "ClientMods/Content",
+      "server_authority": "ACE enforces developer/admin access; imports read the server content_folder"
+    },
     "local_cosmetics": {
       "api": 1,
       "platforms": [
@@ -68,6 +84,8 @@
       "state",
       "ui",
       "markers",
+      "terrain",
+      "admin_content",
       "waypoint",
       "messaging",
       "commands"
@@ -82,6 +100,7 @@
       "target_details",
       "confirmed_target_effects",
       "world_plates",
+      "terrain_overlay",
       "waypoint_map_markers",
       "waypoint_target",
       "local_messages",
@@ -128,6 +147,8 @@
       "state",
       "ui",
       "markers",
+      "terrain",
+      "admin_content",
       "waypoint",
       "messaging",
       "commands",
@@ -146,6 +167,7 @@
       "chat_filters",
       "markers",
       "world_plates",
+      "terrain_overlay",
       "messages",
       "requests",
       "profile_patch",
@@ -154,22 +176,31 @@
     ],
     "target_snapshot": {
       "selection": "Selected object details, or null; no assessment requests are generated",
-      "tracked_targets": "Object details keyed by decimal GUID string: selection and objects with active confirmed timers",
+      "tracked_targets": "Object details keyed by decimal GUID string: selection, active plate targets, and objects with active confirmed timers",
       "target_effects": "Arrays keyed by decimal GUID string: spell, icon, remaining, duration, source=own_confirmed_cast",
-      "object_fields": ["id", "name", "wcid", "item_type", "object_type", "monster", "dead", "weenie_type", "creature_type", "creature_class", "title", "level", "pk_status", "vitals"],
+      "object_fields": ["id", "name", "wcid", "item_type", "object_type", "monster", "dead", "weenie_type", "creature_type", "creature_class", "title", "level", "pk_status", "assessment_age", "vitals"],
       "unknown_fields": "Omitted, including raw weenie_type unless assessment property 9007 was received",
       "vitals": "health/stamina/mana objects with current/max, or health fraction/max after a newer percent-only update"
     },
     "world_plates": {
       "permissions": ["ui", "markers"],
       "output": "world_plates",
-      "fields": ["id", "name", "role", "level", "color", "selection_only", "vitals", "effects"],
+      "fields": ["id", "name", "role", "level", "color", "selection_only", "refresh", "vitals", "effects"],
       "selection_only_default": true,
+      "refresh_default": true,
+      "refresh": "Background assessments share one request per second globally, alternate seconds with running automation; no QueryHealth selection changes. Unknown or denied fields remain absent.",
       "max_plates": 4,
       "max_effects_per_plate": 16,
       "effects": "spell (optional), icon (0x06xxxxxx DAT ID), remaining (0..86400 seconds)",
       "lifecycle": "Omission retains; empty array clears; stop, disable, logout, reload and GUID removal clear",
       "rendering": "Native actor attachment every frame, including stereo VR; no collision or input capture"
+    },
+    "terrain_overlay": {
+      "permission": "terrain",
+      "fields": ["slopes", "water", "radar", "dungeon", "opacity", "range", "brightness", "slope_color", "water_color", "radar_color", "light_color"],
+      "limits": {"opacity":[0,0.8],"range_m":[24,192],"brightness":[0,1],"rgb":[0,1],"cached_blocks":9,"mesh_hz":2,"global_surfaces":1},
+      "lifecycle": "Omission retains; empty object clears; stop, disable, logout, portal transitions and world changes release effects",
+      "source": "Loaded DAT terrain and native retail slope, water and radar rules. No new terrain loads or collision scans. Local visual aid only."
     },
     "ui_controls": [
       "text",
@@ -240,7 +271,7 @@
       ]
     },
     "limits": {
-      "lua_heap_bytes": 8388608,
+      "lua_heap_bytes": 33554432,
       "instructions_per_callback": 250000,
       "ui_controls": 256,
       "ui_roots": 128,

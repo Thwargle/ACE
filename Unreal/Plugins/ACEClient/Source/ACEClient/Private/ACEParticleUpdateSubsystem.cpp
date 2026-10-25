@@ -1,4 +1,5 @@
 #include "ACEParticleUpdateSubsystem.h"
+#include "ACEProfiling.h"
 #include "ACEParticleBatchComponent.h"
 #include "Async/ParallelFor.h"
 #include "Engine/World.h"
@@ -49,6 +50,7 @@ void UACEParticleUpdateSubsystem::OnWorldPostActorTick(UWorld* World,ELevelTick 
 
 void UACEParticleUpdateSubsystem::FlushPending()
 {
+	ACE_PROFILE_SCOPE(ParticleUpload);
 	check(IsInGameThread());
 	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_WorldParticleUpdates);
 	TArray<UACEParticleBatchComponent*,TInlineAllocator<128>> Work;

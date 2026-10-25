@@ -10,6 +10,7 @@
 #include "Mods/ACELedger.h"
 #include "Mods/ACEPluginLocalService.h"
 #include "Mods/ACEPluginWorldPlate.h"
+#include "Mods/ACEPluginTerrain.h"
 #include "ACEPluginSubsystem.generated.h"
 
 class FACEPluginVM;
@@ -83,6 +84,7 @@ struct FACEClientPlugin
     TArray<TSharedPtr<FJsonValue>> PanelRows, PluginEvents;
     TArray<FACEPluginMarker> Markers;
     TArray<FACEPluginWorldPlate> WorldPlates;
+    FACEPluginTerrain Terrain;
     uint32 WorldPlateRevision=0;
     uint64 ChatCursor=0;
     TArray<FACEPluginChatFilter> ChatFilters;
@@ -109,6 +111,7 @@ UCLASS()
 class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
 {
     GENERATED_BODY()
+    friend class FACEFoundryTest;
     friend class FACEPluginHostTest;
     friend class FACEUIWorkloadTest;
     friend class FACEUCMIdleWorkloadTest;
@@ -117,6 +120,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEPluginWorldPlateTest;
     friend class UACEPluginWorldPlateComponent;
     friend class FACEThirdEyeTest;
+    friend class FACEDerethLensTest;
     friend class FACEPluginPublicAPITest;
     friend class FACEPluginEquipmentTest;
     friend class FACEPluginRequestsTest;
@@ -367,6 +371,23 @@ private:
     void DrawPluginMarkers();
     void AddTargetDetails(const TSharedPtr<FJsonObject>& Snapshot);
     void UpdatePluginWorldPlates();
+    void RefreshPlateAppraisals();
+    TArray<int32> ActivePlateTargets() const;
+    FString ContentRoot(const FACEClientPlugin& Plugin) const;
+    bool ChooseContentFolder(FACEClientPlugin& Plugin,FString& Error);
+    bool ContentService(FACEClientPlugin& Plugin,const TSharedPtr<FJsonObject>& Request,const TSharedPtr<FJsonObject>& Reply,FString& Error);
+    void UpdatePluginTerrain();
+    void ClearPluginTerrain();
+    double NextTerrainBuild=0, NextPlateAppraisal=0;
+    FACEPluginTerrain TerrainBuiltSettings;
+    FVector TerrainBuiltOrigin=FVector::ZeroVector;
+    uint64 TerrainBuiltRevision=0;
+    bool TerrainGeometryValid=false, RadarGeometryValid=false, TerrainBuiltIndoors=false, RadarBuiltIndoors=false;
+    uint32 TerrainGeometryBuilds=0, RadarGeometryBuilds=0;
+    UPROPERTY(Transient) TObjectPtr<AActor> TerrainOverlayActor;
+    UPROPERTY(Transient) TObjectPtr<class UProceduralMeshComponent> TerrainOverlayMesh;
+    UPROPERTY(Transient) TObjectPtr<class UProceduralMeshComponent> TerrainRadarMesh;
+    UPROPERTY(Transient) TObjectPtr<class UPostProcessComponent> TerrainDungeonLight;
     void ClearPluginTarget(int32 Guid);
     struct FTargetHealthSample { float Fraction=0; double ReceivedAt=0; };
     TMap<int32,FTargetHealthSample> TargetHealthSamples;

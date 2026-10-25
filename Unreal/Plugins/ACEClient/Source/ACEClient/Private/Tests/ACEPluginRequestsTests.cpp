@@ -577,15 +577,29 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             TestFalse(TEXT("Wall / closed door blocks low, middle and high monster sight despite ignoring Camera"),Sight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,Height)));
         Obstacle->SetCollisionResponseToChannel(ECC_Pawn,ECR_Ignore);
         TestTrue(TEXT("Open door immediately restores sight"),Sight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120)));
+        Obstacle->SetCollisionResponseToChannel(ECC_Pawn,ECR_Block);
+        Wall->SetActorLocation(Origin+FVector(-500,305,200));
+        TestTrue(TEXT("Center ray can clear a wall corner by five centimetres"),Sight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120)));
+        TestFalse(TEXT("Finite firing corridor rejects a grazing corner"),Sight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120),15.f));
+        Wall->SetActorLocation(Origin+FVector(-500,330,200));
+        TestTrue(TEXT("Adequate corner clearance allows the shot"),Sight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120),15.f));
         Wall->Destroy();
         auto* Room=World->SpawnActor<AACEEnvCellActor>();
         Room->SetActorLocation(Origin+FVector(-500,0,0));
-        Room->CellMesh->CreateMeshSection(0,{FVector(0,-300,0),FVector(0,300,0),FVector(0,0,400)},
-            {0,1,2},TArray<FVector>(),TArray<FVector2D>(),TArray<FColor>(),TArray<FProcMeshTangent>(),false);
+        Room->CellMesh->CreateMeshSection(0,{FVector(0,-300,0),FVector(0,300,0),FVector(0,300,400),FVector(0,-300,400)},
+            {0,1,2,0,2,3},TArray<FVector>(),TArray<FVector2D>(),TArray<FColor>(),TArray<FProcMeshTangent>(),false);
         Room->SetActorHiddenInGame(true);Room->CellMesh->SetVisibility(false);
         Room->CellMesh->SetMeshSectionVisible(0,false);
         FACEPluginSightQuery HiddenSight(*World,nullptr);
         TestFalse(TEXT("Culled room wall without cooked collision still blocks combat"),HiddenSight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120)));
+        Room->SetActorLocation(Origin+FVector(-500,305,0));
+        TestTrue(TEXT("Uncooked corner clears the center ray"),HiddenSight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120)));
+        TestFalse(TEXT("Hidden uncooked wall edges block the full firing corridor"),HiddenSight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120),15.f));
+        Room->SetActorScale3D(FVector(1,2,.5));Room->SetActorLocation(Origin+FVector(-500,605,0));
+        TestFalse(TEXT("Nonuniformly scaled room edges retain world-space clearance"),HiddenSight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120),15.f));
+        Room->SetActorLocation(Origin+FVector(-500,630,0));
+        TestTrue(TEXT("Cleared uncooked wall allows the full corridor"),HiddenSight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120),15.f));
+        TestTrue(TEXT("Low target corridor stays clear of its supporting floor"),HiddenSight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,10),3.f));
         Room->Destroy();
     }
     // Exercise real snapshot -> Lua -> controller dispatch. The policy-only
@@ -1185,6 +1199,46 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             P->NextAction=0;const int32 Before=CastCount();H->Execute(*P,AttackSpell);
             TestEqual(TEXT("Real hostile creatures still require line of sight"),CastCount(),Before);
             TestTrue(TEXT("Occluded monster rejection does not start a cast"),!H->PendingSpell&&P->Status.Contains(TEXT("obstruction")));
+            // A walking rat can turn a corner between sparse F748 positions.
+            // Keep the packet in the open while its actual body is behind the wall.
+            auto* Rat=World->SpawnActor<AACEWorldEntityActor>();
+            Rat->InitializeFromObject(Monster,100.f,false);
+            ON_SCOPE_EXIT {Rat->Destroy();};
+            Session.WorldObjects[Monster.Guid].Position=Session.PlayerPosition;
+            Session.WorldObjects[Monster.Guid].Position.Location.Y+=10;
+            const auto& Stale=Session.WorldObjects[Monster.Guid];
+            TestFalse(TEXT("Combat sight follows the rat behind the corner, not its stale network position"),H->HasClearCombatSight(Stale));
+            auto TargetSight=[&]()
+            {
+                auto Snapshot=H->Snapshot();
+                for(const auto& V:Snapshot->GetArrayField(TEXT("targets")))
+                    if(V->AsObject()->GetNumberField(TEXT("id"))==uint32(Monster.Guid))return V->AsObject()->GetBoolField(TEXT("line_of_sight"));
+                AddError(TEXT("Corner fixture target is missing"));return true;
+            };
+            TestFalse(TEXT("Policy snapshot excludes the rat that moved behind the corner"),TargetSight());
+            P->NextAction=0;H->Execute(*P,AttackSpell);
+            TestEqual(TEXT("Stale-position attack sends no spell packet"),CastCount(),Before);
+            if(H->PendingSpell) {Ack(0);H->PendingSpell=0;H->PendingSpellOwner.Empty();}
+            Rat->SetActorLocation(Stale.Position.ToUnrealLocation());
+            TestTrue(TEXT("Rat becomes eligible as soon as its live body clears the wall"),TargetSight());
+            // The target can move after the Lua decision, before dispatch.
+            Rat->SetActorLocation(Monster.Position.ToUnrealLocation());
+            const int32 BeforeDispatch=CastCount();P->NextAction=0;H->Execute(*P,AttackSpell);
+            TestEqual(TEXT("Final dispatch rechecks live obstruction"),CastCount(),BeforeDispatch);
+            if(H->PendingSpell) {Ack(0);H->PendingSpell=0;H->PendingSpellOwner.Empty();}
+            Wall->SetActorLocation((Here+There)*.5+FVector(0,305,200));
+            TestFalse(TEXT("Policy excludes a target with a grazing projectile path"),TargetSight());
+            for(int Attempt=0;Attempt<3;++Attempt)
+            {
+                P->NextAction=0;H->Execute(*P,AttackSpell);
+                TestEqual(TEXT("Repeated grazing-corner intents never send a spell"),CastCount(),BeforeDispatch);
+                TestEqual(TEXT("Blocked shots never start awaiting spell confirmation"),H->PendingSpell,0);
+            }
+            Wall->SetActorLocation((Here+There)*.5+FVector(0,340,200));
+            TestTrue(TEXT("Policy restores the target after adequate corner clearance"),TargetSight());
+            P->NextAction=0;H->Execute(*P,AttackSpell);
+            TestEqual(TEXT("Clear path sends exactly one cast"),CastCount(),BeforeDispatch+1);
+            Ack(0);H->PendingSpell=0;H->PendingSpellOwner.Empty();
         }
         struct FTapPacket {uint32 Command,Hold,Stance;TArray<uint8> PositionAndStamps;};
         auto MovementPackets=[&]()

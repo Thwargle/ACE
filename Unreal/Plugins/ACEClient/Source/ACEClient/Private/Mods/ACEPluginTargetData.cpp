@@ -1,5 +1,6 @@
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEClientSubsystem.h"
+#include "ACEPlayerController.h"
 #include "ACESession.h"
 #include "ACEDatSubsystem.h"
 #include "UI/ACEAppraisalFormatting.h"
@@ -26,6 +27,52 @@ void UACEPluginSubsystem::ClearPluginTarget(int32 Guid)
     for(const auto& P:Plugins)if(P->WorldPlates.RemoveAll([Guid](const auto& Plate){return Plate.Id==Guid;}))++P->WorldPlateRevision;
 }
 
+TArray<int32> UACEPluginSubsystem::ActivePlateTargets() const
+{
+    TArray<int32> Ids;auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    if(C->GetSessionState()!=EACESessionState::InWorld)return Ids;
+    for(const auto& P:Plugins)if(P->Enabled&&P->Running&&P->HasPresentation()&&P->Player==C->GetPlayerGuid()
+        && P->Server==C->GetServerName()&&P->VMSession.Pin()==C->GetSession()
+        && P->Permissions.Contains(TEXT("ui"))&&P->Permissions.Contains(TEXT("markers")))
+        for(const auto& Plate:P->WorldPlates)
+        {
+            if(Plate.SelectionOnly&&Plate.Id!=C->GetSelectedObject().Guid)continue;
+            FACEWorldObject O;
+            if(!C->GetWorldObject(Plate.Id,O)||!O.IsSelectableWorldObject()||O.bDying||O.IsCorpse()||DefeatedTargets.Contains(O.Guid))continue;
+            const auto Player=C->GetPlayerPosition();
+            if((uint32(Player.CellId)>>16)!=(uint32(O.Position.CellId)>>16)
+                && ((uint32(Player.CellId)&65535)>=256||(uint32(O.Position.CellId)&65535)>=256))continue;
+            if(FVector::DistSquared(Player.ToUnrealLocation(),O.Position.ToUnrealLocation())>FMath::Square(24000.))continue;
+            Ids.AddUnique(Plate.Id);if(Ids.Num()==16)return Ids;
+        }
+    return Ids;
+}
+
+void UACEPluginSubsystem::RefreshPlateAppraisals()
+{
+    const double Now=FPlatformTime::Seconds();
+    if(Now<NextPlateAppraisal||Now-LastAppraisalRequest<1)return;
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());PC&&PC->IsWorldTransitionActive())return;
+    const auto Ids=ActivePlateTargets();int32 Request=0;double Oldest=Now;
+    for(int32 Id:Ids)
+    {
+        bool Refresh=false;
+        for(const auto& P:Plugins)if(P->Running&&P->Enabled)
+            for(const auto& Plate:P->WorldPlates)if(Plate.Id==Id&&Plate.Refresh)Refresh=true;
+        FACEWorldObject O;if(!Refresh||!C->GetWorldObject(Id,O)||!(O.ItemType&ACEItemType::Creature)||Id==C->GetPlayerGuid())continue;
+        const auto* A=Appraisals.Find(Id);const double Last=AppraisalRequests.FindRef(Id);
+        const double Delay=A?(A->bSuccess?2.:30.):(Last>0?30.:0.);
+        if(Now-Last<Delay)continue;
+        if(Last<Oldest){Oldest=Last;Request=Id;}
+    }
+    if(!Request)return;
+    // Share the existing global request budget. While automation runs, leave
+    // alternate seconds available to its inventory/equipment appraisals.
+    const auto Policy=PolicyPlugin();NextPlateAppraisal=Now+(Policy&&Policy->Running?2.:1.);
+    LastAppraisalRequest=Now;AppraisalRequests.Add(Request,Now);C->RequestBackgroundAppraisal(Request);
+}
+
 void UACEPluginSubsystem::AddTargetDetails(const TSharedPtr<FJsonObject>& Out)
 {
     if(CompanionReadBatch && CompanionReadBatch->TargetDetails)
@@ -41,6 +88,7 @@ void UACEPluginSubsystem::AddTargetDetails(const TSharedPtr<FJsonObject>& Out)
     const bool SameSession=Session && ObservedSession.Pin()==Session && DataPlayer==C->GetPlayerGuid() && DataServer==C->GetServerName();
     const int32 Selection=C->GetSelectedObject().Guid;
     TSet<int32> Ids;if(Selection)Ids.Add(Selection);
+    for(int32 Id:ActivePlateTargets())Ids.Add(Id);
     if(SameSession)for(const auto& Value:Debuffs)
     {
         const auto E=Value->AsObject();
@@ -75,6 +123,7 @@ void UACEPluginSubsystem::AddTargetDetails(const TSharedPtr<FJsonObject>& Out)
         };
         if(A)
         {
+            Row->SetNumberField(TEXT("assessment_age"),FMath::Max(0.,Now-TargetAppraisalTimes.FindRef(Id)));
             if(A->Level>0)Row->SetNumberField(TEXT("level"),A->Level);
             if(const auto* Type=A->IntProperties.Find(9007))Row->SetNumberField(TEXT("weenie_type"),*Type);
             if(A->CreatureType)Row->SetNumberField(TEXT("creature_type"),A->CreatureType);
@@ -90,6 +139,7 @@ void UACEPluginSubsystem::AddTargetDetails(const TSharedPtr<FJsonObject>& Out)
             // Health replies are percentages, not integer vitals. Do not display
             // stale appraisal health or invent current hit points from rounding.
             auto V=MakeShared<FJsonObject>();V->SetNumberField(TEXT("fraction"),Health->Fraction);
+            V->SetNumberField(TEXT("age"),FMath::Max(0.,Now-Health->ReceivedAt));
             if(A&&A->bHasCreatureHealth&&A->MaxHealth>0)V->SetNumberField(TEXT("max"),A->MaxHealth);
             Vitals->SetObjectField(TEXT("health"),V);
         }

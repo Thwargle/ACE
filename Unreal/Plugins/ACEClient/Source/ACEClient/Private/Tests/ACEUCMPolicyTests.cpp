@@ -976,6 +976,52 @@ bool FACEUCMLootMemoryTest::RunTest(const FString&)
     }
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMHuntMemoryTest,"ACE.Plugins.HuntMemory",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMHuntMemoryTest::RunTest(const FString&)
+{
+    FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    // Observe only retained policy bookkeeping, without exposing test hooks to
+    // plugins or confusing ordinary Lua GC garbage with a live-object leak.
+    const int32 Return=Source.Find(TEXT("return intent"),ESearchCase::CaseSensitive,ESearchDir::FromEnd);
+    if(!TestTrue(TEXT("Policy return found"),Return!=INDEX_NONE))return false;
+    Source.InsertAt(Return,TEXT("local count=0;for _,t in ipairs({retries,until_time,corpses,item_attempts,buff_skips,unavailable_spells}) do for _ in pairs(t) do count=count+1 end end;intent=intent or {};intent.history_count=count;\n "));
+    FACEPluginVM VM;if(!TestTrue(TEXT("Hunting policy loads"),VM.Load(Source,Error)))return false;
+    auto S=ParseUCM(TEXT(R"({"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"action_serial":0,"action_error":0,"container":0,"position":{"cell":16974092,"x":49,"y":-91,"z":-30},"spells":[],"enchantments":[],"targets":[],"inventory":[]})"));
+    auto P=ParseUCM(TEXT(R"({"buffing":false,"recovery":false,"combat":"melee","looting":true,"loot_rules":[{"action":"keep","name":"Collected loot"}],"navigation":false,"idle_peace":false})"));
+    auto Sword=ParseUCM(TEXT(R"({"id":50,"wcid":50,"name":"Sword","type":1,"identified":true,"can_wield":true,"equipped":true,"damage":30,"damage_type":1})"));
+    auto Target=ParseUCM(TEXT(R"({"id":500,"name":"Shadow Annihilator","distance":1,"identified":false,"line_of_sight":true})"));
+    int32 Assessed=0,Attacked=0,Closed=0;double PeakHistory=0;
+    for(int32 Hunt=0;Hunt<600;++Hunt)
+    {
+        TArray<TSharedPtr<FJsonValue>> Inventory={MakeShared<FJsonValueObject>(Sword)};
+        for(int32 I=0;I<10;++I)
+        {
+            auto Item=ParseUCM(TEXT(R"({"wcid":42,"name":"Collected loot","type":8,"count":1,"identified":true})"));
+            Item->SetNumberField(TEXT("id"),10000+Hunt*10+I);Inventory.Add(MakeShared<FJsonValueObject>(Item));
+        }
+        S->SetArrayField(TEXT("inventory"),Inventory);Target->SetNumberField(TEXT("id"),100000+Hunt);
+        for(int32 Phase=0;Phase<5;++Phase)
+        {
+            S->SetNumberField(TEXT("time"),100+Hunt*20+Phase);
+            Target->SetBoolField(TEXT("identified"),Phase!=0);
+            S->SetArrayField(TEXT("targets"),Phase<2?TArray<TSharedPtr<FJsonValue>>{MakeShared<FJsonValueObject>(Target)}:TArray<TSharedPtr<FJsonValue>>{});
+            S->SetNumberField(TEXT("container"),Phase>=2?200000+Hunt:0);
+            S->SetBoolField(TEXT("container_is_corpse"),Phase>=2);S->SetBoolField(TEXT("contents_ready"),true);S->SetArrayField(TEXT("contents"),{});
+            TSharedPtr<FJsonObject> Intent;
+            if(!VM.Step(S,P,Intent,Error)){AddError(FString::Printf(TEXT("Hunt %d phase %d: %s"),Hunt,Phase,*Error));return false;}
+            FString Action;Intent->TryGetStringField(TEXT("action"),Action);
+            Assessed+=Action==TEXT("identify");Attacked+=Action==TEXT("attack");Closed+=Action==TEXT("close_corpse");
+            PeakHistory=FMath::Max(PeakHistory,Intent->GetNumberField(TEXT("history_count")));
+            if(!TestTrue(TEXT("Retry/corpse history stays bounded as GUIDs change"),PeakHistory<100))return false;
+        }
+    }
+    TestEqual(TEXT("Each newly spawned monster is assessed"),Assessed,600);
+    TestEqual(TEXT("Each assessed monster can be attacked"),Attacked,600);
+    TestTrue(TEXT("Empty corpses finish looting throughout the hunt"),Closed>=600);
+    AddInfo(FString::Printf(TEXT("600 hunt cycles / 3000 decisions / 6000 replaced inventory objects: retained history peak %.0f; heap peak %.2f MiB"),PeakHistory,VM.GetPeakMemoryUsage()/1048576.));
+    return !HasAnyErrors();
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMLootTest,"ACE.Plugins.LootRules",
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACEUCMLootTest::RunTest(const FString&)

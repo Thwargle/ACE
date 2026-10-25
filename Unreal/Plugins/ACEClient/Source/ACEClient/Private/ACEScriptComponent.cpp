@@ -1319,6 +1319,7 @@ void UACEScriptComponent::UpdateEffectTickInterval()
 
 void UACEScriptComponent::TickScripts(float DeltaTime)
 {
+	ACE_PROFILE_SCOPE(EffectScripts);
 	TGuardValue<bool> Flushing(bFlushingScripts, true);
 	const double TargetTime = ScriptClock + FMath::Max(0.f, DeltaTime);
 	for (int32 Dispatch = 0; Dispatch < 1024; ++Dispatch)
@@ -2723,6 +2724,7 @@ void UACEScriptComponent::SpawnParticle(FActiveEmitter& Emitter)
 
 void UACEScriptComponent::TickParticleSimulation(float DeltaTime)
 {
+	ACE_PROFILE_SCOPE(EffectSimulation);
 	if (ActiveEmitters.IsEmpty())
 	{
 		ParticleTimeSinceUpdate = 0.0;

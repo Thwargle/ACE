@@ -897,7 +897,7 @@ bool FACEDatTextureResolver::ResolveSurfaceRenderFlags(uint32 SurfaceId, FACEDat
 		if (!ResolveSurface(SurfaceId, Decoded)) return false;
 		Surface = &Decoded;
 	}
-	if (!Surface->bHasPixels && !Surface->bIsSolid) return false;
+	if (!Surface->bHasPixels && !Surface->bIsSolid && Surface->Width<=0) return false;
 	Out.bFullyTransparent = Surface->bFullyTransparent;
 	Out.bUsesAlpha = Surface->bUsesAlpha;
 	Out.bClipMap = Surface->bClipMap;
@@ -906,6 +906,7 @@ bool FACEDatTextureResolver::ResolveSurfaceRenderFlags(uint32 SurfaceId, FACEDat
 	Out.bSurfaceTranslucent = Surface->bSurfaceTranslucent;
 	Out.Translucency = Surface->Translucency;
 	Out.SolidAlpha = Surface->SolidColor.A;
+	Out.SolidColor=Surface->SolidColor;Out.Luminosity=Surface->Luminosity;Out.Diffuse=Surface->Diffuse;
 	return true;
 }
 

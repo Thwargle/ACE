@@ -17,7 +17,7 @@ struct FACEPluginWorldPlate
     int32 Id=0, Level=0;
     FString Name, Role;
     FLinearColor Color=FLinearColor(1,.8f,.15f);
-    bool SelectionOnly=true;
+    bool SelectionOnly=true, Refresh=true;
     FACEPluginPlateVital Health, Stamina, Mana;
     TArray<FACEPluginPlateEffect> Effects;
 };

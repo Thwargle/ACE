@@ -8,6 +8,216 @@ button exists, its opcode has a constant, or a focused regression test passes.
 This is the working acceptance record, most recently reviewed on 2026-10-13. The client
 is **not yet a feature-complete retail replacement**.
 
+## Foundry, blocked terrain overlays, and resource retention: 2026-10-25
+
+The bundled optional **Dereth Foundry** Lua companion follows AceCreator's
+content, placement, landblock, quest/recipe, generator/encounter and file workflows
+using this fork's existing ACE developer/admin commands. It is disabled by
+default and uses the shared plugin controls and a gold anvil / teal cube icon.
+No server privileges are granted by enabling it. `admin_content` allows bounded,
+selection-checked native command dispatch and local JSON/SQL browsing/editing;
+server permissions and the server content directory remain authoritative.
+See `Docs/Plugins/Foundry.md` and the public API contract for platform limits.
+
+Dereth Lens previously colored wadeable coastal water and warned on slopes that
+were still walkable. It now colors only triangles below the retail walking
+normal threshold (`0.6641741`) and EntirelyWater landblocks. This matches
+`CLandCell::find_env_collisions`' block-water-type 2 rejection; a coastal cell's
+water depth by itself does not imply blocked movement. Mesh sections are retained
+while standing still and rebuilt only after relevant settings, loaded geometry,
+indoor/outdoor state or nearby position change. This is terrain guidance; it does
+not claim to classify dynamic objects, bridges or server travel restrictions.
+
+The supplied Yaraq sample has 126.20 ms in effects with 75 creatures, 74 emitters
+and only 43 active particles; GPU time is 2.2 ms and plugin/Lua times are zero.
+A later sample recovers to 0.22 ms effects. That identifies a CPU effects hitch,
+not evidence that Lua or GPU rendering caused this particular stall. The source
+review found unbounded strong material maps for shells, outdoor scenery, cells
+and particles. Those maps now share a bounded warm-reference budget with textured
+materials. Weak identities preserve visible-material reuse and daylight updates,
+and unused identities disappear after collection. DAT reload also invalidates
+the previously retained outdoor material map. This fixes retention independent
+of whether it caused the reported hitch.
+
+Loading-time surface classification now reads cached alpha/color/lighting flags
+without copying complete decoded pixel arrays. Flags remain usable after pixel
+payload eviction. Texture creation and authored visual semantics are unchanged.
+`/acueperf` and slow-frame logs now split script hooks, particle simulation,
+light updates, render uploads and cache maintenance, and include DAT resource
+counts. These counters use fixed storage rather than retaining a growing history.
+
+Validation: Windows editor build; 11 focused suites covering Foundry, public API,
+companions/runtime, world plates/terrain, texture budgets, material lifetimes,
+crowd particle updates, particle batches, portal materials and scenery lighting.
+The cache fixture creates 7,200 distinct material instances over 12 area-like
+cycles, asserts the shared cap after every trim, verifies visible material reuse
+and daylight updates, and checks dead weak records after garbage collection.
+Foundry runs in the actual bounded Lua VM; its seven tabs were rendered and
+inspected. Tests validate commands, confirmation/cancellation, capability checks,
+file traversal rejection and local file listing. No live server database imports,
+object deletion or content edits were executed as part of these tests. Evidence:
+`TestOutput/Foundry/after2.log`, `TestOutput/Foundry/final.log`, and
+`TestOutput/Foundry/User/Saved/FoundryReview/`.
+
+The controlled offline outdoor scene used 32 synthetic creatures at 2556x1354,
+45 seconds warmup and 30 seconds measurement. Mean frame times were 3.781 ms
+before and 4.373 / 4.955 ms in two after runs; therefore this is **not evidence
+of an overall FPS improvement**. No measured frame exceeded 50 ms, so the user's
+151.7 ms frame / 126.20 ms effects spike was not reproduced. The first after trace
+kept effects near 0.11 ms per frame (similar to before), and 17 cache-maintenance
+calls totaled 3.79 ms with a 0.269 ms maximum. Steady-state resource counts were
+stable and texture allocations remained 1574.41 MiB in this small scene. The
+slower aggregate timings span UI, player and renderer work; neither their cause
+nor resolution of the live hitch is established. Evidence and traces are under
+`TestOutput/FoundryPerformance/{before,after,repeat}/`. Capture the new effect
+subcategories on a live recurrence before attributing that report to a specific
+particle operation. Material lifetime/terrain regression results remain valid
+independently of these aggregate measurements.
+
+## UCM custom-profile memory and hunt history: 2026-10-25
+
+The reported log repeatedly stops with Lua `not enough memory`, including
+immediately after restart. This is the plugin heap quota, not evidence of
+system-wide memory exhaustion. A combined native snapshot regression with
+4,000 spells, 512 assessed items and 1,637 eight-condition custom loot rules
+reproduced the failure on its first callback under the former 8 MiB cap.
+The previous separate inventory and loot-profile tests both passed but ran
+against the cap. Lua now has a hard 32 MiB limit, including host inputs; script
+work limits remain unchanged. Allocation errors record the failing phase,
+heap usage and snapshot/profile counts without dumping character data.
+
+UCM also retained expired appraisal/corpse/debuff cooldowns and departed-item
+attempt records for the entire run. It now periodically drops expired timers
+and retries for objects no longer represented in the current inventory,
+world, open container, fellowship or buff request. Live-object retry counts
+remain intact. Successful equipment state no longer inserts zero-valued
+entries for every item seen. The hunt regression changes 6,000 inventory
+GUIDs across 600 combat/assessment/corpse cycles and checks bounded retained
+history. VM input/callback quota failures remain contained and unwind the
+Lua stack. These are automated workloads, not a live replay of Obi's custom
+profile, which was not included with the report.
+
+## Mana donor appraisal and local stopping: 2026-10-25
+
+Mana-stone pickup can trigger a fresh CreateObject, which clears the plugin's
+appraisal through ObserveTargetCreated/ClearPluginTarget. The policy treated
+that temporarily unassessed pickup as unsuitable, removed its reservation,
+and requested more junk for the still-empty stone. ResourceMaintenance now
+replays this ordering (including another eligible item on the open corpse);
+the pre-change test reproduced both the extra pickup and failure to fill.
+
+The exact confirmed pickup remains reserved while its appraisal is missing.
+UCM requests a fresh assessment with the existing bounded appraisal retry
+policy, rechecks eligibility, then uses the stone on that item. Pending
+assessment does not block combat/recovery or authorize consumption. Known
+protected/changed items remain excluded, and arbitrary existing possessions
+are never enlisted as donors. Completed fills still require observed stone
+mana, not merely UseDone.
+
+Local Stop input and chat focus previously disabled walking transitions and
+cleared unfinished links. Retail CommandInterpreter::StopCompletely calls
+CPhysicsObj::StopCompletely; CMotionTable::StopObjectCompletely and
+StopSequenceMotion return through GetObjectSequence to the default substate.
+CSequence::remove_cyclic_anims removes the cyclic tail, retaining pending
+links. Local Stop/chat now retain the same collision-resolved step as key-up.
+Raw input stops immediately while remaining authored movement keeps autonomous
+position reporting active. No extra coast or invented full cycle is added.
+
+The Windows Development Editor build and six suites passed: ResourceMaintenance,
+Recovery, RouteAndTellRequests, WalkingStep, RunSpeed and EmoteTransitions.
+WalkingStep adds explicit Stop during walk/run at 30/90/144 Hz, retaining its
+key-release, held walking, wall collision and interruption coverage. Artifacts:
+`TestOutput/ManaAndSteps/{before,after}`. These are offline policy, protocol and
+DAT/controller regressions; live server reproduction remains unrecorded.
+
+## Golem activation and resting stance exits: 2026-10-25
+
+Bronze Statue of a Golem (WCID 19276, setup `020007CA`, motion table
+`090000EF`, scale 1.5) uses a NonCombat/Sleeping heartbeat and wakes into
+HandCombat. The stock definition is in ACE-World-16PY's
+`Creature/Statue/19276 Bronze Statue of a Golem.sql`. Retail
+`CMotionTable::GetObjectSequence` (00522860, style branch) first appends the
+old substate-to-default pre-link, then the old-default-to-new-style link,
+optionally routing through the table's default style, before the new cycle.
+
+Our generic direct-link-first lookup selected the style-wide combat link and
+omitted the sleeping exit. The DAT regression reproduced one clip instead of
+the two authored clips (3.733 seconds total). Style transitions now follow
+retail's pre-link order. Newly created resting bodies retain their initial
+style, and a combat update during a lay-down entry queues behind that entry.
+This is shared motion-table handling, with no golem or WCID-specific runtime
+branch and no changes to server combat timing.
+
+`EmoteTransitions` compares every displayed golem part against the authored
+clips at 30/90 Hz, for spawn-asleep and live heartbeat paths, repeated Ready
+updates, and combat arriving during lay-down. Validation artifacts are under
+`TestOutput/GolemActivation/`. The Development Editor build and all six final
+suites passed: EmoteTransitions, NetworkAnimationParity, ArcheryMotion,
+AttackHeightMotion, AvatarMotion and WalkingStep. Quest source synchronization
+and CheckOnly passed with zero differences. These are offline DAT/Unreal actor regressions;
+live server activation has not been recorded side by side with retail.
+
+## UCM firing corridors and live target positions: 2026-10-25
+
+UCM's snapshot and final cast guard aimed a zero-width ray at the last received
+target position. A creature can walk behind a corner between F748 updates while
+that position remains in the open. The regression reproduced this: the snapshot
+reported clear sight and the host sent CastTargetedSpell for the occluded body.
+
+The shared query now resolves the live entity position, consistent with retail
+`TargetManager::SendVoyeurUpdate` reading current physics frames. Combat endpoints
+use scaled DAT body heights at two thirds, matching ACE's targeted bolt aim in
+`WorldObject_Magic.CalculatePreOffset` / `CalculateProjectileVelocity`. Snapshot
+eligibility and the final action guard use the same query; a target moving after
+policy selection is checked again before a cast can start.
+
+Combat also requires a 15 cm clearance corridor, reduced to one third of either
+body's height for small creatures so its supporting floor does not block every
+shot. This is a conservative automation safety margin, not a reconstruction of
+server-only projectile templates or every curved trajectory. Sphere sweeps test
+physical scenery; segment/triangle distance tests retain the same clearance for
+loaded rooms whose collision is not cooked, including hidden and nonuniformly
+scaled meshes. Corpses, route visibility and friendly recovery retain zero-width
+sight tests. Blocked creatures drop out of UCM's existing target selection and
+become eligible again when the live path clears, without a timed blacklist or
+starting an awaiting-confirmation gate. Manual casting is unchanged.
+
+Validation: Windows Development Editor build and seven suites passed:
+RouteAndTellRequests, Decisions, TargetHandoff, LongCombatRouteRejoin, BuffParity,
+LootCombatPriority and UCMIdleWorkload. New cases cover stale moving-target
+positions, obstruction after selection, repeated rejected intents, grazing
+corners with cooked/uncooked collision, scaled hidden rooms, low floor clearance,
+and a clear path sending exactly one cast. The existing shield-bane cases still
+pass, so stale inventory positions do not block equipment buffs. The fixture
+reproduces the reported failure class, not the exact live Sea Temple screenshot.
+Reports: `TestOutput/UCMCombatSight/{before,after}`.
+
+## In-game tooltip cursor clearance: 2026-10-25
+
+Retail `UIElementManager::StartTooltip` places the tooltip 32 pixels right and
+below the mouse, then clamps to the display bounds. The existing cursor-aware
+correction covered native Slate tooltip windows and world hover labels, but
+inventory/plugin tooltips in the game viewport use `STooltipPresenter`. That
+engine presenter uses a fixed 12-by-12 cursor offset and ignores popup force
+fields, bypassing the correction entirely.
+
+The shared tooltip now adjusts its content during the presenter's paint using
+the actual viewport bounds, layout scale, and scaled software cursor bounds.
+It retains the retail offset when sufficient and moves above or beside the
+cursor when edge clamping would otherwise overlap. Native popup and world hover
+placement retain their existing paths.
+
+`TooltipCursorClearance` now renders the actual in-game presenter for inventory
+and plugin tooltips, including an embedded viewport offset, UI scales of
+0.75/1/1.5/2, cursor scales of 0.5/1/1.25/2/3, and all corners plus the center.
+The 200 combinations compare rendered tooltip pixels against the DAT cursor
+artwork dimensions independently of the placement helper. The test reproduced
+overlap before the fix and passed afterward, with no tooltip text/frame pixels
+under the cursor or outside the viewport. Existing native-popup and placement
+checks also pass. Evidence: `TestOutput/TooltipViewport/{before,after}`.
+The Windows Development Editor build passed. This verifies retail source and
+rendered Unreal behavior; it is not a live retail-client screenshot comparison.
+
 ## Toolbar icon depth: 2026-10-23
 
 The Allegiance/Social and Options icon rims were covered by their end trim.
@@ -240,6 +450,78 @@ Apostate follow-up passed `CustomWorldPresentation` and `DesktopHighlights` in
 bound-item hand-in packet. The Windows editor rebuild also passed. These
 fixtures do not substitute for reproducing the affected live session. Shared
 Quest source synchronization passed.
+
+### Apostate visibility after graphics reset: 2026-10-25
+
+The initial screenshots did not isolate resolution or window mode: both visible
+examples also showed a fresh login. That rendering investigation did not reproduce
+the disappearance or establish a rendering fix. Retail references
+remain `PView::DrawInside` and `CPhysicsPart::Draw` / degrade selection; neither
+justifies a special visibility exemption for these two objects.
+
+`ACE.RetailParity.CustomWorldPresentation` now builds the two stock models
+while their room is hidden and checks their subsequent reveal. Rendered-pixel
+checks include only appearance geometry and the surrounding rooms; actor-owned
+particle effects can no longer make a missing model pass. Captures retain view
+history and settle across frames, including hide/reveal and target resizing.
+The optional `-ACEApostateGraphicsMatrix` additionally covers five scalability
+levels, four target sizes (1280x720, 1920x1080, 1280x1024, 3440x1440), and
+60/90/120-degree camera projections. It checks both models after twenty minutes
+of simulated idle ticks and repeated room visibility changes. These are
+offscreen renderer/portal-admission tests, not a reproduction of a live
+windowed/fullscreen transition or the affected player's graphics driver.
+
+`/acueobject` now writes its report to the client log as well as local chat. It
+includes the actual actor cell, server-versus-rendered position, visibility and
+physics flags, model bounds, camera projection, per-part render eligibility,
+selected distance level, geometry, and opacity. This is on-demand diagnostics
+for any selected object, with no added per-frame scan. When the problem recurs,
+select the missing object via radar and run `/acueobject` and `/acueperf` before
+resetting graphics or reconnecting, then preserve `ACUnreal.log`.
+
+Validation: the Windows editor build and local chat-command suite passed. The
+full optional Apostate matrix passed on D3D11 SM5 and D3D12 SM5; reports are in
+`TestOutput/ApostateVisibility/final-d3d11` and `final-d3d12`. Shared Quest source
+synchronization passed. No packaged release or affected live session was tested.
+
+### Apostate falling velocity follow-up: 2026-10-25
+
+The subsequent v136 `/acueobject` report identifies a physics failure: gateway
+`801253F4` / WCID 40810 still had its visible mesh, but the actor was 8207.1819
+AC units below the received origin in cell `0110028A` at `[40 -140 12.055]`.
+Its create state included velocity `[0 0 -2.4225]`, gravity, and Creature item
+type. Both the gateway setup `02000443` and deposit setup `02000B82` have zero
+movement spheres in retail DAT. The earlier zero-velocity fixtures missed this.
+
+Retail `CPhysicsObj::UpdateObjectInternal` (`005156B0`) checks
+`CPartArray::GetNumSphere` (`00518060`): without spheres it retains the existing
+XYZ while continuing orientation, animation, particles, and scripts. It does
+not exempt Creature items. Our velocity path exempted all creatures from its
+sphere-less prop protection, allowing these quest objects to fall indefinitely.
+
+The client now records whether a successfully loaded setup explicitly has no
+movement spheres. Such objects discard linear velocity, skip invented ground
+support and predicted translation, and retain angular motion and authoritative
+teleports. This applies by model physics, with no Apostate WCID special cases.
+Missing metadata still uses the existing fallback; ordinary actors and loose
+items with movement spheres keep their physics. Pick bounds remain independent.
+
+`CustomWorldPresentation` now supplies the reported velocity through deferred
+creation for both stock objects, then replays vector updates and room visibility
+changes over twenty simulated minutes. It also checks angular motion, explicit
+teleports, rendered model pixels, and picking. Both objects failed the new
+falling-velocity assertion before the fix (`TestOutput/ApostateVelocity/before`).
+
+Validation: the Windows editor build and nine suites passed in
+`TestOutput/ApostateVelocity/final`: `CustomWorldPresentation`,
+`DesktopHighlights` (including the resonator GiveObject request),
+`GroundItemPlacement`, `SpawnSupport`, `RemoteSupport`, `RemoteMovementReplay`,
+`NetworkAnimationParity`, `MovementReview`, and `ProjectileLifetime`.
+Movement controls now use real creature/projectile setups instead of changing
+a sphere-less sign's item type; the projectile fixture loads its required DAT
+metadata. Tou-Tou's sphere-less model also retains height when Gravity is set.
+Shared Quest source verification passed. This is an automated reproduction
+using the reported state; no packaged release or affected live session was tested.
 
 ## Stat colors without active spells: 2026-10-20
 
@@ -3778,3 +4060,33 @@ build logs, intermediate reports, and `complete`). These are isolated offline
 protocol/DAT/Unreal actor tests, not a synchronized recording from a live retail
 client and Unreal client. They do not certify every custom server motion or
 replace live multiplayer verification.
+
+
+## Dereth Lens and Third Eye plates: 2026-10-25
+
+- Added an optional API 2 Lua companion, Dereth Lens, following SkunkVision's
+  slope, impassable-water, radar-boundary and dungeon-light feature set
+  (https://skunkworks.sourceforge.net/SkunkVision/SkunkVision.html). Its gold/teal
+  lens-and-landscape icon uses the existing plugin vector icon system.
+- Terrain classification uses retail `CPhysicsObj::get_walkable_z` /
+  `PhysicsGlobals::floor_z` (0.6641741) and `CLandCell::find_env_collisions`'s
+  `get_block_water_type()==2` rule. A flooded coastal cell is not open ocean.
+  The visualization uses existing DAT mesh triangles, with no added DAT reads,
+  physics changes or server movement requests. Radar radius is shared with
+  `ACERadarVisuals::RangeAc` (CPlayerSystem::GetRadarRadius / SmartBox::is_player_outside).
+- Third Eye watch rules can opt into native world plates. The snapshot retains
+  active plate objects independently of selection and confirmed-cast timers.
+  Background assessments refresh their server-provided metadata and vitals.
+  ACE `Player::HandleActionQueryHealth` changes the server selected target, so
+  it must never be used to poll companion bars. The existing background identify
+  path preserves manual appraisal command context and does not change selection.
+- Assessment-only data remains subject to server skill checks. Unselected health
+  on stock servers updates at bounded assessment cadence. No guessed damage,
+  stamina, other-player debuffs, or early dispels are presented as known facts.
+
+Validation: Development Editor build; `ACE.Plugins.WorldPlates` (includes native
+Dereth Lens geometry, material, lifecycle and Lua controls), `ThirdEye` (including
+short/narrow panel renders), `Companions`, `PublicAPI`, `AppraisalCommandContext`,
+and `ResourceMaintenance` passed. Tracking is checked against encoded loopback
+IdentifyObject packets; no QueryHealth target changes. Artifacts are in
+`TestOutput/DerethLens/`. Quest source synchronization is checked separately.

@@ -348,7 +348,7 @@ bool FACEItemToolsTest::RunTest(const FString&)
         bool Complete=false;int32 Calls=0;
         for(;Calls<160&&!Complete;++Calls){S->SetNumberField(TEXT("time"),100+Calls*.25);Complete=Action(Step(VM,S,P))==TEXT("stop");}
         TestTrue(TEXT("128 items x 1000 rules finish cooperatively"),Complete);
-        TestTrue(TEXT("Large rule processing stays under sandbox memory cap"),VM.GetPeakMemoryUsage()<8*1024*1024);
+        TestTrue(TEXT("Large rule processing stays under sandbox memory cap"),VM.GetPeakMemoryUsage()<=FACEPluginVM::MemoryLimit);
         AddInfo(FString::Printf(TEXT("Large profile scan: %d callbacks; peak %.2f MiB"),Calls,VM.GetPeakMemoryUsage()/1048576.));
     }
     return true;

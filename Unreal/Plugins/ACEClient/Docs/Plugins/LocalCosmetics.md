@@ -82,7 +82,7 @@ end
 
 Only `scan`, `reload`, or a matching outstanding request token are accepted.
 Lua cannot supply executable paths, command lines, output paths, or gameplay
-commands. Tokens cannot be replayed. The existing 8 MiB Lua heap and instruction
+commands. Tokens cannot be replayed. The existing 32 MiB Lua heap and instruction
 budget apply. An enabled service starts at login without starting automation.
 Disable, refresh, script failure, capability unload, and shutdown cancel pending
 work and restore original rendering. A failed script stays stopped until enabled

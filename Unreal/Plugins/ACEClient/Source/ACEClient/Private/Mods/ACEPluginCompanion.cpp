@@ -145,7 +145,7 @@ void UACEPluginSubsystem::StopCompanion(FACEClientPlugin& P,const FString& Reaso
 {
     using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     FlushPluginState(P);P.Running=false;P.CompanionStopped=true;P.VM.Reset();
-    P.Markers.Reset();P.WorldPlates.Reset();++P.WorldPlateRevision;P.PanelRows.Reset();P.PluginEvents.Reset();P.ChatFilters.Reset();++P.PanelRevision;P.Status=Reason+(P.StateDirty?TEXT("; ")+P.CompanionError:FString());
+    P.Terrain={};P.Markers.Reset();P.WorldPlates.Reset();++P.WorldPlateRevision;P.PanelRows.Reset();P.PluginEvents.Reset();P.ChatFilters.Reset();++P.PanelRevision;P.Status=Reason+(P.StateDirty?TEXT("; ")+P.CompanionError:FString());
     // Observational plugin lifecycle never cancels UCM movement, casts or attacks.
 }
 
@@ -210,6 +210,7 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::CompanionSnapshot(FACEClientPlugin&
             const auto& O=*Nearby[I].Value;auto Row=MakeShared<FJsonObject>();Row->SetNumberField(TEXT("id"),uint32(O.Guid));Row->SetStringField(TEXT("name"),O.Name.Left(256));
             Row->SetNumberField(TEXT("wcid"),O.WeenieClassId);Row->SetNumberField(TEXT("distance"),FMath::Sqrt(Nearby[I].Key)/100.);
             Row->SetBoolField(TEXT("monster"),O.IsAttackable()&&!O.bIsPlayer&&!O.PetOwnerId&&(O.ItemType&ACEItemType::Creature)&&!O.bDying);
+            Row->SetStringField(TEXT("object_type"),ACEPluginWorldPlate::ObjectType(O));
             Row->SetBoolField(TEXT("player"),O.bIsPlayer);Row->SetBoolField(TEXT("corpse"),O.IsCorpse());Row->SetBoolField(TEXT("dead"),O.bDying);
             Row->SetObjectField(TEXT("position"),Position(O.Position));Objects.Add(MakeShared<FJsonValueObject>(Row));
         }
@@ -289,6 +290,14 @@ bool UACEPluginSubsystem::ApplyCompanionOutput(FACEClientPlugin& P,const TShared
         {Error=TEXT("chat_filters requires chat_filter permission and at most 32 rules");return false;}
         if(!ValidatePluginChatFilters(*ChatFilters,ParsedFilters,Error))return false;
     }
+    FACEPluginTerrain ParsedTerrain;
+    if(O->HasField(TEXT("terrain_overlay")))
+    {
+        const TSharedPtr<FJsonObject>* Terrain=nullptr;
+        if(!P.Permissions.Contains(TEXT("terrain")) || !O->TryGetObjectField(TEXT("terrain_overlay"),Terrain))
+        {Error=TEXT("terrain_overlay requires terrain permission and an object");return false;}
+        if(!ACEPluginTerrain::Parse(*Terrain,ParsedTerrain,Error))return false;
+    }
     TArray<FACEPluginMarker> Parsed;
     const TArray<TSharedPtr<FJsonValue>>* Plates=nullptr;
     TArray<FACEPluginWorldPlate> ParsedPlates;
@@ -314,6 +323,7 @@ bool UACEPluginSubsystem::ApplyCompanionOutput(FACEClientPlugin& P,const TShared
         for(const auto& V:*Messages)if(V->Type!=EJson::Object||S(V->AsObject(),TEXT("to")).Len()>64||S(V->AsObject(),TEXT("topic")).Len()>64||S(V->AsObject(),TEXT("text")).Len()>1024)
         {Error=TEXT("Invalid plugin message");return false;}
     }
+    if(O->HasField(TEXT("terrain_overlay")))P.Terrain=ParsedTerrain;
     if(Presentation)P.Presentation=*Presentation;
     if(ChatFilters)P.ChatFilters=MoveTemp(ParsedFilters);
     if(State&&(!P.SavedState||!FJsonValue::CompareEqual(FJsonValueObject(P.SavedState),FJsonValueObject(*State)))){P.SavedState=*State;P.StateDirty=true;}
@@ -388,6 +398,7 @@ void UACEPluginSubsystem::TickCompanions()
     CompanionSession=C->GetSession();CompanionPlayer=InWorld?C->GetPlayerGuid():0;CompanionServer=C->GetServerName();
     DrawPluginMarkers();
     UpdatePluginWorldPlates();
+    UpdatePluginTerrain();
 }
 
 TArray<FACEPluginMarker> UACEPluginSubsystem::GetPluginMarkers() const

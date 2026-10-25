@@ -54,6 +54,87 @@ bool FACEEmoteTransitionTest::RunTest(const FString&)
  FACEWorldObject Obj; Obj.Guid = 12345; Obj.SetupId = 0x02000001; Obj.MotionTableId = 0x09000001; Obj.bIsPlayer = true;
  auto* Actor = World->SpawnActor<AACEWorldEntityActor>(); Actor->InitializeFromObject(Obj, 100, false);
  auto* App = Actor->Appearance.Get();
+ // Bronze Statue of a Golem (19276) sleeps in NonCombat, then wakes into
+ // HandCombat. Retail GetObjectSequence always exits the old substate before
+ // changing style, even when a style-wide combat link exists.
+ {
+  FACEDatMotionPlayer Golem(&Portal);
+  if (!TestTrue(TEXT("Stock golem motion table loads"), Golem.SetMotionTable(0x090000EF))) return false;
+  auto Link = [&](uint32 From, uint32 To) -> const FACEDatMotionData*
+  {
+   for (uint32 Key : {(Style << 16) | (From & 0xFFFFFFu), Style << 16})
+    if (const auto* Links = Golem.MotionTable->Links.Find(Key))
+     if (const auto* Data = Links->Find(To)) return Data;
+   return nullptr;
+  };
+  const auto* Rise = Link(ACEMotion::Sleeping, ACEMotion::Ready);
+  if (!TestNotNull(TEXT("Golem has an authored rising animation"), Rise)) return false;
+  TArray<FACEDatAnimData> ExpectedClips = Rise->Anims;
+  if (const auto* Enter = Link(ACEMotion::Ready, ACEMotion::StanceHandCombat)) ExpectedClips.Append(Enter->Anims);
+  TArray<FACEDatAnimData> ActualClips;
+  TestTrue(TEXT("Golem sleeping-to-combat transition resolves"), Golem.FindTransitionAnims(ACEMotion::Sleeping, ACEMotion::StanceHandCombat, ActualClips, Style));
+  TestEqual(TEXT("Combat entry retains every rising clip"), ActualClips.Num(), ExpectedClips.Num());
+  for (int32 I = 0; I < FMath::Min(ActualClips.Num(), ExpectedClips.Num()); ++I)
+   TestEqual(TEXT("Combat entry plays the retail clip order"), ActualClips[I].AnimId, ExpectedClips[I].AnimId);
+  float Duration = 0;
+  for (const auto& Clip : ExpectedClips) Duration += Golem.GetAnimDataDuration(Clip);
+  AddInfo(FString::Printf(TEXT("Golem activation: %d clips, %.3f seconds"), ExpectedClips.Num(), Duration));
+  for (float Dt : {1.f/30, 1.f/90}) for (bool SpawnAsleep : {false, true})
+  {
+   FACEWorldObject Statue; Statue.Guid = 19276; Statue.SetupId = 0x020007CA; Statue.MotionTableId = 0x090000EF;
+   Statue.Scale = 1.5f; Statue.ItemType = ACEItemType::Creature;
+   Statue.InitialMotionStyle = Style; Statue.InitialMotionCommand = SpawnAsleep ? ACEMotion::Sleeping : 0;
+   auto* Body = World->SpawnActor<AACEWorldEntityActor>(); Body->InitializeFromObject(Statue, 100, true);
+   auto* Pose = Body->Appearance.Get(); Pose->SetPreviewCapture(true);
+   if (!SpawnAsleep)
+   {
+    FACEObjectMotionState Sleep; Sleep.CurrentStyle = Style; Sleep.ForwardCommand = ACEMotion::Sleeping;
+    Body->ApplyMotionState(Sleep);
+    for (int Frame = 0; Frame < 600 && !Pose->bHoldActionFinal; ++Frame) Pose->TickComponent(Dt, LEVELTICK_All, nullptr);
+   }
+   TestTrue(TEXT("Spawn and heartbeat both establish the resting cycle"), Pose->ActionCommand == ACEMotion::Sleeping && Pose->bHoldActionFinal);
+   // ApplyMotionState is the receiving end of UpdateMotion. Ready repeats
+   // must neither cancel nor restart the combat-stance activation.
+   FACEObjectMotionState Wake; Wake.CurrentStyle = ACEMotion::StanceHandCombat; Wake.ForwardCommand = ACEMotion::Ready;
+   Body->ApplyMotionState(Wake);
+   double MaxError = 0; bool Completed = false;
+   for (int Frame = 1; Frame <= FMath::CeilToInt((Duration+1.f)/Dt); ++Frame)
+   {
+    const float Time = Pose->AnimTime + Dt;
+    Body->ApplyMotionState(Wake);
+    Pose->TickComponent(Dt, LEVELTICK_All, nullptr);
+    TArray<FTransform> Expected; int32 Count = 0; bool Finished = false;
+    Golem.EvaluateAnimSequence(ExpectedClips, Time, Pose->GetPartCount(), Expected, 100, Count, false, &Finished);
+    if (Time > .3f && !Finished)
+     for (int Part = 0; Part < Count; ++Part)
+     {
+      const auto Actual = Pose->GetPartMesh(Part)->GetRelativeTransform();
+      MaxError = FMath::Max(MaxError, FVector::Distance(Actual.GetTranslation(), Expected[Part].GetTranslation()));
+      MaxError = FMath::Max(MaxError, Actual.GetRotation().AngularDistance(Expected[Part].GetRotation()));
+     }
+    if (Pose->ActionCommand == 0) { Completed = true; TestTrue(TEXT("Golem cannot skip its rising time"), Finished); break; }
+   }
+   TestTrue(TEXT("Golem rising body follows the authored frames"), MaxError < .05);
+   TestTrue(TEXT("Golem activation completes without further input"), Completed);
+   // Combat can arrive while a heartbeat's lay-down entry is still playing.
+   // Finish that entry first, then rise and change stance; never pop upright.
+   Pose->ClearActionMotion(); Pose->SetPreferredStyle(Style); Pose->ClearActionMotion();
+   FACEObjectMotionState Sleep; Sleep.CurrentStyle = Style; Sleep.ForwardCommand = ACEMotion::Sleeping;
+   Body->ApplyMotionState(Sleep); Pose->TickComponent(Dt, LEVELTICK_All, nullptr);
+   const float EntryTime = Pose->AnimTime;
+   Body->ApplyMotionState(Wake);
+   TestTrue(TEXT("Activation preserves an unfinished lay-down entry"), Pose->ActionCommand == ACEMotion::Sleeping && Pose->AnimTime == EntryTime);
+   TestTrue(TEXT("Combat stance queues behind lay-down"), Pose->PendingActionCommands.Contains(ACEMotion::StanceHandCombat));
+   bool SawActivation = false;
+   for (int Frame = 0; Frame < FMath::CeilToInt(15.f/Dt) && Pose->ActionCommand; ++Frame)
+   {
+    Body->ApplyMotionState(Wake); Pose->TickComponent(Dt, LEVELTICK_All, nullptr);
+    SawActivation |= Pose->ActionCommand == ACEMotion::StanceHandCombat && Pose->ActionFromCommand == ACEMotion::Sleeping;
+   }
+   TestTrue(TEXT("Interrupted lay-down plays activation and reaches combat"), SawActivation && Pose->ActionCommand == 0 && Pose->PendingActionCommands.IsEmpty());
+   Body->Destroy();
+  }
+ }
  TArray<uint32> Poses;
  for (const auto& Pair : Player.MotionTable->Links.FindChecked((Style << 16) | (ACEMotion::Ready & 0xFFFFFF)))
   if ((Pair.Key & 0x40000000u) && Pair.Key != ACEMotion::Dead && ACEMotion::IsHeldRestCommand(Pair.Key)

@@ -1645,8 +1645,9 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		if (UACECharacterAppearanceComponent* App = PossessedPawn->FindComponentByClass<UACECharacterAppearanceComponent>())
 		{
 			App->SetWalkingTransitionsEnabled(!bVR && !bJumpAirborne && !bJumpCharging
-				&& !bServerMoveToActive && !bPluginDrivingMovement && !bPluginFastBuffMovement
-				&& !bChatFocused && !ACEInputBindings::Down(this, ACEInputBindings::Action(TEXT("Stop"))));
+				&& !bServerMoveToActive && !bPluginDrivingMovement && !bPluginFastBuffMovement);
+			// Retail StopObjectCompletely and ordinary key-up both return through
+			// the motion table. Stop/chat suppress input, not the unfinished step.
 			App->SetTurnInput(bVR || bJumpAirborne ? 0.f : ReportedTurn*((bMouseFacing||bRunning)?1.5f:1.f));
 			if (!bJumpAirborne && !FMath::IsNearlyZero(F) && FMath::Sign(F) != FMath::Sign(ForwardSent))
 				App->InterruptCastWithMovement();

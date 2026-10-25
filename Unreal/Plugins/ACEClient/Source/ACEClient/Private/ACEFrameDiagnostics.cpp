@@ -2,6 +2,7 @@
 #include "ACEProfiling.h"
 #include "ACEClientBuild.h"
 #include "ACEClientSubsystem.h"
+#include "ACEDatSubsystem.h"
 #include "ACESession.h"
 #include "ACEWorldEntityActor.h"
 #include "ACEScriptComponent.h"
@@ -66,5 +67,6 @@ TArray<FString> ACEFrameDiagnostics::Describe(UWorld* World,double FrameMs)
   World->IsPlayInEditor()?TEXT("editor play"):TEXT("game"),CVar(TEXT("r.ScreenPercentage"),100),Quality.TextureQuality,Quality.ShadowQuality,Quality.EffectsQuality,
   CVar(TEXT("ace.FXLightBudget"),0),CVar(TEXT("t.MaxFPS"),0),CVar(TEXT("r.VSync"),0),
   (GRHIGlobals.StreamingTextureMemorySizeInKB+GRHIGlobals.NonStreamingTextureMemorySizeInKB)/1024.));
+ if(auto* Dat=World->GetGameInstance()->GetSubsystem<UACEDatSubsystem>())Lines.Add(Dat->DescribeResourceUsage());
  return Lines;
 }

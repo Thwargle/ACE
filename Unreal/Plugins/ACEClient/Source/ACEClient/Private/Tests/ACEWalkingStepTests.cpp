@@ -110,6 +110,16 @@ bool FACEWalkingStepTest::RunTest(const FString&)
   TestFalse(TEXT("Completed step has no pending animation"),App->HasWalkingTransition());
  }
  // Held walking retains its cycle after entry; stopping adds only the exit.
+ for (bool Run : {false,true}) for (float Dt : {1.f/30,1.f/90,1.f/144})
+ {
+  Reset();Key(EKeys::LeftShift,!Run);Key(EKeys::W,true);Tick(Dt);
+  Key(EKeys::W,false);Key(ACEInputBindings::Get(ACEInputBindings::Action(TEXT("Stop")),0).Key,true);Tick(Dt);
+  TestTrue(TEXT("Explicit Stop retains the unfinished walk/run step like retail"),App->HasWalkingTransition());
+  TestTrue(TEXT("Explicit Stop keeps collision prediction until the step finishes"),PC->bLocalPredicting);
+  for(int I=0;I<2/Dt;++I)Tick(Dt);
+  TestFalse(TEXT("Holding Stop cannot restart the completed step"),App->HasWalkingTransition());
+  if(!Run)TestTrue(TEXT("Stop completes the same authored walk displacement as key release"),FMath::Abs((Pawn->GetActorLocation().X-StartFeet.X)/100.-RetailStep)<.002);
+ }
  Reset();Key(EKeys::LeftShift,true);Key(EKeys::W,true);
  for(int I=0;I<90;++I)Tick(1.f/90);
  Key(EKeys::W,false);for(int I=0;I<90;++I)Tick(1.f/90);

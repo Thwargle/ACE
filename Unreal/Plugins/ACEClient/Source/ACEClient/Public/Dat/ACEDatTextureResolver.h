@@ -71,6 +71,8 @@ struct FACEDatSurfaceRenderFlags
 	bool bSurfaceTranslucent = false;
 	float Translucency = 0.f;
 	float SolidAlpha = 1.f;
+	FLinearColor SolidColor=FLinearColor::White;
+	float Luminosity=0.f, Diffuse=1.f;
 };
 
 /** Resolves Surface → Texture with optional ObjDesc texture swaps + dyed palette. */

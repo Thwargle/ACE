@@ -524,7 +524,29 @@ bool FACEUCMResourcesTest::RunTest(const FString&)
         if(Case==9)Item->SetNumberField(TEXT("wcid"),999);
         if(Case==10)P->SetArrayField(TEXT("weapon_items"),{MakeShared<FJsonValueNumber>(31)});
         if(Case==11)P->SetNumberField(TEXT("mana_tank_minimum"),6000);
-        TestFalse(*FString::Printf(TEXT("Changed/protected pickup is not consumed (case %d)"),Case),Step(VM,S,P)->HasField(TEXT("action")));
+        const auto I=Step(VM,S,P);
+        if(Case==5)TestEqual(TEXT("A pickup awaiting fresh appraisal is identified, never discarded"),I->GetStringField(TEXT("action")),FString(TEXT("identify")));
+        else TestFalse(*FString::Printf(TEXT("Changed/protected pickup is not consumed (case %d)"),Case),I->HasField(TEXT("action")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto Donor=PrepareLoot(S,P);
+        TestEqual(TEXT("Acquire exactly one mana donor before its ownership update"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("loot")));
+        // CreateObject on pickup invalidates the appraisal. Existing fixtures
+        // reused the already-identified corpse JSON and hid this real ordering.
+        Donor->AsObject()->SetBoolField(TEXT("identified"),false);
+        Donor->AsObject()->RemoveField(TEXT("mana"));Donor->AsObject()->RemoveField(TEXT("max_mana"));
+        auto Inv=S->GetArrayField(TEXT("inventory"));Inv.Add(Donor);S->SetArrayField(TEXT("inventory"),Inv);
+        auto Extra=RecoveryJson(TEXT(R"({"id":34,"wcid":34,"name":"More junk","type":8,"count":1,"identified":true,"icon_effects":1,"workmanship":8,"mana":10000,"max_mana":10000})"));
+        S->SetArrayField(TEXT("contents"),{MakeShared<FJsonValueObject>(Extra)});
+        auto I=Step(VM,S,P);TestTrue(TEXT("Unassessed reserved donor prevents another junk pickup"),!I->HasField(TEXT("action"))||I->GetStringField(TEXT("action"))!=TEXT("loot"));
+        S->SetNumberField(TEXT("container"),0);S->SetArrayField(TEXT("contents"),{});
+        I=Step(VM,S,P);TestEqual(TEXT("Post-pickup appraisal is requested before consumption"),I->GetStringField(TEXT("action")),FString(TEXT("identify")));
+        TestEqual(TEXT("Appraises only the reserved pickup"),I->GetNumberField(TEXT("item")),31.);
+        S->SetNumberField(TEXT("time"),102);I=Step(VM,S,P);
+        TestFalse(TEXT("No repeated identify or use while appraisal is pending"),I->HasField(TEXT("action")));
+        Donor->AsObject()->SetBoolField(TEXT("identified"),true);Donor->AsObject()->SetNumberField(TEXT("mana"),5000);Donor->AsObject()->SetNumberField(TEXT("max_mana"),5000);
+        I=Step(VM,S,P);TestEqual(TEXT("Fresh appraisal resumes filling without another corpse"),I->GetStringField(TEXT("action")),FString(TEXT("apply_item")));
+        TestEqual(TEXT("The freshly assessed donor is consumed"),I->GetNumberField(TEXT("target")),31.);
     }
     for(int Case=0;Case<9;++Case)
     {

@@ -90,6 +90,20 @@ void SACEPluginIcon::Construct(const FArguments& Args)
         Line({{9,29},{23,29}},Gold);
         Line({{7,2},{7,10}},Gold);Line({{3,6},{11,6}},Gold);
     }
+    else if(Id==TEXT("foundry")) // Anvil, blueprint diamond and a rising forge spark.
+    {
+        Fill({{3,16},{28,16},{24,21},{19,21},{19,26},{25,28},{6,28},{12,25},{12,21},{6,21}},Teal);
+        Line({{3,16},{28,16},{24,21},{19,21},{19,26},{25,28},{6,28}},Gold);
+        Line({{6,5},{12,2},{18,5},{18,11},{12,14},{6,11},{6,5},{12,8},{18,5}},Paper);
+        Line({{12,8},{12,14}},Gold);Line({{25,2},{25,11}},Gold);Line({{21,6},{29,6}},Paper);
+    }
+    else if(Id==TEXT("derethlens")) // Faceted lens over a mountain and a waterline.
+    {
+        Line({{5,8},{12,2},{23,4},{28,14},{23,23},{12,25},{5,18},{5,8}},Gold);
+        Fill({{7,18},{14,8},{18,15},{21,11},{26,18}},Teal);
+        Line({{8,20},{14,19},{20,21},{24,20}},Paper);
+        Line({{23,24},{29,30}},Gold);Line({{20,25},{26,31}},Paper);
+    }
     else if(Id==TEXT("thirdeye")) // An open eye beneath a third sight ray.
     {
         Line({{2,18},{7,12},{12,9},{20,9},{25,12},{30,18},{25,23},{20,26},{12,26},{7,23},{2,18}},Gold);

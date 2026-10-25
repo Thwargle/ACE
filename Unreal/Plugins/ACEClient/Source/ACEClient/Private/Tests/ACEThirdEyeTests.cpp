@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
@@ -45,7 +46,7 @@ bool FACEThirdEyeTest::RunTest(const FString&)
     if(!TestTrue(TEXT("Third Eye Lua is bundled"),FFileHelper::LoadFileToString(Script,*(Base/TEXT("ClientMods/thirdeye/main.lua")))))return false;
     FACEPluginVM VM;if(!TestTrue(TEXT("Third Eye compiles in the real sandbox"),VM.Load(Script,Error)))return false;
     auto Snapshot=EyeJSON(TEXT(R"({"time":100,"state":{},"selected":1,"plugins":{"waypoint":{"enabled":true}},"objects":[
-        {"id":1,"name":"Black Coral Golem","wcid":10,"distance":5,"dead":false},
+        {"id":1,"name":"Black Coral Golem","object_type":"creature","wcid":10,"distance":5,"dead":false},
         {"id":2,"name":"Black Coral Crystal","wcid":11,"distance":12,"dead":false},
         {"id":3,"name":"Red Rat","wcid":12,"distance":15,"dead":false},
         {"id":4,"name":"Black Coral Golem","wcid":10,"distance":18,"dead":true}]})"));
@@ -61,6 +62,20 @@ bool FACEThirdEyeTest::RunTest(const FString&)
     TestEqual(TEXT("Partial name matches ignore case; dying objects excluded"),Out->GetStringField(TEXT("status")),FString(TEXT("2 matches")));
     TestEqual(TEXT("New spawn burst uses one local notification"),Out->GetArrayField(TEXT("requests")).Num(),1);
     TestEqual(TEXT("Default markers include both matches"),Out->GetArrayField(TEXT("markers")).Num(),2);
+    TestTrue(TEXT("Existing watch rules opt out of plates"),Out->GetArrayField(TEXT("world_plates")).IsEmpty());
+    Step(TEXT(R"([{"type":"change","id":"plate_1","value":true}])"));
+    TestEqual(TEXT("Per-rule plate includes creatures, not matching items"),Out->GetArrayField(TEXT("world_plates")).Num(),1);
+    auto Plate=Out->GetArrayField(TEXT("world_plates"))[0]->AsObject();
+    TestFalse(TEXT("Third Eye plate survives a different selection"),Plate->GetBoolField(TEXT("selection_only")));
+    TestFalse(TEXT("Unknown vitals are not fabricated"),Plate->HasField(TEXT("vitals")));
+    Snapshot->SetObjectField(TEXT("tracked_targets"),EyeJSON(TEXT(R"({"1":{"level":200,"title":"Guardian","vitals":{"health":{"fraction":0.4},"stamina":{"current":12,"max":40}}}})")));
+    Snapshot->SetNumberField(TEXT("selected"),3);Step();
+    Plate=Out->GetArrayField(TEXT("world_plates"))[0]->AsObject();
+    TestEqual(TEXT("Unselected plate uses refreshed tracked health"),Plate->GetObjectField(TEXT("vitals"))->GetObjectField(TEXT("health"))->GetNumberField(TEXT("fraction")),.4);
+    TestEqual(TEXT("Known title used on plate"),Plate->GetStringField(TEXT("role")),FString(TEXT("Guardian")));
+    Snapshot->SetNumberField(TEXT("selected"),1);
+    Step(TEXT(R"([{"type":"change","id":"plate_1","value":false}])"));
+    TestTrue(TEXT("Disabling per-rule plate clears it"),Out->GetArrayField(TEXT("world_plates")).IsEmpty());
     auto Saved=Out->GetObjectField(TEXT("state"));
     TestEqual(TEXT("Watch list saved without surrounding whitespace"),Saved->GetArrayField(TEXT("rules"))[0]->AsObject()->GetStringField(TEXT("name")),FString(TEXT("bLaCk Coral")));
     if(!Step(TEXT(R"([{"type":"result","id":"detected_alert","ok":false,"error":"Service rate limit; retry after 0.5 seconds"}])")))return false;
@@ -176,7 +191,7 @@ bool FACEThirdEyeTest::RunTest(const FString&)
     TestEqual(TEXT("Original watch list restored from disk"),P->SavedState->GetArrayField(TEXT("rules")).Num(),1);
     if(FApp::CanEverRender())
     {
-        GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"));
+        GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(ACETestDatDirectory());
         TestFalse(TEXT("Third Eye opts out of host scrolling"),P->ScrollPanel());
         FWidgetRenderer Renderer(false,true);auto Panel=H->MakePanel(P->Id);
         TFunction<TSharedPtr<SWidget>(TSharedRef<SWidget>,FName)> FindTag;

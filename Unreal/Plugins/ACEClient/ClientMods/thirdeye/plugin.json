@@ -4,8 +4,8 @@
   "id": "thirdeye",
   "name": "Third Eye",
   "short_name": "EYE",
-  "version": "1.0.0",
-  "description": "Watch for nearby spawns by name, receive local chat alerts, and select or mark detected objects. Runs independently of UCM.",
+  "version": "1.1.0",
+  "description": "Watch for nearby spawns by name, receive local chat alerts, and select, mark, or show live plates for detected creatures. Runs independently of UCM.",
   "permissions": ["state", "ui", "markers", "waypoint"],
   "presentation": {"controls": "none", "settings": false, "status": false, "scroll": false}
 }

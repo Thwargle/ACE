@@ -54,7 +54,7 @@ permissions. Native settings also support bool, number and choice controls.
 ## Callback and snapshot
 
 Return a function `tick(snapshot, profile)` as before. Companions run at most twice
-per second, independently of UCM's action waits. The 8 MiB heap and 250,000 Lua
+per second, independently of UCM's action waits. The 32 MiB heap and 250,000 Lua
 instruction limit still apply. Structured outputs are copied through a bounded
 serializer; cyclic tables, non-finite numbers, functions and mixed/sparse arrays
 are rejected. Each structured field is limited to 4,096 nodes, 12 nesting levels,

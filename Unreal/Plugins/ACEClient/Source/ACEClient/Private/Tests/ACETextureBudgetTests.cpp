@@ -55,7 +55,7 @@ bool FACETextureBudgetTest::RunTest(const FString& Parameters)
 	for (uint32 Bits=0; Bits<16; ++Bits)
 	{
 		FACEDatDecodedSurface Surface; Surface.bHasPixels=true;
-		Surface.Pixels.Init(FColor::White,1024*1024);
+		Surface.Pixels.Init(FColor::White,1024*1024);Surface.Width=Surface.Height=1024;
 		Surface.bFullyTransparent=(Bits&1)!=0;Surface.bUsesAlpha=(Bits&2)!=0;
 		Surface.bClipMap=(Bits&4)!=0;Surface.bAdditive=(Bits&8)!=0;
 		Surface.bIsSolid=(Bits&1)!=0;Surface.bSurfaceTranslucent=(Bits&2)!=0;
@@ -70,6 +70,11 @@ bool FACETextureBudgetTest::RunTest(const FString& Parameters)
 			&& Flags.bIsSolid==((Bits&1)!=0) && Flags.bSurfaceTranslucent==((Bits&2)!=0)
 			&& Flags.Translucency==.25f && Flags.SolidAlpha==.5f);
 	}
+    const auto Resolved=Resolver.GetSurfaceResolveCount();
+    Resolver.DiscardSurfacePixels(0);FACEDatSurfaceRenderFlags TrimmedFlags;
+    TestTrue(TEXT("Discarded pixel buffers retain valid surface classification"),Resolver.ResolveSurfaceRenderFlags(0,TrimmedFlags));
+    TestEqual(TEXT("Classification never reloads discarded pixels"),Resolver.GetSurfaceResolveCount(),Resolved);
+
 	Resolver.InvalidateSurfaceCache();
 	FACEDatSurfaceRenderFlags MissingFlags;MissingFlags.bAdditive=true;
 	TestFalse(TEXT("Invalidated flags cannot outlive their surface"),Resolver.ResolveSurfaceRenderFlags(1,MissingFlags));

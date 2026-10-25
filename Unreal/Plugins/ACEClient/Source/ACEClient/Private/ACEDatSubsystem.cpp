@@ -1,4 +1,5 @@
 #include "ACEDatSubsystem.h"
+#include "ACEProfiling.h"
 #include "ACESpellFormula.h"
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
@@ -128,11 +129,12 @@ namespace
 		// Solid-color sky/celestial surfaces: no texture; emissive + opacity come from the
 		// mesh vertex color the setup builder baked from the DAT surface color.
 		VertexColorTranslucent,
+        VertexColorAlpha,
 		/** Day-dome backdrop — opaque unlit (avoids full-screen translucent overdraw). */
 		VertexColorOpaque
 	};
 
-	bool IsDatPortalFillSurface(const FACEDatDecodedSurface& Decoded)
+	template<typename SurfaceType> bool IsDatPortalFillSurface(const SurfaceType& Decoded)
 	{
 		if (!Decoded.bFullyTransparent || Decoded.bClipMap)
 		{
@@ -445,7 +447,8 @@ namespace
 			Mat->BlendMode = BLEND_Additive;
 			Mat->TranslucencyLightingMode = TLM_Surface;
 			break;
-		case EACEAceMaterialKind::VertexColorTranslucent:
+		case EACEAceMaterialKind::VertexColorAlpha:
+        case EACEAceMaterialKind::VertexColorTranslucent:
 			Mat->BlendMode = BLEND_Translucent;
 			Mat->TranslucencyLightingMode = TLM_Surface;
 			break;
@@ -542,8 +545,15 @@ namespace
 		}
 
 
-		if (Kind == EACEAceMaterialKind::VertexColorTranslucent)
-		{
+		if (Kind == EACEAceMaterialKind::VertexColorAlpha)
+        {
+            auto* VC=NewObject<UMaterialExpressionVertexColor>(Mat);
+            EditorOnly->ExpressionCollection.AddExpression(VC);
+            EditorOnly->EmissiveColor.Expression=VC;
+            EditorOnly->Opacity.Expression=VC;EditorOnly->Opacity.OutputIndex=4;
+        }
+        else if (Kind == EACEAceMaterialKind::VertexColorTranslucent)
+        {
 			// Uniform fog-color fill cube. Do not use PMC vertex colors — those A channels
 			// often arrive as 0, which made the 13bj fill invisible (translucent × A=0).
 			UMaterialExpressionVectorParameter* FillColor = NewObject<UMaterialExpressionVectorParameter>(Mat);
@@ -1023,7 +1033,7 @@ UMaterialParameterCollection* UACEDatSubsystem::GetRuntimePortalCollection() con
 TArray<UMaterialInterface*> UACEDatSubsystem::GetRuntimeMaterialParents()
 {
 	TArray<UMaterialInterface*> Parents = {
-		EnsureInvisibleCollisionMaterial(), GetVertexColorMaterial(), EnsureAceUnlitTexturedMaterialBase(), EnsureAceLandMaterialBase(),
+		EnsureInvisibleCollisionMaterial(), GetVertexColorMaterial(), GetTerrainOverlayMaterial(), EnsureAceUnlitTexturedMaterialBase(), EnsureAceLandMaterialBase(),
 		GetPortalStencilWriterMaterial(), GetPortalDepthApertureMaterial(),
 		EnsureAceBuildingShellMaterialBase(), EnsureAceUnlitMaskedMaterialBase(), EnsureAceOutdoorLitMaterialBase(),
 		EnsureAceOutdoorLitMaskedMaterialBase(), EnsureAceUnlitTranslucentMaterialBase(), EnsureAceUnlitAdditiveMaterialBase(),
@@ -1162,8 +1172,16 @@ void UACEDatSubsystem::Tick(float DeltaTime)
 	}
 }
 
+FString UACEDatSubsystem::DescribeResourceUsage() const
+{
+    const int32 Materials=TexturedMaterialCache.Num()+BuildingShellMaterialCache.Num()+OutdoorLitMaterialCache.Num()+EnvCellMaterialCache.Num()+ParticleMaterialCache.Num();
+    return FString::Printf(TEXT("DAT resources: terrain=%d cells=%d setupMeshes=%d staticMeshes=%d surfaceMaterials=%d liveSurfaceKeys=%d appearanceMaterials=%d appearanceTextures=%d"),
+        LandblockCache.Num(),EnvCellMeshCache.Num(),SetupMeshCache.Num(),SetupStaticMeshCache.Num(),Materials,SurfaceMaterials.Num(),ResolvedMaterialCache.Num(),ResolvedTextureCache.Num());
+}
+
 void UACEDatSubsystem::TrimMemoryCaches()
 {
+	ACE_PROFILE_SCOPE(DatMaintenance);
 #if PLATFORM_ANDROID
 	TrimTextureResolverCaches(512, 256, 192ll << 20);
 	TrimSetupMeshCache(512);
@@ -1247,6 +1265,7 @@ void UACEDatSubsystem::ClearLoadedState()
 	}
 	SetupMeshCache.Reset();
 	ClearAppearanceMeshCache();
+	++LandblockMeshRevision;
 	LandblockCache.Reset();
 	LandblockInfoCache.Reset();
 	DoorwayGeometryCache.Reset();
@@ -1279,15 +1298,16 @@ void UACEDatSubsystem::ClearLoadedState()
 	bRegionSkyLoaded = false;
 	RegionSoundInfo = FACEDatRegionSoundInfo();
 	bRegionSoundLoaded = false;
-	TexturedMaterialCache.Reset();
-	EnvCellMaterialCache.Reset();
+	ResetSurfaceMaterialCache(TexturedMaterialCache,0);
+	ResetSurfaceMaterialCache(EnvCellMaterialCache,3);
+	ResetSurfaceMaterialCache(OutdoorLitMaterialCache,2);
 	InteriorObjectMaterials.Reset();
 	WorldObjectMaterials.Reset();
 	WorldLightingInstances.Reset();
 	InteriorObjectMaterialBases.Reset();
 	StaticMeshMaterialCache.Reset();
-	BuildingShellMaterialCache.Reset();
-	ParticleMaterialCache.Reset();
+	ResetSurfaceMaterialCache(BuildingShellMaterialCache,1);
+	ResetSurfaceMaterialCache(ParticleMaterialCache,4);
 	LandMaterialCache.Reset();
 	LandTextureCache.Reset();
 	ResolvedMaterialCache.Reset();
@@ -1635,6 +1655,7 @@ bool UACEDatSubsystem::EnsureLoaded()
 			SetupStaticMeshSlotMaterials.Reset();
 			InvisibleCollisionMaterial = nullptr;
 			RuntimeTextureKeep.Reset();
+			++LandblockMeshRevision;
 			LandblockCache.Reset();
 			LandblockInfoCache.Reset();
 			DoorwayGeometryCache.Reset();
@@ -1648,11 +1669,12 @@ bool UACEDatSubsystem::EnsureLoaded()
 				EnvCellBuilder = MakeUnique<FACEEnvCellMeshBuilder>(CellDat.Get(), PortalDat.Get(), TextureResolver.Get());
 			}
 			// Mesh caches only — do NOT ReleaseTextureObjects / null sky bases (orphans sky MIDs).
-			TexturedMaterialCache.Reset();
-			EnvCellMaterialCache.Reset();
+			ResetSurfaceMaterialCache(TexturedMaterialCache,0);
+			ResetSurfaceMaterialCache(EnvCellMaterialCache,3);
+			ResetSurfaceMaterialCache(OutdoorLitMaterialCache,2);
 			StaticMeshMaterialCache.Reset();
-			BuildingShellMaterialCache.Reset();
-			ParticleMaterialCache.Reset();
+			ResetSurfaceMaterialCache(BuildingShellMaterialCache,1);
+			ResetSurfaceMaterialCache(ParticleMaterialCache,4);
 			LandMaterialCache.Reset();
 			LookOutLandMaterialCache.Reset();
 			LandTextureCache.Reset();
@@ -1889,6 +1911,14 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateLandGpuMaterial()
 	return nullptr;
 }
 
+UMaterialInterface* UACEDatSubsystem::GetTerrainOverlayMaterial()
+{
+    if(!TerrainOverlayMaterial)TerrainOverlayMaterial=CreateAceOverlayMaterial(
+        TEXT("M_ACETerrainOverlay_v1"),EACEAceMaterialKind::VertexColorAlpha,
+        true,false,false,false,true);
+    return TerrainOverlayMaterial;
+}
+
 UMaterialInterface* UACEDatSubsystem::GetVertexColorMaterial()
 {
 	if (VertexColorMaterial)
@@ -1964,7 +1994,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceUnlitTexturedMaterialBase()
 	{
 		AppliedWorldLitGraphVersion = WorldLitGraphVersion;
 		TexturedMaterialBase = nullptr;
-		TexturedMaterialCache.Reset();
+		ResetSurfaceMaterialCache(TexturedMaterialCache,0);
 	}
 	if (TexturedMaterialBase)
 	{
@@ -2586,7 +2616,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateBuildingShellMaterial(uint32 Su
 	if (AppliedBuildingShellMatVersion != BuildingShellMatVersion)
 	{
 		AppliedBuildingShellMatVersion = BuildingShellMatVersion;
-		BuildingShellMaterialCache.Reset();
+		ResetSurfaceMaterialCache(BuildingShellMaterialCache,1);
 		BuildingShellMaterialBase = nullptr;
 	}
 
@@ -2607,14 +2637,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateBuildingShellMaterial(uint32 Su
 		return GetOrCreateOutdoorLitMaterial(SurfaceId, bWrapTexture);
 	}
 
-	if (const TObjectPtr<UMaterialInstanceDynamic>* Found = BuildingShellMaterialCache.Find(CacheKey))
-	{
-		if (UMaterialInstanceDynamic* Cached = Found->Get())
-		{
-			return Cached;
-		}
-		BuildingShellMaterialCache.Remove(CacheKey);
-	}
+	if (auto* Cached=FindSurfaceMaterial(BuildingShellMaterialCache,1,CacheKey)) return Cached;
 
 	UTexture2D* Tex = TextureResolver->GetOrCreateUTexture(SurfaceId, this, bWrapTexture);
 	if (!Tex && bResolved && Decoded.bIsSolid && !Decoded.bFullyTransparent)
@@ -2661,6 +2684,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateBuildingShellMaterial(uint32 Su
 	MID->SetVectorParameterValue(TEXT("WorldAmbientTint"),WorldAmbientTint);
 	ApplyDistanceFogToMid(MID);
 	BuildingShellMaterialCache.Add(CacheKey, MID);
+	SurfaceMaterials.Add((uint64(1)<<32)|CacheKey, {MID,++SurfaceMaterialClock});
 	return MID;
 }
 
@@ -2947,7 +2971,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceUnlitTranslucentMaterialBase()
 	{
 		AppliedTransMatVersion = TransMatVersion;
 		TranslucentMaterialBase = nullptr;
-		ParticleMaterialCache.Reset();
+		ResetSurfaceMaterialCache(ParticleMaterialCache,4);
 	}
 	if (TranslucentMaterialBase)
 	{
@@ -2978,7 +3002,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceUnlitAdditiveMaterialBase()
 	{
 		AppliedAddMatVersion = AddMatVersion;
 		AdditiveMaterialBase = nullptr;
-		ParticleMaterialCache.Reset();
+		ResetSurfaceMaterialCache(ParticleMaterialCache,4);
 	}
 	if (AdditiveMaterialBase)
 	{
@@ -3026,7 +3050,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceParticleAdditiveMaterialBase()
 	{
 		AppliedParticleAddMatVersion = ParticleAddMatVersion;
 		ParticleAdditiveMaterialBase = nullptr;
-		ParticleMaterialCache.Reset();
+		ResetSurfaceMaterialCache(ParticleMaterialCache,4);
 	}
 	if (ParticleAdditiveMaterialBase)
 	{
@@ -3278,14 +3302,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateTexturedMaterial(uint32 Surface
 		return nullptr;
 	}
 
-	if (const TObjectPtr<UMaterialInstanceDynamic>* Found = TexturedMaterialCache.Find(CacheKey))
-	{
-		if (UMaterialInstanceDynamic* Cached = Found->Get())
-		{
-			return Cached;
-		}
-		TexturedMaterialCache.Remove(CacheKey);
-	}
+	if (auto* Cached=FindSurfaceMaterial(TexturedMaterialCache,0,CacheKey)) return Cached;
 
 	FACEDatDecodedSurface Decoded;
 	const bool bResolved = TextureResolver->ResolveSurface(SurfaceId, Decoded);
@@ -3392,6 +3409,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateTexturedMaterial(uint32 Surface
 	MID->SetVectorParameterValue(TEXT("UVOffset"), FLinearColor(0.f, 0.f, 0.f, 0.f));
 	ApplyDistanceFogToMid(MID);
 	TexturedMaterialCache.Add(CacheKey, MID);
+	SurfaceMaterials.Add((uint64(0)<<32)|CacheKey, {MID,++SurfaceMaterialClock});
 	return MID;
 }
 
@@ -3403,9 +3421,9 @@ void UACEDatSubsystem::SetInteriorAmbient(const FLinearColor& Color)
 	const FLinearColor Ambient = FLinearColor::White;
 	if (InteriorAmbient.Equals(Ambient, .001f)) return;
 	InteriorAmbient = Ambient;
-	for (const auto& Pair : EnvCellMaterialCache)
+	for (const auto& Pair : SurfaceMaterials)
 	{
-		if (Pair.Value) Pair.Value->SetVectorParameterValue(TEXT("InteriorAmbient"), InteriorAmbient);
+		if ((Pair.Key>>32)==3) if (auto* Mid=Pair.Value.Material.Get()) Mid->SetVectorParameterValue(TEXT("InteriorAmbient"), InteriorAmbient);
 	}
 }
 
@@ -3419,10 +3437,10 @@ void UACEDatSubsystem::SetInteriorUsesOutdoorAmbient(bool bUseOutdoor)
 UMaterialInterface* UACEDatSubsystem::GetOrCreateEnvCellMaterial(uint32 SurfaceId, bool bWrapTexture)
 {
 	const uint32 CacheKey = FACEDatTextureResolver::WorldTextureKey(SurfaceId, bWrapTexture);
-	if (const auto* Existing = EnvCellMaterialCache.Find(CacheKey)) return Existing->Get();
+	if (auto* Cached=FindSurfaceMaterial(EnvCellMaterialCache,3,CacheKey)) return Cached;
 	if (!TextureResolver) return nullptr;
-	FACEDatDecodedSurface Surface;
-	if (!TextureResolver->ResolveSurface(SurfaceId, Surface) || Surface.bFullyTransparent) return nullptr;
+	FACEDatSurfaceRenderFlags Surface;
+	if (!TextureResolver->ResolveSurfaceRenderFlags(SurfaceId, Surface) || Surface.bFullyTransparent) return nullptr;
 	if (Surface.bAdditive || (Surface.bSurfaceTranslucent && Surface.Translucency > .2f && !Surface.bClipMap))
 		return GetOrCreateTexturedMaterial(SurfaceId, bWrapTexture);
 	auto* Source = Cast<UMaterialInstanceDynamic>(GetOrCreateOutdoorLitMaterial(SurfaceId, bWrapTexture));
@@ -3441,6 +3459,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateEnvCellMaterial(uint32 SurfaceI
 	// on landscape and scenery visible through their portals.
 	MID->SetScalarParameterValue(TEXT("FogAmount"), 0.f);
 	EnvCellMaterialCache.Add(CacheKey, MID);
+	SurfaceMaterials.Add((uint64(3)<<32)|CacheKey, {MID,++SurfaceMaterialClock});
 	return MID;
 }
 
@@ -3452,14 +3471,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateOutdoorLitMaterial(uint32 Surfa
 		return nullptr;
 	}
 
-	if (const TObjectPtr<UMaterialInstanceDynamic>* Found = OutdoorLitMaterialCache.Find(CacheKey))
-	{
-		if (UMaterialInstanceDynamic* Cached = Found->Get())
-		{
-			return Cached;
-		}
-		OutdoorLitMaterialCache.Remove(CacheKey);
-	}
+	if (auto* Cached=FindSurfaceMaterial(OutdoorLitMaterialCache,2,CacheKey)) return Cached;
 
 	FACEDatDecodedSurface Decoded;
 	const bool bResolved = TextureResolver->ResolveSurface(SurfaceId, Decoded);
@@ -3547,6 +3559,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateOutdoorLitMaterial(uint32 Surfa
 	MID->SetVectorParameterValue(TEXT("UVOffset"), FLinearColor(0.f, 0.f, 0.f, 0.f));
 	ApplyDistanceFogToMid(MID);
 	OutdoorLitMaterialCache.Add(CacheKey, MID);
+	SurfaceMaterials.Add((uint64(2)<<32)|CacheKey, {MID,++SurfaceMaterialClock});
 	return MID;
 }
 
@@ -3579,17 +3592,10 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateParticleMaterial(uint32 Surface
 	if (AppliedParticleMatVersion != ParticleMatVersion)
 	{
 		AppliedParticleMatVersion = ParticleMatVersion;
-		ParticleMaterialCache.Reset();
+		ResetSurfaceMaterialCache(ParticleMaterialCache,4);
 	}
 
-	if (const TObjectPtr<UMaterialInstanceDynamic>* Found = ParticleMaterialCache.Find(SurfaceId))
-	{
-		if (UMaterialInstanceDynamic* Cached = Found->Get())
-		{
-			return Cached;
-		}
-		ParticleMaterialCache.Remove(SurfaceId);
-	}
+	if (auto* Cached=FindSurfaceMaterial(ParticleMaterialCache,4,SurfaceId)) return Cached;
 
 	FACEDatDecodedSurface Decoded;
 	const bool bResolved = TextureResolver->ResolveSurface(SurfaceId, Decoded);
@@ -3682,18 +3688,19 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateParticleMaterial(uint32 Surface
 	ApplyDistanceFogToMid(MID);
 	MID->SetScalarParameterValue(TEXT("FogAmount"), 0.f);
 	ParticleMaterialCache.Add(SurfaceId, MID);
+	SurfaceMaterials.Add((uint64(4)<<32)|SurfaceId, {MID,++SurfaceMaterialClock});
 	return MID;
 }
 
 UMaterialInstanceDynamic* UACEDatSubsystem::CreateSkyParticleMaterial(UMaterialInterface* Source, UObject* Outer)
 {
 	if (!Source || !TextureResolver) return nullptr;
-	for (const auto& Pair : ParticleMaterialCache)
+	for (const auto& Pair : SurfaceMaterials)
 	{
-		if (Pair.Value!=Source) continue;
+		if ((Pair.Key>>32)!=4 || Pair.Value.Material.Get()!=Source) continue;
 		FACEDatDecodedSurface Surface;
-		if (!TextureResolver->ResolveSurface(Pair.Key,Surface)) return nullptr;
-		auto* Texture=TextureResolver->GetOrCreateSkyUTexture(Pair.Key,this,false);
+		if (!TextureResolver->ResolveSurface(uint32(Pair.Key),Surface)) return nullptr;
+		auto* Texture=TextureResolver->GetOrCreateSkyUTexture(uint32(Pair.Key),this,false);
 		if (!Texture) return nullptr;
 		const bool Additive=Surface.bAdditive && !(Surface.bClipMap && Surface.bSurfaceTranslucent);
 		auto* Mid=UMaterialInstanceDynamic::Create(Additive ? EnsureAceSkyAdditiveMaterialBase() : EnsureAceSkyTranslucentMaterialBase(),Outer);
@@ -4279,8 +4286,8 @@ UStaticMesh* UACEDatSubsystem::GetOrCreateSetupStaticMesh(uint32 SetupId, float 
 			bool bAdditive = false;
 			if (TextureResolver && Sec.SurfaceId != 0)
 			{
-				FACEDatDecodedSurface Decoded;
-				if (TextureResolver->ResolveSurface(Sec.SurfaceId, Decoded))
+				FACEDatSurfaceRenderFlags Decoded;
+				if (TextureResolver->ResolveSurfaceRenderFlags(Sec.SurfaceId, Decoded))
 				{
 					if (IsDatPortalFillSurface(Decoded) && !Sec.bClipMap)
 					{
@@ -4859,8 +4866,8 @@ bool UACEDatSubsystem::ApplySetupToProceduralMeshInternal(UProceduralMeshCompone
 			// Never treat ClipMaps as doorway holes via color keying — that clips character blacks.
 			if (TextureResolver && Sec.SurfaceId != 0 && !Sec.bClipMap)
 			{
-				FACEDatDecodedSurface Decoded;
-				if (TextureResolver->ResolveSurface(Sec.SurfaceId, Decoded) && IsDatPortalFillSurface(Decoded))
+				FACEDatSurfaceRenderFlags Decoded;
+				if (TextureResolver->ResolveSurfaceRenderFlags(Sec.SurfaceId, Decoded) && IsDatPortalFillSurface(Decoded))
 				{
 					continue;
 				}
@@ -4915,8 +4922,8 @@ bool UACEDatSubsystem::ApplySetupToProceduralMeshInternal(UProceduralMeshCompone
 			bool bAdditive = false;
 			if (TextureResolver && Sec.SurfaceId != 0)
 			{
-				FACEDatDecodedSurface Decoded;
-				if (TextureResolver->ResolveSurface(Sec.SurfaceId, Decoded))
+				FACEDatSurfaceRenderFlags Decoded;
+				if (TextureResolver->ResolveSurfaceRenderFlags(Sec.SurfaceId, Decoded))
 				{
 					bSoftAlpha = bSoftAlpha || Decoded.bUsesAlpha || Decoded.bFullyTransparent || Decoded.bClipMap;
 					bAdditive = Decoded.bAdditive;
@@ -5214,6 +5221,7 @@ const FACEBuiltLandblockMesh* UACEDatSubsystem::GetOrBuildLandblockMesh(uint32 L
 		{
 			return Existing->Get();
 		}
+		++LandblockMeshRevision;
 		LandblockCache.Remove(Key);
 	}
 
@@ -5231,6 +5239,7 @@ const FACEBuiltLandblockMesh* UACEDatSubsystem::GetOrBuildLandblockMesh(uint32 L
 			{
 				LandBuilder->HydrateSectionBakes(*FromDisk, Fingerprint);
 			}
+			++LandblockMeshRevision;
 			TSharedPtr<FACEBuiltLandblockMesh>& Slot = LandblockCache.Add(Key, MoveTemp(FromDisk));
 			return Slot.Get();
 		}
@@ -5247,6 +5256,7 @@ const FACEBuiltLandblockMesh* UACEDatSubsystem::GetOrBuildLandblockMesh(uint32 L
 	{
 		ACELandblockMeshCache::Save(CachePath, *Built, WorldScale, Fingerprint);
 	}
+	++LandblockMeshRevision;
 	TSharedPtr<FACEBuiltLandblockMesh>& Slot = LandblockCache.Add(Key, MoveTemp(Built));
 	return Slot.Get();
 }
@@ -5357,6 +5367,7 @@ void UACEDatSubsystem::EvictLandblockMeshesOutside(const TSet<int32>& KeepLandbl
 	}
 	for (uint32 Key : ToRemove)
 	{
+		++LandblockMeshRevision;
 		LandblockCache.Remove(Key);
 		BuildingInteriorFootprints.Remove(Key & 0xFFFF0000u);
 	}
@@ -5468,6 +5479,7 @@ void UACEDatSubsystem::OnLandblockBuildComplete(uint32 LandblockId, float WorldS
 	}
 	if (bOk && Mesh && Mesh->bHasHeights && Mesh->bHasTerrain)
 	{
+		++LandblockMeshRevision;
 		LandblockCache.FindOrAdd(LandblockId) = Mesh;
 		FailedLandblockMeshIds.Remove(LandblockId);
 		UE_LOG(LogTemp, Verbose, TEXT("ACEDat: landblock 0x%08X mesh ready (async)"), LandblockId);
@@ -5512,6 +5524,7 @@ bool UACEDatSubsystem::ConsumeLandMeshReloadRequest(bool* bOutClearEnvCells)
 		PendingSetupKeys.Reset();
 		FailedSetupKeys.Reset();
 		CachedDatFingerprint = 0;
+		++LandblockMeshRevision;
 		LandblockCache.Reset();
 		LandblockInfoCache.Reset();
 		DoorwayGeometryCache.Reset();
@@ -6845,34 +6858,16 @@ void UACEDatSubsystem::SetWorldEmissiveScale(float LandScale, float SceneryScale
 	{
 		LandGpuMaterialInstance->SetScalarParameterValue(TEXT("EmissiveStrength"), WorldEmissiveScale);
 	}
-	for (auto& Pair : TexturedMaterialCache)
+	// Weak identities keep visible materials responsive to daylight after their
+	// warm-cache reference is evicted; cache lifetime must not change lighting.
+	for (const auto& Pair : SurfaceMaterials)
 	{
-		if (UMaterialInstanceDynamic* Mid = Pair.Value.Get())
+		const uint32 Kind=uint32(Pair.Key>>32);
+		if (Kind>2) continue;
+		if (auto* Mid=Pair.Value.Material.Get())
 		{
-			Mid->SetScalarParameterValue(TEXT("EmissiveStrength"), 1.f);
-		}
-	}
-	for (auto& Pair : StaticMeshMaterialCache)
-	{
-		if (UMaterialInstanceDynamic* Mid = Pair.Value.Get())
-		{
-			Mid->SetScalarParameterValue(TEXT("EmissiveStrength"), 1.f);
-		}
-	}
-	for (auto& Pair : OutdoorLitMaterialCache)
-	{
-		if (UMaterialInstanceDynamic* Mid = Pair.Value.Get())
-		{
-			Mid->SetScalarParameterValue(TEXT("EmissiveStrength"), SceneryEmissiveScale);
-			Mid->SetVectorParameterValue(TEXT("WorldAmbientTint"),WorldAmbientTint);
-		}
-	}
-	for (auto& Pair : BuildingShellMaterialCache)
-	{
-		if (UMaterialInstanceDynamic* Mid = Pair.Value.Get())
-		{
-			Mid->SetScalarParameterValue(TEXT("EmissiveStrength"), SceneryEmissiveScale);
-			Mid->SetVectorParameterValue(TEXT("WorldAmbientTint"),WorldAmbientTint);
+			Mid->SetScalarParameterValue(TEXT("EmissiveStrength"),Kind==0?1.f:SceneryEmissiveScale);
+			if (Kind!=0) Mid->SetVectorParameterValue(TEXT("WorldAmbientTint"),WorldAmbientTint);
 		}
 	}
 }
@@ -7181,6 +7176,7 @@ bool UACEDatSubsystem::CollectRegionScenery(uint32 LandblockId, float WorldScale
 	if (!Mesh || !Mesh->bHasTerrain || !Mesh->bHasHeights)
 	{
 		// Drop any heights-only stale entry so RequestLandblockMesh actually rebuilds.
+		++LandblockMeshRevision;
 		LandblockCache.Remove(LandblockId & 0xFFFF0000u);
 		RequestLandblockMesh(LandblockId, WorldScale);
 		return false;
@@ -7803,6 +7799,22 @@ void UACEDatSubsystem::TrimResolvedTextureCache(int32 MaxEntries)
 		if (!ResolvedTextureCache.Contains(It.Key()) && !ResolvedMaterialCache.Contains(It.Key())) It.RemoveCurrent();
 }
 
+void UACEDatSubsystem::ResetSurfaceMaterialCache(TMap<uint32,TObjectPtr<UMaterialInstanceDynamic>>& Cache,uint32 Kind)
+{
+    Cache.Reset();
+    for(auto It=SurfaceMaterials.CreateIterator();It;++It) if((It.Key()>>32)==Kind) It.RemoveCurrent();
+}
+
+UMaterialInstanceDynamic* UACEDatSubsystem::FindSurfaceMaterial(TMap<uint32,TObjectPtr<UMaterialInstanceDynamic>>& Cache,uint32 Kind,uint32 Key)
+{
+    const uint64 FullKey=(uint64(Kind)<<32)|Key;
+    if(auto* Material=Cache.FindRef(Key).Get())
+    {SurfaceMaterials.Add(FullKey,{Material,++SurfaceMaterialClock});return Material;}
+    if(auto* Record=SurfaceMaterials.Find(FullKey))if(auto* Material=Record->Material.Get())
+    {Record->LastUse=++SurfaceMaterialClock;Cache.Add(Key,Material);return Material;}
+    return nullptr;
+}
+
 void UACEDatSubsystem::TrimTextureResolverCaches(int32 MaxTextures, int32 MaxDecodedSurfaces, int64 MaxBytes)
 {
 	for (auto It = LandMaterialCache.CreateIterator(); It; ++It) if (!It.Value().IsValid()) It.RemoveCurrent();
@@ -7815,19 +7827,39 @@ void UACEDatSubsystem::TrimTextureResolverCaches(int32 MaxTextures, int32 MaxDec
 	{
 		TextureResolver->TrimCaches(MaxTextures, MaxDecodedSurfaces, MaxBytes);
 	}
-	// Textured MIDs can outlive trimmed resolver textures — soft-cap them too.
-	const int32 MatMax = FMath::Max(64, MaxTextures);
-	const int32 MatOver = TexturedMaterialCache.Num() - MatMax;
-	if (MatOver > 0)
-	{
-		TArray<uint32> Keys;
-		TexturedMaterialCache.GetKeys(Keys);
-		const int32 RemoveCount = FMath::Min(MatOver, Keys.Num());
-		for (int32 i = 0; i < RemoveCount; ++i)
-		{
-			TexturedMaterialCache.Remove(Keys[i]);
-		}
-	}
+	// These were independently unbounded strong maps. Touring new regions kept
+    // old walls, scenery and particles (and all their GPU textures) alive forever.
+    struct FCandidate {uint64 Key,LastUse;};TArray<FCandidate> Candidates;
+    auto Collect=[&](const auto& Cache,uint32 Kind)
+    {
+        for(const auto& Pair:Cache)
+        {
+            const uint64 Key=(uint64(Kind)<<32)|Pair.Key;
+            auto& Record=SurfaceMaterials.FindOrAdd(Key);
+            Record.Material=Pair.Value;
+            Candidates.Add({Key,Record.LastUse});
+        }
+    };
+    Collect(TexturedMaterialCache,0);Collect(BuildingShellMaterialCache,1);
+    Collect(OutdoorLitMaterialCache,2);Collect(EnvCellMaterialCache,3);Collect(ParticleMaterialCache,4);
+    const int32 Over=Candidates.Num()-FMath::Max(64,MaxTextures);
+    if(Over>0)
+    {
+        Candidates.Sort([](const auto& A,const auto& B){return A.LastUse<B.LastUse;});
+        for(int32 I=0;I<Over;++I)
+        {
+            const uint32 Key=uint32(Candidates[I].Key);
+            switch(Candidates[I].Key>>32)
+            {
+            case 0:TexturedMaterialCache.Remove(Key);break;
+            case 1:BuildingShellMaterialCache.Remove(Key);break;
+            case 2:OutdoorLitMaterialCache.Remove(Key);break;
+            case 3:EnvCellMaterialCache.Remove(Key);break;
+            case 4:ParticleMaterialCache.Remove(Key);break;
+            }
+        }
+    }
+    for(auto It=SurfaceMaterials.CreateIterator();It;++It)if(!It.Value().Material.IsValid())It.RemoveCurrent();
 }
 
 void UACEDatSubsystem::AllowEnvCellMeshRetry(uint32 EnvCellId, float WorldScale)

@@ -1480,7 +1480,7 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 	}
 	const bool bToEmoteOrReady = (ACEMotion::IsHeldRestCommand(Cmd) && Cmd != ACEMotion::Dead) || Cmd == ACEMotion::Ready;
 	if (AnimMode == EACEAnimMode::ActionOneShot && !bHoldActionFinal
-		&& (bFromMissile || (bToEmoteOrReady && (bFromEmote || bActionUsesStateTransition))))
+		&& (bFromMissile || ((bToEmoteOrReady || (Cmd & 0x80000000u)) && (bFromEmote || bActionUsesStateTransition))))
 	{
 		// Retail removes only the cyclic tail, not an unfinished entry/exit.
 		// Repeated movement/Ready echoes must not append another stand-up sequence.
@@ -1491,7 +1491,7 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 	}
 	ActionFromCommand = bFromEmote || bFromMissile ? ActionCommand : ACEMotion::Ready;
 	WalkingMotion.Reset();
-	bActionUsesStateTransition = bFromEmote || bFromMissile;
+	bActionUsesStateTransition = bFromEmote || bFromMissile || (Cmd & 0x80000000u);
 	// Falling already contains retail's takeoff link (~0.2 s). A full stance
 	// cross-fade hid it behind the previous jump's frozen endpoint.
 	// Attack links already contain their authored approach and recovery poses.
@@ -1831,6 +1831,9 @@ void UACECharacterAppearanceComponent::SetHeldActionMotion(int32 InActionCommand
 	{
 		ActionStyle = PreferredStyle != 0 ? PreferredStyle : ACEMotion::StanceNonCombat;
 	}
+	// A newly observed resting creature already has a style in CreateObject.
+	// Retain it so the first combat update can play its full activation link.
+	if (PreferredStyle == 0) PreferredStyle = ActionStyle;
 	ActionPlayRate = 1.f;
 	bSuppressNextHookDispatch = true;
 	const bool bLoopSubstate = Cmd != ACEMotion::Dead && ACEMotion::IsHeldRestCommand(Cmd);
@@ -2336,7 +2339,7 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 				if (PendingActionHolds.Num() > 0) { PendingActionHolds.RemoveAt(0); }
 				// Start next without wiping the rest of the scarab/cast queue.
 				ActionFromCommand = ACEIsEmoteSubstate(ActionCommand) || ACEIsMissileSubstate(ActionCommand) ? ActionCommand : ACEMotion::Ready;
-				bActionUsesStateTransition = ActionFromCommand != ACEMotion::Ready;
+				bActionUsesStateTransition = ActionFromCommand != ACEMotion::Ready || (Next & 0x80000000u);
 				BeginPoseBlendFromCurrent(ACEAttackMotion::IsAttack(Next) ? 0.f : bActionUsesStateTransition ? .06f : StanceBlendDuration);
 				AnimMode = EACEAnimMode::ActionOneShot;
 				ActionCommand = Next;

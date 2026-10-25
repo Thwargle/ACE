@@ -198,6 +198,7 @@ bool FACEDesktopHighlightTest::RunTest(const FString&)
    // An attuned resonator can be handed to it even though ground drop is forbidden.
    FACEWorldObject Deposit=Object;Deposit.WeenieClassId=40809;Deposit.Name=TEXT("Apostate Aetherium Deposit");
    Deposit.SetupId=0x02000B82;Deposit.MotionTableId=0x0900013D;Deposit.PhysicsState=6292504;
+   Deposit.bHasVelocity=true;Deposit.Velocity=FVector(0,0,-2.4225);
    Deposit.ItemUseable=32;Deposit.UseRadius=3;Deposit.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
    Deposit.InitialMotionStyle=ACEMotion::StanceNonCombat;Deposit.InitialMotionCommand=ACEMotion::Ready;
    FACECharacterCreation Creation;FString Error;
@@ -224,6 +225,9 @@ bool FACEDesktopHighlightTest::RunTest(const FString&)
    // horizontal ray in an empty world. Camera elevation is not player reach.
    Deposit.Position.CellId=0x7F020107;Deposit.Position.Location=FVector(40,-20,.055);
    Session->WorldObjects[Deposit.Guid]=Deposit;Entity->InitializeFromObject(Deposit,100,true);
+   for(int32 Frame=0;Frame<120;++Frame)Entity->Tick(1.f/60);
+   TestTrue(TEXT("Quest hand-in keeps the deposit at its server origin despite falling velocity"),
+    Entity->GetActorLocation().Equals(Deposit.Position.ToUnrealLocation(100),.01));
    FBox DepositBounds;TestTrue(TEXT("Deposit has posed selection artwork"),Entity->Appearance->GetVisualWorldBounds(DepositBounds));
    TArray<AACEEnvCellActor*> DepositRooms;
    if(const auto Info=Dat->GetLandblockInfo(0x7F020000))for(uint32 I=0;I<Info->NumCells;++I)

@@ -31,6 +31,7 @@ UCLASS(Config=Engine)
 class ACECLIENT_API UACEDatSubsystem : public UGameInstanceSubsystem, public FTickableGameObject
 {
 	GENERATED_BODY()
+	friend class FACEContentPerformanceTest;
 	friend class FACEDeferredWorldAppearanceTest;
 
 public:
@@ -55,6 +56,7 @@ public:
 	void UntrackRuntimeTexture(UTexture2D* Tex);
 	/** Count + byte LRU trim for textures/setup caches. Safe to call often. */
 	void TrimMemoryCaches();
+	FString DescribeResourceUsage() const;
 	/** Keep reusable destination meshes, discard CPU mesh/mip sources belonging to departed areas. */
 	void RetireWorldMeshesOutside(const TSet<int32>& KeepLandblockIds, float WorldScale);
 	void LogLandTextureMemory(const TCHAR* Phase) const;
@@ -213,6 +215,7 @@ public:
 
 	/** Memory-only lookup — never builds. */
 	const FACEBuiltLandblockMesh* FindLandblockMesh(uint32 LandblockId) const;
+	uint64 GetLandblockMeshRevision() const { return LandblockMeshRevision; }
 
 	/** True when a background bake / disk load for this landblock is already queued. */
 	bool IsLandblockMeshInFlight(uint32 LandblockId) const;
@@ -496,6 +499,7 @@ public:
 	void RebuildLandSurfaceAtlas();
 
 	UMaterialInterface* GetVertexColorMaterial();
+    UMaterialInterface* GetTerrainOverlayMaterial();
 	/** Complete shader parent set, generated in the editor and loaded from cooked assets in game builds. */
 	TArray<UMaterialInterface*> GetRuntimeMaterialParents();
 	/** Shared world fog; per-material FogAmount still opts interiors/previews out. */
@@ -758,6 +762,7 @@ private:
 	uint64 AppearanceMeshUse = 0;
 	void ClearAppearanceMeshCache() { AppearanceMeshCache.Reset(); AppearanceMeshCacheBytes = 0; AppearanceMeshUse = 0; }
 	TMap<uint32, TSharedPtr<FACEBuiltLandblockMesh>> LandblockCache;
+	uint64 LandblockMeshRevision=0;
 	TMap<uint32, TSharedPtr<const FACEDatLandblockInfo>> LandblockInfoCache;
 	struct FCachedDoorwayGeometry
 	{
@@ -885,6 +890,7 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInterface> VertexColorMaterial;
+    UPROPERTY(Transient) TObjectPtr<UMaterialInterface> TerrainOverlayMaterial;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInterface> InvisibleCollisionMaterial;
@@ -977,6 +983,11 @@ private:
 
 	UPROPERTY(Transient)
 	TMap<uint32, TObjectPtr<UMaterialInstanceDynamic>> TexturedMaterialCache;
+    struct FSurfaceMaterialRecord {TWeakObjectPtr<UMaterialInstanceDynamic> Material;uint64 LastUse=0;};
+    TMap<uint64,FSurfaceMaterialRecord> SurfaceMaterials;
+    uint64 SurfaceMaterialClock=0;
+    void ResetSurfaceMaterialCache(TMap<uint32,TObjectPtr<UMaterialInstanceDynamic>>& Cache,uint32 Kind);
+    UMaterialInstanceDynamic* FindSurfaceMaterial(TMap<uint32,TObjectPtr<UMaterialInstanceDynamic>>& Cache,uint32 Kind,uint32 Key);
 
 	UPROPERTY(Transient)
 	TMap<uint32, TObjectPtr<UMaterialInstanceDynamic>> StaticMeshMaterialCache;

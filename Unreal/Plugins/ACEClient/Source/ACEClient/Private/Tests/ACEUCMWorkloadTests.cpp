@@ -11,6 +11,7 @@
 #include "ACEDatSubsystem.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "Mods/ACEPluginVM.h"
+#include "Serialization/JsonSerializer.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMIdleWorkloadTest,"ACE.Performance.UCMIdleWorkload",
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
@@ -98,6 +99,44 @@ bool FACEUCMIdleWorkloadTest::RunTest(const FString&)
         Samples.Sort();
         AddInfo(FString::Printf(TEXT("Idle UCM %s (512 items / 2048 spells / 8 monsters): snapshot avg %.3f ms; Lua avg %.3f ms; total p95 %.3f ms; peak %.3f ms; heap peak %.2f MiB"),
             Appraise?TEXT("with appraisal replies"):TEXT("unchanged"),SnapshotMs/Samples.Num(),LuaMs/Samples.Num(),Samples[60],Samples.Last(),VM.GetPeakMemoryUsage()/1048576.));
+    }
+    // A full learned book, assessed packs and a Classic-sized loot profile must
+    // fit together, not just pass separate spellbook/profile stress tests.
+    for(int32 Id=1;Id<7000&&S->KnownSpells.Num()<4000;++Id)
+    {FString Name;uint32 Icon=0;if(!S->KnownSpells.Contains(Id)&&D->TryGetSpellInfo(Id,Name,Icon))S->KnownSpells.Add(Id);}
+    auto LargeProfile=MakeShared<FJsonObject>(*P->Profile);
+    TArray<TSharedPtr<FJsonValue>> Rules;
+    for(int32 I=0;I<1637;++I)
+    {
+        TSharedPtr<FJsonObject> Rule;
+        FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(TEXT(R"({"action":"keep","label":"Assessed armor rule","conditions":[{"field":"int","key":1,"op":"ge","value":0},{"field":"int","key":2,"op":"ge","value":0},{"field":"int","key":3,"op":"ge","value":0},{"field":"int","key":4,"op":"ge","value":0}]})")),Rule);
+        const auto Four=Rule->GetArrayField(TEXT("conditions"));
+        auto Eight=Four;Eight.Append(Four);Rule->SetArrayField(TEXT("conditions"),Eight);
+        Rules.Add(MakeShared<FJsonValueObject>(Rule));
+    }
+    LargeProfile->SetArrayField(TEXT("loot_rules"),Rules);
+    const auto LargeInput=H->Snapshot();FACEPluginVM LargeVM;
+    TestTrue(TEXT("Combined workload loads"),LargeVM.Load(Source,Error));
+    double Work=0;
+    for(int32 I=0;I<120;++I)
+    {
+        LargeInput->SetNumberField(TEXT("time"),100+I*.5);
+        LargeInput->SetBoolField(TEXT("busy"),I%2!=0);
+        const double Start=FPlatformTime::Seconds();
+        if(!LargeVM.Step(LargeInput,LargeProfile,Output,Error))
+        {AddError(FString::Printf(TEXT("Combined workload tick %d (%d spells, %d items, %d rules): %s"),I,S->KnownSpells.Num(),LargeInput->GetArrayField(TEXT("inventory")).Num(),Rules.Num(),*Error));return false;}
+        Work+=FPlatformTime::Seconds()-Start;
+    }
+    AddInfo(FString::Printf(TEXT("Combined native inventory/book/profile (%d spells, %d items, %d rules): %.2f MiB peak; %.3f ms average"),LargeInput->GetArrayField(TEXT("spells")).Num(),LargeInput->GetArrayField(TEXT("inventory")).Num(),Rules.Num(),LargeVM.GetPeakMemoryUsage()/1048576.,Work*1000/120));
+    FString ImportedText;TSharedPtr<FJsonObject> Imported;
+    if(FFileHelper::LoadFileToString(ImportedText,*(FPaths::ProjectDir()/TEXT("Saved/ClientPlugins/Profiles/Loot/LootSnobV4.json")))
+        &&FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(ImportedText),Imported))
+    {
+        auto ImportedProfile=MakeShared<FJsonObject>(*P->Profile);ImportedProfile->SetArrayField(TEXT("loot_rules"),Imported->GetArrayField(TEXT("loot_rules")));
+        FACEPluginVM ImportedVM;TestTrue(TEXT("Imported combined workload loads"),ImportedVM.Load(Source,Error));
+        for(int32 I=0;I<20;++I)if(!ImportedVM.Step(LargeInput,ImportedProfile,Output,Error))
+        {AddError(TEXT("Native snapshot plus imported LootSnob: ")+Error);return false;}
+        AddInfo(FString::Printf(TEXT("Native snapshot plus imported LootSnob: %.2f MiB peak"),ImportedVM.GetPeakMemoryUsage()/1048576.));
     }
     S->State=EACESessionState::Disconnected;
     H->RefreshAutomationData();

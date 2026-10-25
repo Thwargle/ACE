@@ -453,6 +453,7 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 	TArray<FACEDatCollisionShape> MovementShapes;
 	MovementSpheresAc.Reset();
 	const bool bHaveSetupMetadata=Dat && Dat->GetSetupMovementSpheres(SetupId,MovementShapes);
+	bSetupHasNoMovementSpheres = bHaveSetupMetadata && MovementShapes.IsEmpty();
 	if(bHaveSetupMetadata && !MovementShapes.IsEmpty())
 	{
 		float R=0,Bottom=MAX_flt,Top=-MAX_flt;
@@ -997,6 +998,10 @@ void AACEWorldEntityActor::UpdateHeldAttachmentPose()
 FVector AACEWorldEntityActor::ResolvePredictedMovement(const FVector& From, const FVector& Destination, TOptional<bool> Grounded) const
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_RemoteCollision);
+	// CPhysicsObj::UpdateObjectInternal (005156B0) retains XYZ when
+	// CPartArray::GetNumSphere is zero, regardless of the object's item type.
+	// A fallback pick capsule is not a retail movement body.
+	if (bSetupHasNoMovementSpheres) return From;
 	if (!GetWorld() || IsCorpse() || (PhysicsState & ACEPhysicsState::Missile)
 		|| (!bIsPlayer && !(ItemType & ACEItemType::Creature))) return Destination;
 	const float Scale = GetActorScale3D().GetAbsMax();
@@ -1400,7 +1405,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			// ACE PhysicsGlobals.Gravity = 9.8 in AC units/sec² (same magnitude as Earth m/s²).
 			const bool bMissile = (PhysicsState & ACEPhysicsState::Missile) != 0;
 			const bool bProp = !bMissile && !bIsPlayer && !(ItemType & ACEItemType::Creature) && !IsCorpse();
-			const bool bNeedsFloor = bProp && (PhysicsState & ACEPhysicsState::Gravity);
+			const bool bNeedsFloor = bProp && !bSetupHasNoMovementSpheres && (PhysicsState & ACEPhysicsState::Gravity);
 			// Retail enters physics only after SetPosition resolves the resident
 			// cell. A terrain-height fallback is insufficient while an outdoor
 			// pedestal/table or indoor furniture is still being installed.
@@ -1414,7 +1419,9 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			const bool bWaitForRoom = bNeedsFloor && !bPropSupport
 				&& ResolveIndoorOccupancy(RemotePredictLocation, PropCell)
 				&& !AACEEnvCellActor::HasActiveCollision(GetWorld(), static_cast<int32>(PropCell));
-			const float PhysicsStep = bWaitForRoom ? 0.f : Step;
+			// Sphere-less objects may still rotate, animate and emit particles.
+			// They cannot translate, even if a create/vector packet carries gravity velocity.
+			const float PhysicsStep = bWaitForRoom || bSetupHasNoMovementSpheres ? 0.f : Step;
 			const FVector Acceleration = (PhysicsState & ACEPhysicsState::Gravity) != 0
 				? FVector(0.f, 0.f, -9.8f) : FVector::ZeroVector;
 			// Velocity in ObjectCreate / VectorUpdate is world-space ACE units/sec.
@@ -1450,7 +1457,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 
 			// Creatures/pets are not Unreal pawns — ballistic integrate has no capsule contact.
 			// Seat on traced ground so summons don't fall through floors after a jump F748.
-			if (!bMissile && (PhysicsState & ACEPhysicsState::Gravity) && AcePhysicsVelocity.Z <= 0.f)
+			if (!bSetupHasNoMovementSpheres && !bMissile && (PhysicsState & ACEPhysicsState::Gravity) && AcePhysicsVelocity.Z <= 0.f)
 			{
 				float GroundZ = 0.f;
 				if (bProp ? (GroundZ = PropGroundZ, bPropSupport) : TraceGroundZ(RemotePredictLocation, GroundZ, true))
@@ -2168,7 +2175,7 @@ bool AACEWorldEntityActor::ClampLocationToGround(FVector& InOutLocation, const F
 	// Honor the effective network state for every item type, including Creature
 	// props. ACE's explicit GravityStatus=false overrides an integer default that
 	// still contains Gravity; do not reintroduce it through visual ground seating.
-	if (!bClampToGround || (PhysicsState & ACEPhysicsState::Gravity) == 0)
+	if (bSetupHasNoMovementSpheres || !bClampToGround || (PhysicsState & ACEPhysicsState::Gravity) == 0)
 	{
 		return true;
 	}
@@ -2345,6 +2352,9 @@ void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position, bool b
 		&& Client && ResolveFacingTarget(Client->GetPlayerGuid(), PlayerLocation)
 		&& FVector::DistSquared(GetActorLocation(), PlayerLocation) >= FMath::Square(96.f * WorldScale);
 	const bool bSnap = !bHaveRemotePredict || NewTeleport || FarPosition
+		// A full descriptor supplies placement, not extrapolated movement. A
+		// sphere-less model cannot walk from its old placement to that frame.
+		|| (bSetupHasNoMovementSpheres && !bPositionEvent)
 		|| (!Creature && FVector::DistSquared(GetActorLocation(),NewLocation)>FMath::Square(RemoteSnapDistance*WorldScale));
 	if (bSnap) PendingRemoteLanding.Reset();
 	// Cell notifications still update the collision context during a jump across
@@ -2715,20 +2725,24 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 void AACEWorldEntityActor::ApplyPhysicsVelocity(const FVector& AceVelocity, const FVector& AceOmega)
 {
 	// CPhysicsObj::UpdateObjectInternal translates through the setup's movement
-	// spheres. Stuck containers still settle; sphere-less signs stay attached.
+	// spheres. Creature is also used for stationary quest objects and does not
+	// exempt them from the zero-sphere rule. Stuck containers with spheres settle.
 	const bool bAnchoredProp = (MovementSpheresAc.IsEmpty()
 		|| (PhysicsState & (ACEPhysicsState::Static | ACEPhysicsState::Ethereal)))
 		&& !bIsPlayer && !bIsSelf && (ItemType & ACEItemType::Creature) == 0
 		&& (PhysicsState & ACEPhysicsState::Missile) == 0;
-	AcePhysicsVelocity = bAnchoredProp ? FVector::ZeroVector : AceVelocity;
+	AcePhysicsVelocity = bAnchoredProp || bSetupHasNoMovementSpheres ? FVector::ZeroVector : AceVelocity;
 	AcePhysicsOmega = AceOmega;
-	bHavePhysicsVelocity = !AcePhysicsVelocity.IsNearlyZero();
+	// Keep angular motion without waking an idle sphere-less object for a
+	// translational velocity it cannot apply (e.g. the Apostate quest crystals).
+	bHavePhysicsVelocity = !AcePhysicsVelocity.IsNearlyZero()
+		|| (bSetupHasNoMovementSpheres && !AcePhysicsOmega.IsNearlyZero());
 	if (AcePhysicsVelocity.Z > .01f) PendingRemoteLanding.Reset();
 	// VectorUpdate describes velocity, not loss of contact. Retail retains its
 	// contact plane while running down a slope; treating every horizontal vector
 	// as a jump leaves the body on a shelf until gravity/the next F748 catches up.
 	// Upward impulses and bodies genuinely above their support remain ballistic.
-	if (bHavePhysicsVelocity && bClampToGround && !(PhysicsState & ACEPhysicsState::Missile)
+	if (!bSetupHasNoMovementSpheres && bHavePhysicsVelocity && bClampToGround && !(PhysicsState & ACEPhysicsState::Missile)
 		&& (bIsPlayer || (ItemType & ACEItemType::Creature)) && AceVelocity.Z <= .01f)
 	{
 		float GroundZ;

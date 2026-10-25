@@ -278,6 +278,7 @@ void UACEPluginSubsystem::Deinitialize()
     if(RouteActor){RouteActor->Destroy();RouteActor=nullptr;}
     if(PluginMarkerActor){PluginMarkerActor->Destroy();PluginMarkerActor=nullptr;PluginMarkerMesh=nullptr;}
     if(WorldPlateActor){WorldPlateActor->Destroy();WorldPlateActor=nullptr;WorldPlateComponents.Reset();}
+    ClearPluginTerrain();
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnAppraisalObserved.RemoveDynamic(this,&UACEPluginSubsystem::ObserveAppraisal);
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnChatMessage.RemoveDynamic(this,&UACEPluginSubsystem::ObservePluginChat);
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnVitalsUpdated.RemoveDynamic(this,&UACEPluginSubsystem::ObserveLedgerVitals);
@@ -417,11 +418,11 @@ void UACEPluginSubsystem::Discover()
             if (Permissions) for (const auto& V : *Permissions)
             {
                 const FString Permission = V->AsString();
-                if (Permission != TEXT("profiles") && Permission != TEXT("data") && Permission != TEXT("chat") && Permission != TEXT("chat_filter") && Permission != TEXT("state") && Permission != TEXT("ui") && Permission != TEXT("markers") && Permission != TEXT("waypoint") && Permission != TEXT("messaging") && Permission != TEXT("commands") && Permission != TEXT("local_tools") && Permission != TEXT("local_cosmetics") && Permission != TEXT("cast") && Permission != TEXT("combat") && Permission != TEXT("navigation") && Permission != TEXT("inventory") && Permission != TEXT("loot") && Permission != TEXT("say") && Permission != TEXT("fellowship") && Permission != TEXT("confirm")) Valid = false;
+                if (Permission != TEXT("admin_content") && Permission != TEXT("terrain") && Permission != TEXT("profiles") && Permission != TEXT("data") && Permission != TEXT("chat") && Permission != TEXT("chat_filter") && Permission != TEXT("state") && Permission != TEXT("ui") && Permission != TEXT("markers") && Permission != TEXT("waypoint") && Permission != TEXT("messaging") && Permission != TEXT("commands") && Permission != TEXT("local_tools") && Permission != TEXT("local_cosmetics") && Permission != TEXT("cast") && Permission != TEXT("combat") && Permission != TEXT("navigation") && Permission != TEXT("inventory") && Permission != TEXT("loot") && Permission != TEXT("say") && Permission != TEXT("fellowship") && Permission != TEXT("confirm")) Valid = false;
                 else P->Permissions.AddUnique(Permission);
             }
             if(P->Companion)for(const auto& Permission:P->Permissions)
-                if(!TArray<FString>{TEXT("chat"),TEXT("chat_filter"),TEXT("state"),TEXT("ui"),TEXT("markers"),TEXT("waypoint"),TEXT("messaging"),TEXT("commands"),TEXT("profiles"),TEXT("data"),TEXT("say")}.Contains(Permission))Valid=false;
+                if(!TArray<FString>{TEXT("admin_content"),TEXT("terrain"),TEXT("chat"),TEXT("chat_filter"),TEXT("state"),TEXT("ui"),TEXT("markers"),TEXT("waypoint"),TEXT("messaging"),TEXT("commands"),TEXT("profiles"),TEXT("data"),TEXT("say")}.Contains(Permission))Valid=false;
             if(P->LocalService)
             {
                 if(Number(M,TEXT("service_api"))!=1 || !P->Permissions.Contains(TEXT("local_cosmetics"))) Valid=false;
@@ -614,7 +615,7 @@ void UACEPluginSubsystem::Stop(const FString& Id, const FString& Reason, bool Pr
         if(OwnsPolicy){RestoreWorldRendering();bTrackRouteMovement=false;RouteMovementSamples.Reset();bRouteMovementOverflow=false;
             FollowMovementSamples.Reset();FollowMovementTarget=0;bFollowMovementOverflow=false;}
         if(P->Companion){StopCompanion(*P,Reason);return;}
-        if(P->HasPresentation()){FlushPluginState(*P);P->Markers.Reset();P->WorldPlates.Reset();++P->WorldPlateRevision;P->PanelRows.Reset();P->PluginEvents.Reset();++P->PanelRevision;}
+        if(P->HasPresentation()){FlushPluginState(*P);P->Terrain={};P->Markers.Reset();P->WorldPlates.Reset();++P->WorldPlateRevision;P->PanelRows.Reset();P->PluginEvents.Reset();++P->PanelRevision;}
         P->TargetingStatus.Empty();
         P->MetaStatus.Empty();if(!PreserveMeta)P->MetaState.Empty();
         if(P->LocalService)

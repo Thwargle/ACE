@@ -61,6 +61,7 @@ UCLASS()
 class ACECLIENT_API UACEClientSubsystem : public UGameInstanceSubsystem, public FTickableGameObject
 {
 	friend class FACEPortalLifetimeTest;
+	friend class FACEFoundryTest;
 	friend class FACEUIWorkloadTest;
 	friend class FACEPluginEquipmentTest;
 	friend class FACEPluginRequestsTest;

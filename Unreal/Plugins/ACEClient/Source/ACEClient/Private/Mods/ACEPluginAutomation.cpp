@@ -33,11 +33,29 @@ namespace
         while(Name.RemoveFromStart(TEXT("+"))){}
         return Name;
     }
-    FVector SightPoint(UACEDatSubsystem* Dat,const FACEWorldObject& Obj)
+    float BodyHeight(UACEDatSubsystem* Dat,const FACEWorldObject& Obj)
     {
-        float Step=0,Height=Obj.IsCorpse()?.4f:1.8f,Radius=0;uint32 Anim=0;
-        Dat->TryGetSetupPhysics(Obj.SetupId,Step,Height,Radius,Anim);
-        return Obj.Position.ToUnrealLocation()+FVector(0,0,FMath::Max(15.f,Height*Obj.GetValidObjectScale()*60.f));
+        float Step=0,Height=0,Radius=0;uint32 Anim=0;
+        if(!Dat || !Dat->TryGetSetupPhysics(Obj.SetupId,Step,Height,Radius,Anim))Height=Obj.IsCorpse()?.4f:1.8f;
+        return FMath::Max(1.f,Height*Obj.GetValidObjectScale()*100.f);
+    }
+    FVector SightPoint(UACEDatSubsystem* Dat,const FACEWorldObject& Obj,const FACEPluginSightQuery& Sight)
+    {
+        return Sight.Location(Obj)+FVector(0,0,FMath::Max(15.f,BodyHeight(Dat,Obj)*.6f));
+    }
+    bool CombatSight(UACEClientSubsystem* Client,UACEDatSubsystem* Dat,const FACEPosition& Player,
+        const FACEWorldObject& Target,const FACEPluginSightQuery& Sight)
+    {
+        FACEWorldObject Caster;Client->GetWorldObject(Client->GetPlayerGuid(),Caster);
+        const float SourceHeight=BodyHeight(Dat,Caster),TargetHeight=BodyHeight(Dat,Target);
+        // ACE's targeted bolts aim at 2/3 of the scaled physics height. Do not
+        // aim from the camera, a fixed eye height, or a rat's stale packet pose.
+        const FVector Start=Player.ToUnrealLocation()+FVector(0,0,SourceHeight*2.f/3.f);
+        const FVector End=Sight.Location(Target)+FVector(0,0,TargetHeight*2.f/3.f);
+        // UCM safety margin, not a claim to know server-only projectile templates.
+        // Avoid grazing corners; keep the corridor above the floor for tiny bodies.
+        const float Clearance=FMath::Min3(15.f,SourceHeight/3.f,TargetHeight/3.f);
+        return Sight.Clear(Start,End,Clearance);
     }
     TSharedPtr<FJsonObject> Pos(const FACEPosition& P)
     {
@@ -507,6 +525,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
     Debuffs.RemoveAll([&](const auto& E){return N(E->AsObject(),TEXT("expires"))<=EffectNow
         ||!Session->GetWorldObjects().Contains(int32(uint32(N(E->AsObject(),TEXT("target")))));});
     PendingDebuffCasts.RemoveAll([EffectNow](const auto& E){return EffectNow-N(E->AsObject(),TEXT("sent"))>30;});
+    RefreshPlateAppraisals();
     auto UCM=PolicyPlugin();if(!UCM||!UCM->Enabled)return;
     if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController()))
     {
@@ -990,13 +1009,14 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
             if(C->bPluginFellowshipUpdates && N(J,TEXT("vitals_age"))<10 && N(J,TEXT("id"))!=uint32(C->GetPlayerGuid()) && C->GetWorldObject(int32(uint32(N(J,TEXT("id")))),Obj) && Obj.IsSelectableWorldObject())
             {
                 J->SetNumberField(TEXT("distance"),FVector::Distance(P.ToUnrealLocation(),Obj.Position.ToUnrealLocation())/100.);
-                J->SetBoolField(TEXT("line_of_sight"),Sight.Clear(Eye,SightPoint(Dat,Obj)));
+                J->SetBoolField(TEXT("line_of_sight"),Sight.Clear(Eye,SightPoint(Dat,Obj,Sight)));
             }
         }
         for(auto* List:{&Targets,&Corpses})for(const auto& Value:*List)
         {
             auto J=Value->AsObject();FACEWorldObject Obj;
-            const bool Clear=C->GetWorldObject(int32(uint32(N(J,TEXT("id")))),Obj)&&Sight.Clear(Eye,SightPoint(Dat,Obj));
+            const bool Clear=C->GetWorldObject(int32(uint32(N(J,TEXT("id")))),Obj)
+                &&(Obj.IsCorpse()?Sight.Clear(Eye,SightPoint(Dat,Obj,Sight)):CombatSight(C,Dat,P,Obj,Sight));
             J->SetBoolField(TEXT("line_of_sight"),Clear);
         }
     }
@@ -1013,7 +1033,7 @@ bool UACEPluginSubsystem::HasClearCombatSight(const FACEWorldObject& Target) con
     auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
     FACEPosition P=C->GetPlayerPosition();if(PC)PC->TryGetLocallyPredictedPosition(P);
     FACEPluginSightQuery Sight(*World,PC?PC->GetPawn():nullptr);
-    return Sight.Clear(P.ToUnrealLocation()+FVector(0,0,120),SightPoint(GetGameInstance()->GetSubsystem<UACEDatSubsystem>(),Target));
+    return CombatSight(C,GetGameInstance()->GetSubsystem<UACEDatSubsystem>(),P,Target,Sight);
 }
 bool UACEPluginSubsystem::PrepareCombatAction(FACEClientPlugin& P,const TSharedPtr<FJsonObject>& I,int32 Mode)
 {

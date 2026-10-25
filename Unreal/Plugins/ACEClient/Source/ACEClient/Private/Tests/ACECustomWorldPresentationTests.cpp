@@ -24,6 +24,10 @@
 #include "Misc/App.h"
 #include "Misc/CommandLine.h"
 #include "ShaderCompiler.h"
+#include "Scalability.h"
+#include "Dat/ACEWorldTextureMipProvider.h"
+#include "SceneView.h"
+#include "Dat/ACECellTransit.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECustomWorldPresentationTest,"ACE.RetailParity.CustomWorldPresentation",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -72,12 +76,19 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
         Gateway.WeenieClassId=Deposit?40809:40810; Gateway.Name=Deposit?TEXT("Apostate Aetherium Deposit"):TEXT("Apostate Nexus Gateway");
         Gateway.ItemType=ACEItemType::Creature; Gateway.ItemUseable=32;Gateway.UseRadius=3;
         Gateway.bHasServerPhysicsDescription=true;
+        Gateway.bHasPhysicsTimestamps=true;
         Gateway.SetupId=Deposit?0x02000B82:0x02000443; Gateway.MotionTableId=0x0900013D;
         Gateway.InitialMotionStyle=ACEMotion::StanceNonCombat;
         Gateway.InitialMotionCommand=ACEMotion::Ready;
         Gateway.PhysicsState=6292504; Gateway.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
         Gateway.Position.CellId=Deposit?0x7F020107:0x0110028A;
         Gateway.Position.Location=Deposit?FVector(40,-20,.055):FVector(40,-140,12.055);
+        // Live v136 report: the gateway was visible but had fallen 8207m below
+        // this origin after receiving a downward ObjectCreate velocity.
+        Gateway.bHasVelocity=true; Gateway.Velocity=FVector(0,0,-2.4225);
+        TArray<FACEDatCollisionShape> MovementShapes;
+        TestTrue(TEXT("Apostate movement setup loads"),Dat->GetSetupMovementSpheres(Gateway.SetupId,MovementShapes));
+        TestEqual(TEXT("Apostate setup has no movement spheres"),MovementShapes.Num(),0);
         if(Deposit)
         {
             FACECharacterCreation Creation;FString Error;
@@ -90,9 +101,14 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
         auto Session=GI->GetSubsystem<UACEClientSubsystem>()->GetSession();
         Session->WorldObjects.Add(Gateway.Guid,Gateway);
         Presenter->SpawnOrUpdateEntity(Gateway,false);
+        // A streamed object may finish building while its room is outside PView.
+        // Revealing the room must expose the same model as an ordinary login.
+        if (auto* Queued=Presenter->FindEntityActor(Gateway.Guid)) Queued->SetCellVisible(false);
         Presenter->DrainPendingDatAppearance();
         auto* Actor=Presenter->FindEntityActor(Gateway.Guid);
         if(!TestNotNull(TEXT("Deferred Apostate object spawns"),Actor))return false;
+        Actor->Appearance->TickComponent(.1f,LEVELTICK_All,nullptr);
+        Actor->SetCellVisible(true);
         TestTrue(TEXT("Apostate gateway has DAT geometry"),Actor->Appearance->HasAppearance());
         for(int32 Frame=0;Frame<120;++Frame)
         {
@@ -100,6 +116,35 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
             Actor->Appearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);
             if(Actor->ScriptComponent->IsComponentTickEnabled())Actor->ScriptComponent->TickComponent(1.f/60,LEVELTICK_All,nullptr);
         }
+        TestTrue(TEXT("Sphere-less Apostate object ignores received falling velocity"),
+            Actor->GetActorLocation().Equals(Gateway.Position.ToUnrealLocation(100),.01));
+        for(int32 Frame=0;Frame<12000;++Frame)
+        {
+            if(Frame%300==0)
+            {
+                Presenter->HandleVectorUpdate(Gateway.Guid,Gateway.Velocity,FVector::ZeroVector);
+                Actor->SetCellVisible(false);
+            }
+            if(Frame%300==10)Actor->SetCellVisible(true);
+            if(Actor->IsActorTickEnabled())Actor->Tick(.1f);
+        }
+        Actor->SetCellVisible(true);
+        TestTrue(TEXT("Repeated vector packets and room reentry cannot drop quest objects during twenty minutes"),
+            Actor->GetActorLocation().Equals(Gateway.Position.ToUnrealLocation(100),.01));
+        TestFalse(TEXT("Discarded linear velocity does not keep an idle quest actor ticking"),Actor->IsActorTickEnabled());
+        const FQuat BeforeSpin=Actor->GetActorQuat();
+        Presenter->HandleVectorUpdate(Gateway.Guid,Gateway.Velocity,FVector(0,0,.5));
+        for(int32 Frame=0;Frame<30;++Frame)Actor->Tick(1.f/30);
+        TestFalse(TEXT("Sphere-less objects still honor angular velocity"),Actor->GetActorQuat().Equals(BeforeSpin,.01));
+        TestTrue(TEXT("Rotation does not enable gravity for sphere-less objects"),
+            Actor->GetActorLocation().Equals(Gateway.Position.ToUnrealLocation(100),.01));
+        FACEPosition Teleport=Gateway.Position; Teleport.bHasTeleportSequence=true; Teleport.TeleportSequence=1;
+        Teleport.Location.X+=1;
+        Presenter->HandlePositionUpdate(Gateway.Guid,Teleport);
+        TestTrue(TEXT("An authoritative teleport can reposition a sphere-less object"),
+            Actor->GetActorLocation().Equals(Teleport.ToUnrealLocation(100),.01));
+        Teleport.Location=Gateway.Position.Location; Teleport.TeleportSequence=2;
+        Presenter->HandlePositionUpdate(Gateway.Guid,Teleport);
         for(int32 Part=0;auto* Mesh=Actor->Appearance->GetPartMesh(Part);++Part)
         {
             TestTrue(TEXT("Apostate part stays visible"),Mesh->IsVisible()&&!Mesh->bHiddenInGame);
@@ -129,19 +174,34 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
             auto* RenderTarget=NewObject<UTextureRenderTarget2D>(Capture);RenderTarget->InitAutoFormat(512,512);
             Capture->TextureTarget=RenderTarget;Capture->CaptureSource=SCS_FinalColorLDR;
             Capture->bCaptureEveryFrame=false;Capture->bCaptureOnMovement=false;
+            Capture->bAlwaysPersistRenderingState=true;
             Capture->PrimitiveRenderMode=ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
             Capture->ShowFlags.SetEyeAdaptation(false);Capture->ShowFlags.SetAtmosphere(false);
             Capture->ShowFlags.SetFog(false);Capture->ShowFlags.SetAntiAliasing(false);Capture->ShowFlags.SetLighting(false);
-            Capture->RegisterComponent();Capture->ShowOnlyActorComponents(Actor);
+            Capture->RegisterComponent();
+            // Count model pixels, not a still-visible particle effect from an
+            // otherwise invisible actor. Retain view history across hide/reveal
+            // and resize operations so this also exercises resident proxies.
+            for(int32 Part=0;Part<Actor->Appearance->GetPartCount();++Part)
+                if(auto* Mesh=Cast<UPrimitiveComponent>(Actor->Appearance->GetPartMesh(Part)))Capture->ShowOnlyComponent(Mesh);
             for(auto* Room:Rooms)Capture->ShowOnlyComponent(Room->CellMesh);
+            TGuardValue<uint64> FrameGuard(GFrameCounter,GFrameCounter);
+            auto CaptureFrames=[&]
+            {
+                for(int32 Frame=0;Frame<4;++Frame)
+                {
+                    ++GFrameCounter;
+                    World->SendAllEndOfFrameUpdates();Capture->CaptureScene();FlushRenderingCommands();
+                }
+            };
             auto Snap=[&](const FVector& Eye,const TCHAR* Label)
             {
                 if(!FApp::CanEverRender())return;
                 Capture->SetWorldLocationAndRotation(Eye,(Center-Eye).Rotation());
                 if(GShaderCompilingManager)GShaderCompilingManager->FinishAllCompilation();
-                World->SendAllEndOfFrameUpdates();Capture->CaptureScene();FlushRenderingCommands();
+                CaptureFrames();
                 TArray<FColor> Pixels;RenderTarget->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
-                Actor->SetActorHiddenInGame(true);World->SendAllEndOfFrameUpdates();Capture->CaptureScene();FlushRenderingCommands();
+                Actor->SetActorHiddenInGame(true);CaptureFrames();
                 TArray<FColor> Without;RenderTarget->GameThread_GetRenderTargetResource()->ReadPixels(Without);
                 Actor->SetActorHiddenInGame(false);
                 int32 VisiblePixels=0;for(int32 I=0;I<Pixels.Num() && I<Without.Num();++I)
@@ -149,12 +209,62 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
                 TestTrue(*FString::Printf(TEXT("%s has rendered pixels in %s view"),*Gateway.Name,Label),VisiblePixels>20);
                 if(FParse::Param(FCommandLine::Get(),TEXT("ACESaveApostateCaptures")))
                 {
-                    TArray64<uint8> Png;FImageUtils::PNGCompressImageArray(512,512,Pixels,Png);
+                    TArray64<uint8> Png;FImageUtils::PNGCompressImageArray(RenderTarget->SizeX,RenderTarget->SizeY,Pixels,Png);
                     FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()+FString::Printf(TEXT("Apostate-%s-%s.png"),Deposit?TEXT("deposit"):TEXT("gateway"),Label)));
                 }
             };
             const FVector CloseEye=Center+FVector(200,0,150);
             Snap(CloseEye,TEXT("close"));
+            if(FParse::Param(FCommandLine::Get(),TEXT("ACEApostateGraphicsMatrix")))
+            {
+                // The missing-object screenshots also show much longer sessions.
+                // Exercise idle hooks and room reentry without rebuilding the actor.
+                for(int32 Frame=0;Frame<12000;++Frame)
+                {
+                    if(Frame%300==0)Actor->SetCellVisible(false);
+                    if(Frame%300==10)Actor->SetCellVisible(true);
+                    if(Actor->IsActorTickEnabled())Actor->Tick(.1f);
+                    if(Actor->Appearance->IsComponentTickEnabled())Actor->Appearance->TickComponent(.1f,LEVELTICK_All,nullptr);
+                    if(Actor->ScriptComponent->IsComponentTickEnabled())Actor->ScriptComponent->TickComponent(.1f,LEVELTICK_All,nullptr);
+                }
+                Actor->SetCellVisible(true);
+                TestTrue(TEXT("Idle Apostate object preserves its server position after twenty minutes"),
+                    Actor->GetActorLocation().Equals(Gateway.Position.ToUnrealLocation(100),1.));
+                Snap(CloseEye,TEXT("long-idle"));
+                const auto OriginalQuality=Scalability::GetQualityLevels();
+                ON_SCOPE_EXIT { Scalability::SetQualityLevels(OriginalQuality); UACEWorldTextureMipProvider::RefreshQuality(); };
+                for(int32 Quality=0;Quality<=4;++Quality)
+                {
+                    auto Levels=OriginalQuality;Levels.SetFromSingleQualityLevel(Quality);
+                    Scalability::SetQualityLevels(Levels);UACEWorldTextureMipProvider::RefreshQuality();
+                    Snap(CloseEye,*FString::Printf(TEXT("quality-%d"),Quality));
+                }
+                FACEPosition Player=Gateway.Position;
+                Player.Location+=FVector(0,5,0);
+                if(!Deposit){Player.CellId=0x011002E7;Player.Location=FVector(45.227190,-136.856896,24.006001);}
+                for(const auto Size:{FIntPoint(1280,720),FIntPoint(1920,1080),FIntPoint(1280,1024),FIntPoint(3440,1440)})
+                for(float Fov:{60.f,90.f,120.f})
+                {
+                    const FVector Eye=Player.ToUnrealLocation()+FVector(0,0,300);
+                    uint32 ViewCell=Player.CellId;
+                    ACECellTransit::ResolveViewerCellId(*Dat,Player.CellId,Player.ToUnrealLocation(),Eye,100,ViewCell);
+                    const auto Rotation=(Center-Eye).Rotation();
+                    const FMatrix View=FTranslationMatrix(-Eye)*FInverseRotationMatrix(Rotation)*FMatrix(
+                        FPlane(0,0,1,0),FPlane(1,0,0,0),FPlane(0,1,0,0),FPlane(0,0,0,1));
+                    const FMatrix Projection=FReversedZPerspectiveMatrix(FMath::DegreesToRadians(Fov*.5f),float(Size.X)/Size.Y,1.f,GNearClippingPlane,100000.f);
+                    FConvexVolume Frustum;GetViewFrustumBounds(Frustum,View*Projection,true);
+                    TSet<int32> Visible;bool Outside=false;
+                    ACEOutdoorPortalPlan::CollectIndoorPViewCells(*Dat,ViewCell,Eye,Frustum,100,Visible,Outside,128);
+                    bool Admitted=Visible.Contains(Gateway.Position.CellId);
+                    for(int32 Cell:Visible)Admitted|=ACECellTransit::SphereIntersectsEnvCell(*Dat,Cell,Center,Bounds.GetExtent().Size(),100);
+                    TestTrue(FString::Printf(TEXT("%s admitted %dx%d FOV%.0f cell%08X"),*Gateway.Name,Size.X,Size.Y,Fov,ViewCell),Admitted);
+                    Actor->SetCellVisible(false);World->SendAllEndOfFrameUpdates();FlushRenderingCommands();
+                    Actor->SetCellVisible(Admitted);
+                    RenderTarget->ResizeTarget(Size.X,Size.Y);Capture->FOVAngle=Fov;
+                    Snap(Eye,*FString::Printf(TEXT("view-%dx%d-fov%.0f"),Size.X,Size.Y,Fov));
+                }
+                Actor->SetCellVisible(true);RenderTarget->ResizeTarget(512,512);Capture->FOVAngle=90;
+            }
             TestEqual(TEXT("Apostate gateway can be picked for interaction and item drops"),ACEVisibleObjectPick::Trace(*World,
                 CloseEye,Center+(Center-CloseEye).GetSafeNormal()*100,nullptr),static_cast<AActor*>(Actor));
             // Standard landblock placements: acid-pit gateway and final deposit.
@@ -318,8 +428,11 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
         {
             Crystal.PhysicsState=ACEPhysicsState::Ethereal | ACEPhysicsState::ReportCollisions
                 | (Gravity ? ACEPhysicsState::Gravity : 0);
-            // Clear the capsule's rounded bottom, but stay within the setup's
-            // 8.67 cm scaled step-down range so this exercises ground seating.
+            // This setup has no movement spheres. Even within its nominal
+            // step-down range, retail cannot seat it using an invented capsule.
+            TArray<FACEDatCollisionShape> Spheres;
+            TestTrue(TEXT("Floating crystal movement setup loads"),Dat->GetSetupMovementSpheres(Crystal.SetupId,Spheres));
+            TestTrue(TEXT("Floating crystal has no movement spheres"),Spheres.IsEmpty());
             Crystal.Position.Location=FVector(50,50,.08);
             auto* Floating=World->SpawnActor<AACEWorldEntityActor>();
             Floating->InitializeFromObject(Crystal,100,true);
@@ -327,19 +440,17 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
             Floating->ApplyACEPosition(Correction);
             TestTrue(TEXT("Position correction wakes floating prop prediction"),Floating->IsActorTickEnabled());
             for(int32 Frame=0;Frame<120;++Frame) Floating->Tick(1.f/60);
-            const double ExpectedZ=Gravity ? 1. : Correction.ToUnrealLocation(100).Z;
+            const double ExpectedZ=Correction.ToUnrealLocation(100).Z;
             AddInfo(FString::Printf(TEXT("Floating fixture gravity=%d received Z=%.4f actual Z=%.4f"),
                 Gravity,Correction.ToUnrealLocation(100).Z,Floating->GetActorLocation().Z));
-            TestTrue(Gravity ? TEXT("Gravity-enabled grounded prediction still seats within its step range")
-                : TEXT("Gravity-disabled creature retains server height while smoothing near a floor"),
+            TestTrue(TEXT("Sphere-less creature retains server height near a floor with or without gravity"),
                 FMath::IsNearlyEqual(Floating->GetActorLocation().Z,ExpectedZ,.02));
             // A server's contact hint is not permission to enable gravity on a
             // non-gravitating display object during reconciliation either.
             Correction.bHasContactState=true; Correction.bIsGrounded=true;
             Floating->ApplyACEPosition(Correction);
             for(int32 Frame=0;Frame<120;++Frame) Floating->Tick(1.f/60);
-            TestTrue(Gravity ? TEXT("Gravity-enabled contact retains floor support")
-                : TEXT("Gravity-disabled contact does not lower a floating creature"),
+            TestTrue(TEXT("Contact cannot lower a sphere-less floating creature"),
                 FMath::IsNearlyEqual(Floating->GetActorLocation().Z,ExpectedZ,.02));
             Floating->Destroy();
         }

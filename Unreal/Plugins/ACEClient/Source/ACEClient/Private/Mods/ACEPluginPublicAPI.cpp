@@ -169,7 +169,7 @@ bool UACEPluginSubsystem::ValidatePluginUI(const TArray<TSharedPtr<FJsonValue>>&
                 if(R->HasField(Field)&&!R->HasTypedField<EJson::Boolean>(Field))
                 {Error=FString(Field)+TEXT(" must be a boolean");return false;}
             const FString Action=S(R,TEXT("action"));
-            if(!Action.IsEmpty()&&!TArray<FString>{TEXT("event"),TEXT("select"),TEXT("waypoint"),TEXT("command")}.Contains(Action))
+            if(!Action.IsEmpty()&&!TArray<FString>{TEXT("event"),TEXT("select"),TEXT("waypoint"),TEXT("command"),TEXT("content_folder")}.Contains(Action))
             {Error=TEXT("Unknown UI button action");return false;}
             if(Type==TEXT("slider")||Type==TEXT("number"))
             {
@@ -215,7 +215,8 @@ bool UACEPluginSubsystem::ClickPluginRow(const FString& Plugin,const FString& Id
     const FString Type=S(R,TEXT("type"),S(R,TEXT("action")).IsEmpty()?TEXT("text"):TEXT("button"));
     if(Type!=TEXT("button"))return false;
     FString Error;bool Ok=true;const FString Action=S(R,TEXT("action"),TEXT("event"));
-    if(Action!=TEXT("event"))
+    if(Action==TEXT("content_folder"))Ok=ChooseContentFolder(*P,Error);
+    else if(Action!=TEXT("event"))
     {
         auto A=MakeShared<FJsonObject>(*R);if(Action==TEXT("command"))A->SetStringField(TEXT("text"),S(R,TEXT("command")));
         Ok=CompanionAction(*P,A,Error);
@@ -265,11 +266,12 @@ bool UACEPluginSubsystem::ApplyPluginServices(FACEClientPlugin& P,const TSharedP
     {
         auto R=V->AsObject();auto Reply=MakeShared<FJsonObject>();const FString Service=S(R,TEXT("service")),Op=S(R,TEXT("operation")),Key=S(R,TEXT("name"));
         Reply->SetStringField(TEXT("type"),TEXT("result"));Reply->SetStringField(TEXT("id"),S(R,TEXT("id")));bool Ok=false;FString Failure;
-        const FString Permission=Service==TEXT("profiles")||Service==TEXT("import")?TEXT("profiles"):
+        const FString Permission=Service==TEXT("content")?TEXT("admin_content"):Service==TEXT("profiles")||Service==TEXT("import")?TEXT("profiles"):
             Service==TEXT("waypoint")?TEXT("waypoint"):Service==TEXT("route")?TEXT("navigation"):
             Service==TEXT("force_buff")?TEXT("cast"):(Service==TEXT("window")||Service==TEXT("notice"))?TEXT("ui"):Service==TEXT("policy")?TEXT("commands"):Service==TEXT("chat")?TEXT("say"):FString();
         if(Limited)Failure=TEXT("Service rate limit; retry after 0.5 seconds");
         else if(!Permission.IsEmpty()&&!P.Permissions.Contains(Permission))Failure=TEXT("Missing permission: ")+Permission;
+        else if(Service==TEXT("content"))Ok=ContentService(P,R,Reply,Failure);
         else if(Service==TEXT("profiles"))
         {
             const FString Group=S(R,TEXT("group"),TEXT("Default"));

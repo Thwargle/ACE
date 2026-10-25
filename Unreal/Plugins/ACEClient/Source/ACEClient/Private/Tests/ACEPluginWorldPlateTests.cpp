@@ -25,6 +25,12 @@
 #include "Slate/WidgetRenderer.h"
 #include "ImageUtils.h"
 #include "RenderingThread.h"
+#include "ProceduralMeshComponent.h"
+#include "Components/PostProcessComponent.h"
+#include "Materials/Material.h"
+#include "Sockets.h"
+#include "SocketSubsystem.h"
+#include "IPAddress.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPluginWorldPlateTest,"ACE.Plugins.WorldPlates",
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
@@ -46,6 +52,12 @@ bool FACEPluginWorldPlateTest::RunTest(const FString&)
     FACEWorldObject Object;Object.Guid=int32(0xF0000011u);Object.Name=TEXT("Royal Guard");Object.ItemType=ACEItemType::Creature;
     Object.bHasPosition=true;Object.Position=S.PlayerPosition;Object.Position.Location.X+=10;Object.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;
     S.WorldObjects.Add(Object.Guid,Object);S.SelectedObject.Guid=Object.Guid;S.SelectedObject.bValid=true;
+    auto* Sockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);auto Address=Sockets->CreateInternetAddr();bool AddressValid=false;
+    Address->SetIp(TEXT("127.0.0.1"),AddressValid);Address->SetPort(0);
+    auto* Receiver=Sockets->CreateSocket(NAME_DGram,TEXT("Plate tracking receiver"),false);
+    if(!Receiver||!Receiver->Bind(*Address))return false;Receiver->GetAddress(*Address);
+    S.SocketC2S=Sockets->CreateSocket(NAME_DGram,TEXT("Plate tracking sender"),false);S.ServerC2SAddr=Address;S.IssacClient=MakeUnique<FACEIsaac>(123u);
+    ON_SCOPE_EXIT {Receiver->Close();Sockets->DestroySocket(Receiver);if(S.SocketC2S){S.SocketC2S->Close();Sockets->DestroySocket(S.SocketC2S);S.SocketC2S=nullptr;}};
     H->RefreshAutomationData();
     auto P=MakeShared<FACEClientPlugin>();P->Id=TEXT("plate_test");P->Api=2;P->Companion=true;P->Enabled=P->Running=true;
     P->Permissions={TEXT("ui"),TEXT("markers")};P->Player=S.PlayerGuid;P->Server=S.ServerName;P->VMSession=C->Session;P->Profile=MakeShared<FJsonObject>();H->Plugins.Add(P);
@@ -110,6 +122,87 @@ bool FACEPluginWorldPlateTest::RunTest(const FString&)
     TestEqual(TEXT("Example finds string-keyed target effects"),P->WorldPlates[0].Effects.Num(),1);
     TestTrue(TEXT("Omitted list retains native plate"),H->ApplyCompanionOutput(*P,Json(TEXT("{}")),Error)&&P->WorldPlates.Num()==1);
     const auto Valid=Output;
+    // A plate retains an unselected target even with no confirmed-cast timer.
+    const auto SavedDebuffs=H->Debuffs;H->Debuffs.Reset();S.SelectedObject.Guid=0;
+    P->WorldPlates[0].SelectionOnly=false;
+    TestTrue(TEXT("Nonselected plate retains target independently of timers"),Snapshot()->GetObjectField(TEXT("tracked_targets"))->HasField(Key));
+    S.CachedC2SPackets.Reset();H->LastAppraisalRequest=H->NextPlateAppraisal=0;H->AppraisalRequests.Remove(Object.Guid);
+    H->RefreshPlateAppraisals();
+    TestTrue(TEXT("Plates request background assessment without UCM"),C->BackgroundAppraisals.Contains(Object.Guid));
+    TestEqual(TEXT("Plate assessment leaves local selection alone"),S.SelectedObject.Guid,0);
+    TestEqual(TEXT("One assessment packet emitted"),S.CachedC2SPackets.Num(),1);
+    for(const auto& Packet:S.CachedC2SPackets)
+    {
+        FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);
+        TestEqual(TEXT("Tracking sends IdentifyObject, never changes health subscription"),R.ReadUInt32(),ACEGameAction::IdentifyObject);
+        TestEqual(TEXT("Background assessment targets the tracked creature"),R.ReadUInt32(),uint32(Object.Guid));
+    }
+    H->RefreshPlateAppraisals();TestEqual(TEXT("Tracking respects global request budget"),S.CachedC2SPackets.Num(),1);
+    S.OnObjectHealth.Broadcast(Object.Guid,.25f);
+    TestEqual(TEXT("Unselected target accepts server health updates"),Snapshot()->GetObjectField(TEXT("tracked_targets"))->GetObjectField(Key)->GetObjectField(TEXT("vitals"))->GetObjectField(TEXT("health"))->GetNumberField(TEXT("fraction")),.25);
+    P->WorldPlates[0].Refresh=false;H->LastAppraisalRequest=H->NextPlateAppraisal=0;H->AppraisalRequests.Remove(Object.Guid);
+    H->RefreshPlateAppraisals();TestEqual(TEXT("Passive plates can opt out of assessment"),S.CachedC2SPackets.Num(),1);
+    P->WorldPlates[0].Refresh=true;P->Enabled=false;
+    TestTrue(TEXT("Disabled plugins do not keep targets tracked"),H->ActivePlateTargets().IsEmpty());P->Enabled=true;
+    S.SelectedObject.Guid=Object.Guid;H->Debuffs=SavedDebuffs;H->ApplyCompanionOutput(*P,Valid,Error);
+
+    // Optional terrain companion: real Lua output, capability validation,
+    // retail thresholds, bounded native geometry and complete cleanup.
+    auto Lens=H->Find(TEXT("derethlens"));
+    if(!TestTrue(TEXT("Dereth Lens discovered and disabled by default"),Lens&&!Lens->Enabled&&Lens->Companion))return false;
+    FString LensSource;FFileHelper::LoadFileToString(LensSource,*(Lens->Directory/TEXT("main.lua")));
+    FACEPluginVM LensVM;TestTrue(TEXT("Dereth Lens compiles in sandbox"),LensVM.Load(LensSource,Error));
+    auto LensInput=Json(TEXT(R"({"state":{"water":false,"radar":true},"events":[]})"));TSharedPtr<FJsonObject> LensOut;
+    TestTrue(TEXT("Dereth Lens runs without gameplay data"),LensVM.Step(LensInput,Lens->Profile,LensOut,Error));
+    TestFalse(TEXT("Saved false setting survives restart"),LensOut->GetObjectField(TEXT("terrain_overlay"))->GetBoolField(TEXT("water")));
+    TestTrue(TEXT("Native host accepts terrain Lua UI and settings"),H->ApplyCompanionOutput(*Lens,LensOut,Error));
+    const FACEPluginTerrain BeforeTerrain=Lens->Terrain;
+    TestFalse(TEXT("Unbounded opacity rejected"),H->ApplyCompanionOutput(*Lens,Json(TEXT(R"({"terrain_overlay":{"opacity":2}})")),Error));
+    TestEqual(TEXT("Rejected output preserves active settings"),Lens->Terrain.Opacity,BeforeTerrain.Opacity);
+    Lens->Permissions.Remove(TEXT("terrain"));TestFalse(TEXT("Terrain requires explicit capability"),H->ApplyCompanionOutput(*Lens,LensOut,Error));Lens->Permissions.Add(TEXT("terrain"));
+    FACEPluginTerrain TestSettings;TestSettings.Slopes=TestSettings.Water=true;
+    TestEqual(TEXT("Dry level ground has no overlay"),ACEPluginTerrain::Shade(1,0,0,TestSettings).A,0.f);
+    const auto Danger=ACEPluginTerrain::Shade(.6f,0,0,TestSettings),Warning=ACEPluginTerrain::Shade(.75f,0,0,TestSettings);
+    TestTrue(TEXT("Only unwalkable slopes are colored"),Danger.A==TestSettings.Opacity&&Warning.A==0);
+    TestEqual(TEXT("Exact retail floor threshold stays walkable"),ACEPluginTerrain::Shade(ACEPluginTerrain::WalkableZ,0,0,TestSettings).A,0.f);
+    TestTrue(TEXT("Blocked slopes have a severity gradient"),ACEPluginTerrain::Shade(.05f,0,0,TestSettings).G<Danger.G);
+    const auto Shore=ACEPluginTerrain::Shade(1,.9f,1,TestSettings),Ocean=ACEPluginTerrain::Shade(1,.9f,2,TestSettings);
+    TestTrue(TEXT("Flooded coastal cell differs from impassable ocean block"),Shore.A==0&&Ocean.A==TestSettings.Opacity);
+    Lens->Enabled=Lens->Running=true;Lens->Player=S.PlayerGuid;Lens->Server=S.ServerName;Lens->VMSession=C->Session;
+    H->UpdatePluginTerrain();TestNotNull(TEXT("Native terrain actor created only when active"),H->TerrainOverlayActor.Get());
+    if(H->TerrainRadarMesh)
+    {
+        TestEqual(TEXT("Radar overlay cannot intercept interaction"),H->TerrainRadarMesh->GetCollisionEnabled(),ECollisionEnabled::NoCollision);
+        const auto* Section=H->TerrainRadarMesh->GetProcMeshSection(0);
+        if(TestNotNull(TEXT("Radar boundary has native geometry"),Section))
+            TestTrue(TEXT("Outdoor radar boundary uses retail 75 m"),FMath::Abs(Section->ProcVertexBuffer[0].Position.Size2D()-7500)<1);
+        const auto OldLocation=H->TerrainRadarMesh->GetComponentLocation();S.PlayerPosition.Location.X+=1;
+        H->UpdatePluginTerrain();TestTrue(TEXT("Radar follows movement between Lua callbacks"),!H->TerrainRadarMesh->GetComponentLocation().Equals(OldLocation));S.PlayerPosition.Location.X-=1;
+        TestEqual(TEXT("Terrain overlay material is translucent"),Dat->GetTerrainOverlayMaterial()->GetBlendMode(),BLEND_Translucent);
+    }
+    const auto TerrainBuilds=H->TerrainGeometryBuilds,RadarBuilds=H->RadarGeometryBuilds;
+    for(int I=0;I<120;++I){H->NextTerrainBuild=0;H->UpdatePluginTerrain();}
+    TestEqual(TEXT("Stationary Lens never rebuilds identical terrain"),H->TerrainGeometryBuilds,TerrainBuilds);
+    TestEqual(TEXT("Stationary Lens never rebuilds identical radar mesh"),H->RadarGeometryBuilds,RadarBuilds);
+    Lens->Terrain.Dungeon=true;S.PlayerPosition.CellId=0x7D640100;H->NextTerrainBuild=0;H->UpdatePluginTerrain();
+    TestEqual(TEXT("Dungeon light activates indoors"),H->TerrainDungeonLight->BlendWeight,1.f);
+    TestFalse(TEXT("Outdoor terrain is hidden in dungeon"),H->TerrainOverlayMesh->IsVisible());
+    S.PlayerPosition.CellId=0x7D64000D;H->UpdatePluginTerrain();
+    TestEqual(TEXT("Dungeon light leaves outdoor video settings alone"),H->TerrainDungeonLight->BlendWeight,0.f);
+    if(FApp::CanEverRender())
+    {
+        FWidgetRenderer Renderer(false,true);const FVector2D Size(640,560);auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
+        auto Panel=H->MakePanel(Lens->Id);
+        for(int Pass=0;Pass<4;++Pass){Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}
+        TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
+        TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(640,560,Pixels,PNG);
+        FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/TEXT("DerethLens-panel.png")));Target->ReleaseResource();
+    }
+    FACEPluginVM ClearLens;TSharedPtr<FJsonObject> ClearOutput;
+    TestTrue(TEXT("Empty Lua terrain object clears without becoming an array"),ClearLens.Load(TEXT("return function() return {terrain_overlay={}} end"),Error)
+        &&ClearLens.Step(LensInput,Lens->Profile,ClearOutput,Error)&&H->ApplyCompanionOutput(*Lens,ClearOutput,Error)&&!Lens->Terrain.Active());
+    Lens->Enabled=false;H->UpdatePluginTerrain();TestNull(TEXT("Disabling lens releases meshes and light"),H->TerrainOverlayActor.Get());
+
     for(const FString Invalid:{TEXT(R"({"world_plates":[{"id":12,"vitals":{"health":{"current":2,"max":1}}}]})"),
         TEXT(R"({"world_plates":[{"id":12,"effects":[{"icon":123,"remaining":20}]}]})"),
         TEXT(R"({"world_plates":[{"id":12},{"id":12}]})"),TEXT(R"({"world_plates":[{"id":12,"selection_only":"true"}]})")})

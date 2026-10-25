@@ -16,6 +16,12 @@ DEFINE_STAT(STAT_ACESkyFog);
 DEFINE_STAT(STAT_ACESkyLighting);
 DEFINE_STAT(STAT_ACEPlayer);
 
+DEFINE_STAT(STAT_ACEDatMaintenance);
+DEFINE_STAT(STAT_ACEEffectScripts);
+DEFINE_STAT(STAT_ACEEffectSimulation);
+DEFINE_STAT(STAT_ACEEffectLights);
+DEFINE_STAT(STAT_ACEParticleUpload);
+
 namespace ACEProfiling
 {
 static FFrameHistory History;
@@ -32,8 +38,8 @@ FString DescribeLastFrame()
  const auto* Costs=IsInGameThread()?History.Completed(GFrameCounter):nullptr;
  if(!Costs)return {};
  auto Ms=[&](EScope S){return FPlatformTime::ToMilliseconds64(Costs->Cycles[uint8(S)]);};
- return FString::Printf(TEXT("client CPU (previous frame, inclusive): player=%.2f remote=%.2f network=%.2f world=%.2f terrain=%.2f visibility=%.2f animation=%.2f appearance=%.2f effects=%.2f HUD=%.2f sky=%.2f plugins=%.2f snapshot=%.2f Lua=%.2f ms"),
+ return FString::Printf(TEXT("client CPU (previous frame, inclusive): player=%.2f remote=%.2f network=%.2f world=%.2f terrain=%.2f visibility=%.2f animation=%.2f appearance=%.2f effects=%.2f HUD=%.2f sky=%.2f plugins=%.2f snapshot=%.2f Lua=%.2f cache=%.2f effectHooks=%.2f particles=%.2f lightUpdate=%.2f uploads=%.2f ms"),
   Ms(EScope::Player),Ms(EScope::Remote),Ms(EScope::Network),Ms(EScope::World),Ms(EScope::Terrain),Ms(EScope::Visibility),
-  Ms(EScope::Animation),Ms(EScope::Appearance),Ms(EScope::Effects),Ms(EScope::HUD),Ms(EScope::Sky),Ms(EScope::Plugins),Ms(EScope::PluginSnapshot),Ms(EScope::PluginLua));
+  Ms(EScope::Animation),Ms(EScope::Appearance),Ms(EScope::Effects),Ms(EScope::HUD),Ms(EScope::Sky),Ms(EScope::Plugins),Ms(EScope::PluginSnapshot),Ms(EScope::PluginLua),Ms(EScope::DatMaintenance),Ms(EScope::EffectScripts),Ms(EScope::EffectSimulation),Ms(EScope::EffectLights),Ms(EScope::ParticleUpload));
 }
 }

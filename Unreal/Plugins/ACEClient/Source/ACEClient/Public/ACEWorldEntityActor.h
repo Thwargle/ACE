@@ -301,6 +301,8 @@ protected:
 	float MovementSweepRadius = 25.f;
 	float MovementBodyOffsetZ = 90.f;
 	TArray<FVector4f> MovementSpheresAc;
+	/** A loaded setup explicitly has no spheres; an unavailable setup is not evidence of this. */
+	bool bSetupHasNoMovementSpheres = false;
 	float MovementStepDownHeight = 50.f;
 	float MovementStepHeight = 50.f;
 	bool bHaveVRPresentation = false;

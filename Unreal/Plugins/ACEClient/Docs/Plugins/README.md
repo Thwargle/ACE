@@ -19,6 +19,14 @@ Retail commands such as `/fps` and `/saveui`, and server commands such as
 
 ## Users
 
+**[Dereth Foundry](Foundry.md)** is an optional Lua content workshop for server
+administrators. It is bundled but disabled by default. Its gold anvil / teal cube
+icon opens Items, Move, Land, Quests, Spawns, Files and Help tabs using the shared
+plugin theme. Create and position objects, import/export JSON or SQL, manage
+instances and encounters, and browse/edit local content files. Commands require
+the server's normal developer/admin permissions. Persistent changes show a review
+before sending; simply enabling or opening Foundry sends no commands.
+
 **Action Deck** is an optional bundled desktop hotbar. Enable it in Plugin
 Manager and open the gold tiles / teal spark icon. Drag inventory items or
 spellbook/spell-bar icons into its three rows of twelve slots. Click an icon
@@ -895,7 +903,7 @@ are not imported. More complex conditions or behavior can be authored in Lua.
 
 ## Runtime and references
 
-Each script has a separate Lua 5.4.9 VM with an 8 MiB allocator cap and 250,000 Lua
+Each script has a separate Lua 5.4.9 VM with a 32 MiB allocator cap and 250,000 Lua
 instructions per initialization/callback. Files are loaded as source, not bytecode.
 Available libraries: basic functions, table, math, utf8, and bounded string
 operations. No filesystem/process/network/native loading, debug, coroutine,

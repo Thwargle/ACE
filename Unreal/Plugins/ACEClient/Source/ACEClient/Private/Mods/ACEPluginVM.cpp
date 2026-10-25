@@ -5,6 +5,7 @@
 #include "Interfaces/IPluginManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 #include "Serialization/JsonSerializer.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 #include <string_view>
@@ -292,7 +293,7 @@ FACEPluginVM::FACEPluginVM()
         auto* Self = static_cast<FACEPluginVM*>(Ud);
         if (!Ptr) Old = 0; // Lua uses osize as a type tag for new allocations.
         if (!New) { FMemory::Free(Ptr); Self->Bytes -= Old; return nullptr; }
-        if (New > 8 * 1024 * 1024 || Self->Bytes - Old > 8 * 1024 * 1024 - New) return nullptr;
+        if (New > MemoryLimit || Self->Bytes - Old > MemoryLimit - New) return nullptr;
         void* Result = FMemory::Realloc(Ptr, New);
         if (Result) {Self->Bytes = Self->Bytes - Old + New;Self->PeakBytes=FMath::Max(Self->PeakBytes,Self->Bytes);}
         return Result;
@@ -348,6 +349,7 @@ bool FACEPluginVM::Step(const TSharedPtr<FJsonObject>& Snapshot, const TSharedPt
     TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginLuaStep);
     Intent.Reset();RegexWork=0;SpellIndexWork=0;Instructions=0;
     lua_settop(State, 0);
+    ON_SCOPE_EXIT { lua_settop(State, 0); };
     lua_sethook(State, Budget, LUA_MASKCOUNT, 1000);
     lua_rawgeti(State, LUA_REGISTRYINDEX, Function);
     {
@@ -355,12 +357,14 @@ bool FACEPluginVM::Step(const TSharedPtr<FJsonObject>& Snapshot, const TSharedPt
         for (const auto* Object : {Snapshot.Get(), Profile.Get()})
         {
             lua_pushcfunction(State, PushArgument); lua_pushlightuserdata(State, const_cast<FJsonObject*>(Object));
-            if (lua_pcall(State, 1, 1, 0) != LUA_OK) { Error = LuaError(State); return false; }
+            const int Result=lua_pcall(State,1,1,0);
+            if(Result!=LUA_OK){Error=RuntimeError(Object==Snapshot.Get()?TEXT("snapshot input"):TEXT("profile input"),Result,Snapshot.Get(),Profile.Get());return false;}
         }
     }
     {
         TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginLuaCallback);
-        if (lua_pcall(State, 2, 1, 0) != LUA_OK) { Error = LuaError(State); return false; }
+        const int Result=lua_pcall(State,2,1,0);
+        if(Result!=LUA_OK){Error=RuntimeError(TEXT("callback"),Result,Snapshot.Get(),Profile.Get());return false;}
     }
     if (lua_isnil(State, -1)) return true;
     if (!lua_istable(State, -1)) { Error = TEXT("Tick must return nil or an intent table"); return false; }
@@ -386,12 +390,12 @@ bool FACEPluginVM::Step(const TSharedPtr<FJsonObject>& Snapshot, const TSharedPt
             Intent->SetNumberField(Key, Value);
         }
         else if (lua_isboolean(State, -1)) Intent->SetBoolField(Key, lua_toboolean(State, -1) != 0);
-        else if((Key==TEXT("presentation")||Key==TEXT("state")||Key==TEXT("ui")||Key==TEXT("chat_filters")||Key==TEXT("markers")||Key==TEXT("world_plates")||Key==TEXT("messages")||Key==TEXT("requests")||Key==TEXT("profile_patch"))&&lua_istable(State,-1))
+        else if((Key==TEXT("presentation")||Key==TEXT("state")||Key==TEXT("ui")||Key==TEXT("chat_filters")||Key==TEXT("markers")||Key==TEXT("world_plates")||Key==TEXT("terrain_overlay")||Key==TEXT("messages")||Key==TEXT("requests")||Key==TEXT("profile_patch"))&&lua_istable(State,-1))
         {
             int Nodes=0,OutputBytes=0;auto Value=ReadOutput(State,-1,0,Nodes,OutputBytes,Error,Key==TEXT("profile_patch")||Key==TEXT("requests"));
             if(!Value){lua_settop(State,0);return false;}
             // Lua's empty table has no array/object distinction.
-            if(Key!=TEXT("presentation")&&Key!=TEXT("state")&&Key!=TEXT("profile_patch")&&Value->Type==EJson::Object&&Value->AsObject()->Values.IsEmpty())Value=MakeShared<FJsonValueArray>(TArray<TSharedPtr<FJsonValue>>{});
+            if(Key!=TEXT("terrain_overlay")&&Key!=TEXT("presentation")&&Key!=TEXT("state")&&Key!=TEXT("profile_patch")&&Value->Type==EJson::Object&&Value->AsObject()->Values.IsEmpty())Value=MakeShared<FJsonValueArray>(TArray<TSharedPtr<FJsonValue>>{});
             Intent->SetField(Key,Value);
         }
         else if(Key==TEXT("runtime_route")&&lua_istable(State,-1))
@@ -419,4 +423,14 @@ bool FACEPluginVM::Step(const TSharedPtr<FJsonObject>& Snapshot, const TSharedPt
     }
     lua_settop(State, 0);
     return true;
+}
+
+FString FACEPluginVM::RuntimeError(const TCHAR* Phase,int Result,const FJsonObject* Snapshot,const FJsonObject* Profile) const
+{
+    if(Result!=LUA_ERRMEM)return LuaError(State);
+    auto Count=[](const FJsonObject* Object,const TCHAR* Key)
+    {const TArray<TSharedPtr<FJsonValue>>* Values=nullptr;return Object&&Object->TryGetArrayField(Key,Values)?Values->Num():0;};
+    return FString::Printf(TEXT("Lua memory limit reached during %s (heap %.2f/%.0f MiB, peak %.2f MiB; inventory %d, spells %d, targets %d, contents %d, loot rules %d)"),
+        Phase,Bytes/1048576.,MemoryLimit/1048576.,PeakBytes/1048576.,Count(Snapshot,TEXT("inventory")),Count(Snapshot,TEXT("spells")),
+        Count(Snapshot,TEXT("targets")),Count(Snapshot,TEXT("contents")),Count(Profile,TEXT("loot_rules")));
 }

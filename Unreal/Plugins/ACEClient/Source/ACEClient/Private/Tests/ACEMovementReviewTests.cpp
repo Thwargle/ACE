@@ -882,14 +882,20 @@ bool FACEMovementReviewTest::RunTest(const FString&)
  Fixed->ApplyACEPosition(Corrected);
  for(int Frame=0;Frame<60;++Frame) Fixed->Tick(1.f/60);
  TestTrue(TEXT("Fixed props still accept authoritative position corrections"),Fixed->GetActorLocation().Equals(Corrected.ToUnrealLocation(100),.01));
- // Stuck is also set on creatures. Their jump physics must remain active.
- Fixed->ItemType=ACEItemType::Creature;Fixed->ApplyPhysicsVelocity(FVector(0,0,5));
- Fixed->Tick(1.f/60);
- TestTrue(TEXT("Stuck creatures still jump"),Fixed->GetActorLocation().Z>Corrected.ToUnrealLocation(100).Z);
- Fixed->ItemType=128;Fixed->PhysicsState|=ACEPhysicsState::Missile;
- const FVector MissileStart=Fixed->GetActorLocation();Fixed->ApplyPhysicsVelocity(FVector(1,0,5));Fixed->Tick(1.f/60);
- TestTrue(TEXT("Missiles still integrate velocity"),!Fixed->GetActorLocation().Equals(MissileStart,.1));
  Fixed->Destroy();
+ // Real creature/projectile setups have movement spheres. Changing a sign's
+ // item type does not give its model a body; use retail physics for the controls.
+ for(bool Missile:{false,true})
+ {
+  FACEWorldObject Moving=Smithy;Moving.SetupId=Missile?0x0200040D:0x02000001;
+  Moving.ItemType=Missile?ACEItemType::Misc:ACEItemType::Creature;
+  Moving.PhysicsState=ACEPhysicsState::Gravity|(Missile?ACEPhysicsState::Missile:0);
+  auto* Body=World->SpawnActor<AACEWorldEntityActor>();Body->InitializeFromObject(Moving,100,false);
+  TestTrue(TEXT("Jump/flight control has real DAT movement spheres"),!Body->MovementSpheresAc.IsEmpty());
+  const FVector FlightStart=Body->GetActorLocation();Body->ApplyPhysicsVelocity(FVector(1,0,5));Body->Tick(1.f/60);
+  TestTrue(Missile?TEXT("Missiles still integrate velocity"):TEXT("Stuck creatures still jump"),Body->GetActorLocation().Z>FlightStart.Z);
+  Body->Destroy();
+ }
  // Town Network portal: the same authored Stuck + Gravity combination must
  // retain its elevated spawn height, including deferred appearance/echoes.
  FACEWorldObject Portal=Smithy;Portal.Guid=0x7C88C066;Portal.WeenieClassId=43065;

@@ -1,5 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
+#include "ACEDatSubsystem.h"
 #include "ACEWorldPresenterComponent.h"
 #include "ACEWorldEntityActor.h"
 #include "Engine/Engine.h"
@@ -15,9 +17,12 @@ bool FACEProjectileLifetimeTest::RunTest(const FString&)
  auto& Context=GEngine->CreateNewWorldContext(EWorldType::Game);
  auto* GI=NewObject<UGameInstance>(GEngine);World->SetGameInstance(GI);
  Context.OwningGameInstance=GI;Context.SetCurrentWorld(World);GI->Init();
+ ON_SCOPE_EXIT { GI->Shutdown();World->DestroyWorld(false);GEngine->DestroyWorldContext(World); };
+ if(!TestTrue(TEXT("Projectile spawn has resident DAT metadata"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
  auto* Owner=World->SpawnActor<AActor>();auto* Presenter=NewObject<UACEWorldPresenterComponent>(Owner);
  Owner->AddInstanceComponent(Presenter);Presenter->RegisterComponent();Presenter->bApplyDatAppearance=false;
  FACEWorldObject Projectile;Projectile.Guid=12345;Projectile.Name=TEXT("missed spell");
+ Projectile.SetupId=0x0200040D;
  Projectile.bHasPosition=true;Projectile.Position.CellId=0xC98C0030;
  Projectile.PhysicsState=ACEPhysicsState::Missile;
  Presenter->HandleObjectCreated(Projectile);
@@ -48,6 +53,6 @@ bool FACEProjectileLifetimeTest::RunTest(const FString&)
  TestFalse(TEXT("Equipped ammunition never starts a flight timer"),Presenter->ProjectileFlights.Contains(Projectile.Guid));
  Presenter->ClearSpawned();
  TestTrue(TEXT("World reset clears projectile bookkeeping"),Presenter->ProjectileFlights.IsEmpty());
- World->DestroyWorld(false);GEngine->DestroyWorldContext(World);return true;
+ return true;
 }
 #endif

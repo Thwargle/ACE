@@ -277,6 +277,35 @@ bool FACEDatMotionPlayer::FindTransitionAnims(uint32 From, uint32 To, TArray<FAC
 {
 	Out.Reset();
 	if (From == To) return false;
+	if (To & 0x80000000u)
+	{
+		// CMotionTable::GetObjectSequence changes style through the old style's
+		// default substate. A style-wide link is NOT a direct exit from Sleeping
+		// (golems/skeletons): the source pose's pre-link must play first.
+		const uint32 Style = PreferredStyle != 0 ? PreferredStyle : MotionTable->DefaultStyle;
+		if (Style == To) return false;
+		const uint32* Ready = MotionTable->StyleDefaults.Find(Style);
+		const uint32* Destination = MotionTable->StyleDefaults.Find(To);
+		if (!Ready || !Destination || !MotionTable->Cycles.Contains((To << 16) | (*Destination & 0xFFFFFFu))) return false;
+		auto Link = [&](uint32 SourceStyle, uint32 Source, uint32 Target) -> const FACEDatMotionData*
+		{
+			for (uint32 Key : {(SourceStyle << 16) | (Source & 0xFFFFFFu), SourceStyle << 16})
+				if (const auto* Links = MotionTable->Links.Find(Key))
+					if (const auto* Data = Links->Find(Target)) return Data;
+			return nullptr;
+		};
+		if (From != *Ready)
+			if (const auto* Exit = Link(Style, From, *Ready)) Out.Append(Exit->Anims);
+		if (const auto* Enter = Link(Style, *Ready, To)) Out.Append(Enter->Anims);
+		else
+		{
+			// Retail routes unsupported direct style changes through default_style.
+			if (const auto* Exit = Link(Style, *Ready, MotionTable->DefaultStyle)) Out.Append(Exit->Anims);
+			if (const uint32* DefaultReady = MotionTable->StyleDefaults.Find(MotionTable->DefaultStyle))
+				if (const auto* DefaultEnter = Link(MotionTable->DefaultStyle, *DefaultReady, To)) Out.Append(DefaultEnter->Anims);
+		}
+		return !Out.IsEmpty();
+	}
 	// CMotionTable::get_link checks the actual source and then the style-wide
 	// link. A Ready->target fallback alone discards the source pose's exit clips.
 	for (uint32 Style : {PreferredStyle != 0 ? PreferredStyle : MotionTable->DefaultStyle, MotionTable->DefaultStyle})

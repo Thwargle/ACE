@@ -12,6 +12,10 @@
 #include "ACEWorldEntityActor.h"
 #include "ACECharacterAppearanceComponent.h"
 #include "Components/SceneComponent.h"
+#include "ProceduralMeshComponent.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Dat/ACEOutdoorPortalPlan.h"
+#include "Camera/PlayerCameraManager.h"
 #include "EngineUtils.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -36,48 +40,94 @@ bool UACEUIGameplayBinder::TryDispatchMiscCommand(const FString& Cmd, const FStr
     }
     if (Cmd==TEXT("acueobject"))
     {
-        // Local-only report: users can share a chat screenshot without locating logs.
+        // Local-only and on demand: retain the full report in the log as well as
+        // chat, before a reset/relog destroys evidence of an invisible object.
+        auto Report=[&](const FString& Text)
+        {
+            Print(Text);
+            UE_LOG(LogTemp,Display,TEXT("ACE object report: %s"),*Text);
+        };
         FACEWorldObject Object;
         if (!Client->GetWorldObject(Client->GetSelectedObject().Guid, Object))
         {
             Error(TEXT("Select a world object, then type /acueobject to display its placement details."));
             return true;
         }
-        Print(FString::Printf(TEXT("Object report %s: %s [%08X / WCID %d]"),
+        Report(FString::Printf(TEXT("Object report %s: %s [%08X / WCID %d]"),
             ACEClientBuild::Version, *Object.Name, uint32(Object.Guid), Object.WeenieClassId));
-        Print(FString::Printf(TEXT("Setup %08X Motion %08X Placement %d Scale %.4f"),
+        Report(FString::Printf(TEXT("Setup %08X Motion %08X Placement %d Scale %.4f"),
             uint32(Object.SetupId), uint32(Object.MotionTableId), Object.PlacementId, Object.Scale));
-        Print(FString::Printf(TEXT("Type %08X Desc %08X Physics %08X Parent %08X"),
+        Report(FString::Printf(TEXT("Type %08X Desc %08X Physics %08X Parent %08X"),
             uint32(Object.ItemType), uint32(Object.ObjectDescriptionFlags), uint32(Object.PhysicsState), uint32(Object.ParentGuid)));
         const FACEPosition& P = Object.Position;
-        Print(FString::Printf(TEXT("Received %08X [%.4f %.4f %.4f] Contact %d/%d"),
+        Report(FString::Printf(TEXT("Received %08X [%.4f %.4f %.4f] Contact %d/%d"),
             uint32(P.CellId), P.Location.X, P.Location.Y, P.Location.Z, P.bHasContactState, P.bIsGrounded));
-        Print(FString::Printf(TEXT("Rotation %.4f %.4f %.4f %.4f Velocity %.4f %.4f %.4f"),
+        Report(FString::Printf(TEXT("Rotation %.4f %.4f %.4f %.4f Velocity %.4f %.4f %.4f"),
             P.RotationW, P.RotationXYZ.X, P.RotationXYZ.Y, P.RotationXYZ.Z, Object.Velocity.X, Object.Velocity.Y, Object.Velocity.Z));
         // An explicit diagnostic can scan actors once; no work is added to frame updates.
         UWorld* World = Client->GetWorld();
+        FVector Eye=FVector::ZeroVector; FConvexVolume View;
+        const bool HasView=ACEOutdoorPortalPlan::TryGetPlayerViewFrustum(World,Eye,View);
+        if (PlayerController && PlayerController->PlayerCameraManager)
+        {
+            int32 Width=0,Height=0; PlayerController->GetViewportSize(Width,Height);
+            Report(FString::Printf(TEXT("View %dx%d FOV %.2f Projection available %d"),
+                Width,Height,PlayerController->PlayerCameraManager->GetFOVAngle(),HasView));
+        }
         if (World) for (TActorIterator<AACEWorldEntityActor> It(World); It; ++It)
         {
             if (It->GetACEGuid() != Object.Guid) continue;
             const float Units = FMath::Max(It->WorldScale, SMALL_NUMBER);
             const FVector Delta = (It->GetActorLocation() - P.ToUnrealLocation(Units)) / Units;
             const FVector Scale = It->GetActorScale3D();
-            Print(FString::Printf(TEXT("Actor delta (UE axes/AC units) [%.4f %.4f %.4f] Scale [%.4f %.4f %.4f]"),
+            Report(FString::Printf(TEXT("Actor delta (UE axes/AC units) [%.4f %.4f %.4f] Scale [%.4f %.4f %.4f]"),
                 Delta.X, Delta.Y, Delta.Z, Scale.X, Scale.Y, Scale.Z));
+            Report(FString::Printf(TEXT("Actor cell %08X Admitted %d Hidden %d Suppressed %d Physics %08X"),
+                uint32(It->GetLastAceCellId()),It->IsCellVisible(),It->IsHidden(),It->IsMeshSuppressed(),uint32(It->PhysicsState)));
             if (auto* Appearance = It->Appearance.Get())
             {
-                Print(FString::Printf(TEXT("Parts %d Animated %d Visible %d Mesh %d"),
+                Report(FString::Printf(TEXT("Parts %d Animated %d Visible %d Mesh %d"),
                     Appearance->GetPartCount(), Appearance->IsComponentTickEnabled(), It->IsCellVisible(), It->bUsingDatMesh));
+                FBox Bounds(ForceInit);
+                if (Appearance->GetVisualWorldBounds(Bounds))
+                    Report(FString::Printf(TEXT("Bounds offset [%s] Extent [%s] (AC units) In frustum %d Distance %.2f"),
+                        *((Bounds.GetCenter()-It->GetActorLocation())/Units).ToString(),*(Bounds.GetExtent()/Units).ToString(),
+                        HasView ? int32(View.IntersectBox(Bounds.GetCenter(),Bounds.GetExtent())) : -1,
+                        HasView ? FVector::Distance(Eye,Bounds.GetCenter())/Units : -1.));
                 if (auto* Part = Appearance->GetPartMesh(0))
                 {
                     const FVector Local = Part->GetRelativeLocation() / Units;
-                    Print(FString::Printf(TEXT("Part 0 local [%.4f %.4f %.4f] Height above received origin %.4f"),
+                    Report(FString::Printf(TEXT("Part 0 local [%.4f %.4f %.4f] Height above received origin %.4f"),
                         Local.X, Local.Y, Local.Z, (Part->GetComponentLocation().Z - P.ToUnrealLocation(Units).Z) / Units));
+                }
+                // Bound chat/log volume even for creatures with many body parts.
+                for (int32 Index=0;Index<FMath::Min(Appearance->GetPartCount(),8);++Index)
+                {
+                    auto* Part=Cast<UProceduralMeshComponent>(Appearance->GetPartMesh(Index));
+                    if (!Part) continue;
+                    Report(FString::Printf(TEXT("Part %d Registered %d Visible %d Hidden %d Main %d Capture-only %d Owner-no-see %d Proxy %d Dirty %d"),
+                        Index,Part->IsRegistered(),Part->IsVisible(),Part->bHiddenInGame,Part->bRenderInMainPass,
+                        Part->bVisibleInSceneCaptureOnly,Part->bOwnerNoSee,Part->SceneProxy!=nullptr,Part->IsRenderStateDirty()));
+                    const int32 Level=HasView ? Part->GetDistanceLevel(Eye) : INDEX_NONE;
+                    int32 VisibleSections=0; float MinimumOpacity=1.f; bool HasOpacity=false;
+                    for (int32 Section=0;Section<Part->GetNumSections();++Section)
+                    {
+                        const auto* Geometry=Part->GetProcMeshSection(Section);
+                        if (!Geometry || !Geometry->bSectionVisible || Geometry->ProcIndexBuffer.IsEmpty()) continue;
+                        ++VisibleSections;
+                        float Opacity=1.f;
+                        if (auto* Material=Part->GetMaterial(Section); Material && Material->GetScalarParameterValue(FMaterialParameterInfo(TEXT("OpacityMul")),Opacity))
+                        { MinimumOpacity=FMath::Min(MinimumOpacity,Opacity); HasOpacity=true; }
+                    }
+                    Report(FString::Printf(TEXT("Part %d Sections %d/%d LOD %d LOD sections %d Minimum opacity %.3f"),
+                        Index,VisibleSections,Part->GetNumSections(),Level,
+                        Level==INDEX_NONE ? Part->GetNumSections() : Part->GetDistanceLevels()[Level].SectionCount,
+                        HasOpacity ? MinimumOpacity : -1.f));
                 }
             }
             return true;
         }
-        Print(TEXT("No rendered world actor for this selection (inventory, hidden, or still loading)."));
+        Report(TEXT("No rendered world actor for this selection (inventory, hidden, or still loading)."));
         return true;
     }
     if (Cmd==TEXT("age") || Cmd==TEXT("birth") || Cmd==TEXT("pkl") || Cmd==TEXT("pklite"))

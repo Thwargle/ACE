@@ -1,4 +1,5 @@
 #include "ACEEffectLightSubsystem.h"
+#include "ACEProfiling.h"
 #include "ACERuntimeOptions.h"
 #include "ACELandblockActor.h"
 #include "Camera/PlayerCameraManager.h"
@@ -388,6 +389,7 @@ void UACEEffectLightSubsystem::UpdateSelectedLights(const FVector* ViewPosition,
 
 void UACEEffectLightSubsystem::RefreshLights(float DeltaSeconds)
 {
+	ACE_PROFILE_SCOPE(EffectLights);
 	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_EffectLightBudget);
 	if (!GetWorld()) return;
 	ClockSeconds += FMath::IsFinite(DeltaSeconds) ? FMath::Max(0.f, DeltaSeconds) : 0.f;

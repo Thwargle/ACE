@@ -57,6 +57,8 @@ bool ACEPluginWorldPlate::Parse(const TArray<TSharedPtr<FJsonValue>>& Values,TAr
         if(Ids.Contains(P.Id)){Error=TEXT("Duplicate world plate object");return false;}Ids.Add(P.Id);
         if(J->HasField(TEXT("selection_only"))&&(J->Values[TEXT("selection_only")]->Type!=EJson::Boolean||!J->TryGetBoolField(TEXT("selection_only"),P.SelectionOnly)))
         {Error=TEXT("selection_only must be boolean");return false;}
+        if(J->HasField(TEXT("refresh"))&&!J->TryGetBoolField(TEXT("refresh"),P.Refresh))
+        {Error=TEXT("refresh must be boolean");return false;}
         if(J->HasField(TEXT("color")))
         {
             FString Color;

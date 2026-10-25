@@ -40,6 +40,40 @@ local loot_job_pending=nil
 local scroll_reads={}
 local combine_pending=nil
 local stack_pending=nil
+local history_cleanup_at=0
+-- Retry limits belong to live objects. A hunting session continually sees new
+-- GUIDs; keeping their appraisal/equipment/debuff attempts forever leaks the
+-- Lua heap even after the host has removed the corresponding world objects.
+local function prune_history(s)
+ if s.time<history_cleanup_at then return end
+ history_cleanup_at=s.time+10
+ for _,timers in ipairs({until_time,corpses,buff_skips,unavailable_spells}) do
+  for key,expires in pairs(timers) do if expires<=s.time then timers[key]=nil end end
+ end
+ local present={};if s.player then present[s.player]=true end
+ for _,list in ipairs({s.inventory or {},s.contents or {},s.targets or {},s.corpses or {},s.route_objects or {},
+  (s.fellowship or {}).members or {},(s.buff_request or {}).equipment or {}}) do
+  for _,object in ipairs(list) do if object.id then present[object.id]=true end end
+ end
+ if s.container then present[s.container]=true end
+ if s.buff_request and s.buff_request.player then present[s.buff_request.player]=true end
+ local function target_id(text)
+  for i=1,#text do if text:sub(i,i)==':' then return tonumber(text:sub(1,i-1)) end end
+  return tonumber(text)
+ end
+ for key in pairs(retries) do
+  local id=target_id(tostring(key));if id and not present[id] then retries[key]=nil end
+ end
+ for key,value in pairs(item_attempts) do
+  local id
+  if key:sub(1,2)=='id' then id=tonumber(key:sub(3))
+  elseif key:sub(1,5)=='equip' then id=target_id(key:sub(6))
+  elseif key:sub(1,6)=='corpse' then id=tonumber(key:sub(7))
+  elseif key:sub(1,6)=='debuff' then id=target_id(key:sub(7))
+  elseif key:sub(1,6)=='helper' then id=tonumber(key:sub(7,-2)) end
+  if value==0 or (id and not present[id]) then item_attempts[key]=nil end
+ end
+end
 -- An operational failure belongs to one activity, never the whole scheduler.
 -- Cooldowns prevent a failing high-priority activity starving combat/recovery.
 local activity,activity_time,activity_pauses='meta',0,{}
@@ -1032,17 +1066,23 @@ end
 local function empty_mana_stone(v,p)
  return v.identified and v.usable and v.mana_empty and band(v.type,0x80000)~=0
 end
+local function reserved_mana_source(v,q,p,option)
+ -- Pickup can recreate the object and invalidate its corpse appraisal. Keep
+ -- that exact pickup reserved while reassessing it; unknown is not unsuitable.
+ return q and q.wcid==v.wcid and q.count==(v.count or 1) and v.resource_available~=false
+  and (not v.identified or mana_source_candidate(v,p,option))
+end
 local function mana_source_demand(inventory,p,option)
  if not option('fill_mana_stones',false) or mana_fill_pending then return 0 end
  local empty,reserved=0,0
  for _,v in ipairs(inventory) do
   if empty_mana_stone(v,p) then empty=empty+1 end
   local q=mana_sources[v.id]
-  if q and q.wcid==v.wcid and q.count==(v.count or 1) and v.resource_available~=false and mana_source_candidate(v,p,option) then reserved=reserved+1 end
+  if reserved_mana_source(v,q,p,option) then reserved=reserved+1 end
  end
  return math.max(0,empty-reserved)
 end
-local function equipment_mana(s,p,inventory,option)
+local function equipment_mana(s,p,inventory,option,assess)
  if not activity_ready('item_mana') then return end
  if mana_fill_pending then
   local q=mana_fill_pending;local stone
@@ -1075,13 +1115,14 @@ local function equipment_mana(s,p,inventory,option)
   end
  end
  if option('fill_mana_stones',false) and s.time>=(until_time.mana_fill or 0) then
-  local stone,source;local present={}
+  local stone,source,unassessed;local present={}
   for _,v in ipairs(inventory) do
    if empty_mana_stone(v,p) then stone=stone or v end
    local q=mana_sources[v.id]
    if q then
     present[v.id]=true
-    if q.wcid==v.wcid and q.count==(v.count or 1) and v.resource_available~=false and mana_source_candidate(v,p,option) then source=source or v
+    if reserved_mana_source(v,q,p,option) then
+     if v.identified then source=source or v else unassessed=unassessed or v end
     else mana_sources[v.id]=nil end -- A player changed/protected the item after pickup.
    end
   end
@@ -1090,6 +1131,7 @@ local function equipment_mana(s,p,inventory,option)
    mana_fill_pending={stone=stone.id,source=source.id,serial=s.action_serial or 0,deadline=s.time+15}
    return {action='apply_item',item=stone.id,target=source.id,status='Filling '..stone.name..' from '..source.name..' (consumes item)'}
   end
+  if stone and unassessed and s.time>=(until_time['id'..unassessed.id] or 0) then return assess(unassessed) end
  end
 end
 
@@ -1413,9 +1455,9 @@ local function tick(s,p)
  local usable_names={};for _,v in ipairs(inventory) do if v.usable and v.name then usable_names[v.name]=v end end
  local weapon_allowed,pet_allowed=equipment_selection(p,inventory)
  for _,v in ipairs(inventory) do
-  if not v.equipped then item_attempts['equip'..v.id..':remove']=0
-  elseif band(v.equipped_slot,0x200000)~=0 then item_attempts['equip'..v.id..':offhand']=0
-  else item_attempts['equip'..v.id]=0 end
+  if not v.equipped then item_attempts['equip'..v.id..':remove']=nil
+  elseif band(v.equipped_slot,0x200000)~=0 then item_attempts['equip'..v.id..':offhand']=nil
+  else item_attempts['equip'..v.id]=nil end
  end
  local function equip(v,offhand,unequip)
   local key='equip'..v.id..(offhand and ':offhand' or unequip and ':remove' or '')
@@ -1931,7 +1973,7 @@ local function tick(s,p)
     and s.time>=(until_time['id'..v.id] or 0) then activity='item_mana';return assess(v) end
   end
  end
- local mana_action=equipment_mana(s,p,inventory,option);if mana_action then return mana_action end
+ local mana_action=equipment_mana(s,p,inventory,option,assess);if mana_action then return mana_action end
  local function buffs(refresh)
  if health_critical or not activity_ready('buffs') then return end
  if forced_buff or option('buffing',true) then
@@ -3109,7 +3151,9 @@ return function(s,p)
   retries={};until_time={};item_attempts={};corpses={};monster_failures={};monster_blacklist={};ghost_attempts={};ghost_hp={}
   follow_path={};follow_target=nil;follow_teleport=nil
   activity_pauses={};activity_pause_reasons={}
+  history_cleanup_at=0
  end
+ prune_history(s)
  buff_plan=nil
  local intent=run(s,p)
  if intent then
