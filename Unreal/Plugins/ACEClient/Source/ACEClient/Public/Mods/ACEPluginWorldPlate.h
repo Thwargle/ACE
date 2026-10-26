@@ -18,6 +18,10 @@ struct FACEPluginWorldPlate
     FString Name, Role;
     FLinearColor Color=FLinearColor(1,.8f,.15f);
     bool SelectionOnly=true, Refresh=true;
+    // Opacity is applied once to the composed plate, independently of mesh selection tint.
+    double Opacity=1, BackgroundOpacity=1, VROpacity=-1, VRBackgroundOpacity=-1;
+    double OpacityFor(bool VR) const { return VR && VROpacity>=0 ? VROpacity : Opacity; }
+    double BackgroundOpacityFor(bool VR) const { return VR && VRBackgroundOpacity>=0 ? VRBackgroundOpacity : BackgroundOpacity; }
     FACEPluginPlateVital Health, Stamina, Mana;
     TArray<FACEPluginPlateEffect> Effects;
 };
@@ -42,6 +46,9 @@ public:
     uint32 Revision=MAX_uint32;
     const FACEPluginWorldPlate& GetPlate() const { return Plate; }
 private:
+    friend class FACEPluginWorldPlateTest;
+    void UpdatePresentation(bool VR);
+    bool VRPresentation=false;
     FACEPluginWorldPlate Plate;
     TWeakObjectPtr<class UACEPluginSubsystem> Host;
     TSharedPtr<class SACEPluginWorldPlate> Surface;

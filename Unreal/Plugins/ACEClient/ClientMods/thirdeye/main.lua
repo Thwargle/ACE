@@ -2,7 +2,6 @@
 -- suppression belong to this login. Matching is literal, never a regular expression.
 local config, draft, exact, feedback = nil, "", false, ""
 local cache, seen = {}, {}
-local add_plate = false
 local rule_page, detected_page, filter = 1, 1, ""
 local alerts, alert_inflight, next_alert = {}, false, 0
 local rule_size, detected_size, MAX_RULES = 6, 8, 128
@@ -36,21 +35,24 @@ return function(s)
     rule_page = math.floor((rule_page-1)*rule_size/next_rules)+1
     detected_page = math.floor((detected_page-1)*detected_size/next_detected)+1
     rule_size, detected_size = next_rules, next_detected
+    local migrated = false
     if not config then
         local saved = s.state or {}
         config = {rules={}, next_id=1, watching=saved.watching ~= false,
             chat_alerts=saved.chat_alerts ~= false, world_markers=saved.world_markers == true,
             map_markers=saved.map_markers ~= false, range=math.max(5, math.min(240, tonumber(saved.range) or 240))}
+        migrated = saved.opacity ~= nil or saved.background_opacity ~= nil or saved.vr_opacity ~= nil or saved.vr_background_opacity ~= nil
         for _, r in ipairs(type(saved.rules)=="table" and saved.rules or {}) do
             if #config.rules == MAX_RULES then break end
             if type(r)=="table" and type(r.name)=="string" and #r.name>0 and #r.name<=256 then
                 config.rules[#config.rules+1] = {id=config.next_id, name=r.name,
-                    exact=r.exact==true, enabled=r.enabled~=false, plate=r.plate==true}
+                    exact=r.exact==true, enabled=r.enabled~=false}
+                migrated = migrated or r.plate ~= nil
                 config.next_id = config.next_id + 1
             end
         end
     end
-    local changed, rules_changed = false, false
+    local changed, rules_changed = migrated, false
     local selected
     for _, o in ipairs(s.objects or {}) do if o.id == s.selected then selected=o end end
     local function add(name)
@@ -63,7 +65,7 @@ return function(s)
             end
         end
         if #config.rules>=MAX_RULES then feedback="The watch list is full (128 entries)."; return end
-        config.rules[#config.rules+1]={id=config.next_id, name=name, exact=exact, enabled=true, plate=add_plate}
+        config.rules[#config.rules+1]={id=config.next_id, name=name, exact=exact, enabled=true}
         config.next_id=config.next_id+1
         rule_page=math.ceil(#config.rules/rule_size)
         draft=""; feedback="Added "..name; changed=true; rules_changed=true
@@ -76,10 +78,6 @@ return function(s)
         elseif e.type=="change" then
             if e.id=="draft" then draft=tostring(e.value)
             elseif e.id=="exact" then exact=e.value==true
-            elseif e.id=="add_plate" then add_plate=e.value==true
-            elseif string.sub(e.id or "",1,6)=="plate_" then
-                local id=tonumber(string.sub(e.id,7))
-                for _, r in ipairs(config.rules) do if r.id==id then r.plate=e.value==true; changed=true; rules_changed=true end end
             elseif e.id=="filter" then filter=tostring(e.value); detected_page=1
             elseif e.id=="range" then config.range=math.max(5,math.min(240,tonumber(e.value) or 240)); changed=true
             elseif e.id=="watching" or e.id=="chat_alerts" or e.id=="world_markers" or e.id=="map_markers" then
@@ -108,12 +106,11 @@ return function(s)
     for _, r in ipairs(config.rules) do
         if r.enabled then
             local name=string.lower(r.name)
-            if r.exact then exact_names[name]=math.max(exact_names[name] or 0,r.plate and 2 or 1)
-            else partial_names[#partial_names+1]={name=name,plate=r.plate} end
+            if r.exact then exact_names[name]=true
+            else partial_names[#partial_names+1]=name end
         end
     end
     local matches, markers, new_names, next_cache, next_seen = {}, {}, {}, {}, {}
-    local plates = {}
     local new_count, scanning = 0, false
     local now=s.time or 0
     -- Brief awareness/range flicker must not repeatedly announce the same spawn.
@@ -127,27 +124,15 @@ return function(s)
                 local name=string.lower(o.name)
                 local match=cache[name]
                 if match==nil and workavailable() then
-                    match=exact_names[name] or 0
+                    match=exact_names[name] or false
                     for _, rule in ipairs(partial_names) do
-                        if match==2 then break end
-                        if string.contains(name,rule.name) then match=math.max(match,rule.plate and 2 or 1) end
+                        if match then break end
+                        if string.contains(name,rule) then match=true end
                     end
                 end
                 if match==nil then scanning=true else next_cache[name]=match end
-                if match and match>0 then
+                if match then
                     matches[#matches+1]=o
-                    if match==2 and #plates<4 and (o.object_type=="creature" or o.object_type=="player" or o.object_type=="vendor" or o.monster or o.player) then
-                        local key=string.format("%.0f",o.id)
-                        local t=(s.tracked_targets or {})[key] or o
-                        local effects={}
-                        for _, effect in ipairs((s.target_effects or {})[key] or {}) do
-                            if #effects==16 then break end
-                            effects[#effects+1]=effect
-                        end
-                        plates[#plates+1]={id=o.id,name=short(o.name),role=short(t.title or t.creature_class or t.object_type or ""),
-                            level=t.level,vitals=t.vitals,effects=effects,selection_only=false,
-                            color=o.player and "blue" or o.monster and "red" or "yellow"}
-                    end
                     local previous=seen[o.id]
                     if not previous or previous.name~=o.name or previous.wcid~=o.wcid then
                         new_count=new_count+1
@@ -199,9 +184,7 @@ return function(s)
     end
     local setup={
         {id="draft",type="input",text="Name to watch",value=draft,live=true},
-        {id="match_options",type="row",children={
-            {id="exact",type="checkbox",text="Exact name",value=exact,tooltip="Otherwise match any name containing this text"},
-            {id="add_plate",type="checkbox",text="Show plates",value=add_plate,tooltip="Show creature plates for this name"}}},
+        {id="exact",type="checkbox",text="Exact name",value=exact,tooltip="Otherwise match any name containing this text"},
         {id="add_row",type="row",children={button("add","Add name"),button("add_selected","Add selected",selected~=nil)}},
         {id="feedback",text=feedback,wrap=false,tooltip=feedback},
         page_controls("rules",rule_page,#config.rules,rule_size)
@@ -212,13 +195,12 @@ return function(s)
         {id="world_markers",type="checkbox",text="Mark matches in the world",value=config.world_markers},
         {id="map_markers",type="checkbox",text="Mark matches on Waypoint map",value=config.map_markers},
         {id="match_help",text="Names ignore letter case. Matches are literal. Saved automatically for this character and server.",size=12},
-        {id="limits",text="Uses nearby objects known to the client. Up to 32 markers and 4 nearest creature plates. Metadata and vitals refresh when the server permits assessment; unknown bars stay hidden.",size=12}
+        {id="limits",text="Uses nearby objects known to the client. Up to 32 world/map markers. Target plates are provided by separate addons.",size=12}
     }
     for i=(rule_page-1)*rule_size+1,math.min(#config.rules,rule_page*rule_size) do
         local r=config.rules[i]
         setup[#setup+1]={id="rule_"..r.id,type="row",children={
             {id="enabled_"..r.id,type="checkbox",text=(r.exact and "Equals: " or "Contains: ")..r.name,wrap=false,tooltip=r.name,value=r.enabled},
-            {id="plate_"..r.id,type="checkbox",text="Plate",value=r.plate,tooltip="Show creature plates and refresh known vitals without changing selection"},
             button("remove_"..r.id,"Remove")
         }}
     end
@@ -227,5 +209,7 @@ return function(s)
             {id="setup_tab",type="column",text="Setup",children=setup},
             {id="options_tab",type="column",text="Options",children=options}}}}
     if s.error and s.error~="" then ui[#ui+1]={id="error",text=s.error,color="red"} end
-    return {status=#matches.." matches",ui=ui,markers=markers,world_plates=plates,requests=requests,state=changed and config or nil}
+    -- Clear any retained plates from older Third Eye versions; other addons own
+    -- their plate lists and opacity preferences independently.
+    return {status=#matches.." matches",ui=ui,markers=markers,world_plates={},requests=requests,state=changed and config or nil}
 end

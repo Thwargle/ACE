@@ -285,6 +285,14 @@ are in each editing tab; new routes start empty. Deletion retains a backup in
 `Profiles/Deleted` and switches affected selections to Default. Default files
 cannot be deleted. Activity toggles remain independent of the selected files.
 
+On **Route**, choose **+ New route**, enter a file name, then **Create and select
+route** (or press Enter). This immediately creates the empty JSON file and makes
+it current. The editor shows its name, saved point count and auto-save status.
+Use **Add waypoint at my position**, walk to the next turn, and repeat. The point
+list is paged; adding a point opens its page. **Special steps** holds portal/use,
+jump, pause and recall actions; **Route behavior** holds loop, door and follow
+settings. Enable Route Navigation and press Start when ready.
+
 **Import** has separate **Import vTank Loot Profile (*.utl)** and
 **Import vTank Route (*.nav)** buttons, plus Meta and Character imports.
 Files come from the configured import folder (initially `ImportInbox`). Refresh

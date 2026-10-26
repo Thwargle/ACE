@@ -4783,6 +4783,22 @@ void FACESession::SendPutItemInContainer(int32 ItemGuid, int32 ContainerGuid, in
 	// Placement is an insertion index, never a sparse grid address (IDList::AddAtNum).
 	if (const FACEWorldObject* Item = WorldObjects.Find(ItemGuid))
 	{
+		// Manual unequip/hotbar use reaches this path without the swap planner.
+		// ACE can dequip before rejecting a full bag, then silently restore the
+		// item elsewhere without ContainID. Check room before sending that action.
+		if (PlayerGuid && Item->CurrentWieldedLocation && Item->WielderId == PlayerGuid
+			&& ResolveContainerRoot(ContainerGuid) == PlayerGuid
+			&& !CanStowEquipmentInContainer(ContainerGuid))
+		{
+			const int32 Fallback = ContainerGuid == PlayerGuid ? FindEquipmentStowContainer({}) : 0;
+			if (!Fallback)
+			{
+				EmitChatMessage(TEXT("Not enough room in that pack to put away this equipment."), TEXT(""), ACEChatMessageType::TransientInfo);
+				return;
+			}
+			ContainerGuid = Fallback;
+			Placement = 0;
+		}
 		const int32 Amount=FMath::Max(1,Item->StackSize);
 		if(const int32 MergeTo=FindContainerMergeTarget(ItemGuid,ContainerGuid,Amount))
 		{SendStackableMerge(ItemGuid,MergeTo,Amount);return;}
@@ -4988,32 +5004,35 @@ int32 FACESession::FindEquipmentStowContainer(const TMap<int32, int32>& Reserved
 {
     TArray<int32> Packs;GetPlayerPackGuids(Packs);Packs.Insert(PlayerGuid,0);
     for(int32 Container:Packs)
-    {
-        const auto* Pack=WorldObjects.Find(Container);
-        if(Container!=PlayerGuid && (!Pack || ResolveContainerRoot(Container)!=PlayerGuid
-            || TradeSelfItems.Contains(Container) || TradePartnerItems.Contains(Container)))continue;
-        const int32 Capacity=Container==PlayerGuid && (!Pack || Pack->ItemsCapacity==0)?102:Pack->ItemsCapacity;
-        if(Capacity==-1)return Container;
-        if(Capacity<=0)continue; // foci occupy pack slots but cannot store equipment
-        TSet<int32> Items;
-        if(const auto* List=ContainerContents.Find(Container))for(const auto& Ref:*List)
-        {
-            const auto* Item=WorldObjects.Find(Ref.ItemGuid);
-            if(Ref.ContainerType==0 && (!Item || (!IsPackSlotItem(*Item) && !Item->WielderId
-                && !Item->CurrentWieldedLocation && !Item->ParentGuid
-                && (!Item->ContainerId || Item->ContainerId==Container))))Items.Add(Ref.ItemGuid);
-        }
-        // Include ObjectCreate entries even before a contents list arrives, and
-        // reserve unknown list entries so a late description cannot overfill it.
-        for(const auto& Pair:WorldObjects)
-        {
-            const auto& Item=Pair.Value;
-            if(Item.ContainerId==Container && !Item.WielderId && !Item.CurrentWieldedLocation
-                && !Item.ParentGuid && !IsPackSlotItem(Item))Items.Add(Item.Guid);
-        }
-        if(Items.Num()+Reserved.FindRef(Container)<Capacity)return Container;
-    }
+        if (CanStowEquipmentInContainer(Container, Reserved.FindRef(Container))) return Container;
     return 0;
+}
+
+bool FACESession::CanStowEquipmentInContainer(int32 Container, int32 Reserved) const
+{
+    if (!PlayerGuid || !Container) return false;
+    const auto* Pack=WorldObjects.Find(Container);
+    if(Container!=PlayerGuid && (!Pack || ResolveContainerRoot(Container)!=PlayerGuid
+        || TradeSelfItems.Contains(Container) || TradePartnerItems.Contains(Container)))return false;
+    const int32 Capacity=Container==PlayerGuid && (!Pack || Pack->ItemsCapacity==0)?102:Pack->ItemsCapacity;
+    if(Capacity==-1)return true;
+    if(Capacity<=0)return false; // foci occupy pack slots but cannot store equipment
+    TSet<int32> Items;
+    if(const auto* List=ContainerContents.Find(Container))for(const auto& Ref:*List)
+    {
+        const auto* Item=WorldObjects.Find(Ref.ItemGuid);
+        if(Ref.ContainerType==0 && (!Item || (!IsPackSlotItem(*Item)
+            && (!Item->ContainerId || Item->ContainerId==Container))))Items.Add(Ref.ItemGuid);
+    }
+    // Include ObjectCreate entries even before a contents list arrives, and
+    // reserve unknown list entries so a late description cannot overfill it.
+    for(const auto& Pair:WorldObjects)
+    {
+        const auto& Item=Pair.Value;
+        // Early attachment does not free the source slot: WieldItem does.
+        if(Item.ContainerId==Container && !IsPackSlotItem(Item))Items.Add(Item.Guid);
+    }
+    return Items.Num()+Reserved<Capacity;
 }
 
 void FACESession::SendGetAndWieldItem(int32 Guid, int64 Loc)
@@ -7138,80 +7157,16 @@ void FACESession::HandleWieldItem(FACEBinaryReader& Reader)
 	}
 	const int32 ItemGuid = static_cast<int32>(Reader.ReadUInt32());
 	const int64 Location = static_cast<int64>(Reader.ReadInt32());
-	// Retail: weapons in the same hand replace each other. Clothing/armor uses
-	// ClothingPriority (CoverageMask) — pants UnderwearLegs and boots Feet share
-	// LowerLegWear on EquipMask but must NOT clear each other.
-	constexpr int64 WeaponHand = ACEEquipMask::MeleeWeapon | ACEEquipMask::TwoHanded
-		| ACEEquipMask::MissileWeapon | ACEEquipMask::Held;
-	constexpr int64 HeldVisual = WeaponHand | ACEEquipMask::Shield;
-	const bool bWeaponHand = (Location & WeaponHand) != 0;
-	int32 NewItemType = 0;
-	if (FACEWorldObject* NewObj = WorldObjects.Find(ItemGuid))
+	// The ordered receipt changes only this item. Other equipment has its own
+	// ContainID/removal receipt; never guess that it was moved to the main pack.
+	constexpr int64 HeldVisual = ACEEquipMask::MeleeWeapon | ACEEquipMask::TwoHanded
+		| ACEEquipMask::MissileWeapon | ACEEquipMask::Held | ACEEquipMask::Shield;
+	// A UI receipt can precede the item's Smartbox description, just as at login.
+	if (!WorldObjects.Contains(ItemGuid))
 	{
-		NewItemType = NewObj->ItemType;
-	}
-	const uint32 NewCov = ACEInferClothingPriority(Location, NewItemType);
-
-	for (TPair<int32, FACEWorldObject>& Pair : WorldObjects)
-	{
-		if (Pair.Key == ItemGuid)
-		{
-			continue;
-		}
-		FACEWorldObject& Other = Pair.Value;
-		const bool bOurs = Other.WielderId == PlayerGuid || Other.ParentGuid == PlayerGuid;
-		if (!bOurs || Other.CurrentWieldedLocation == 0)
-		{
-			continue;
-		}
-		const int64 EqLoc = Other.CurrentWieldedLocation;
-		bool bOverlap = false;
-		if (bWeaponHand && (EqLoc & WeaponHand) != 0)
-		{
-			bOverlap = true;
-		}
-		else if (NewCov != 0)
-		{
-			const uint32 EqCov = ACEInferClothingPriority(EqLoc, Other.ItemType);
-			if (EqCov != 0)
-			{
-				bOverlap = (NewCov & EqCov) != 0;
-			}
-			else if ((EqLoc & Location) != 0)
-			{
-				bOverlap = true;
-			}
-		}
-		else if ((EqLoc & Location) != 0)
-		{
-			bOverlap = true;
-		}
-		if (!bOverlap)
-		{
-			continue;
-		}
-		const bool bHadHeldMesh = Other.ParentLocation != 0;
-		Other.CurrentWieldedLocation = 0;
-		Other.WielderId = 0;
-		Other.ParentGuid = 0;
-		Other.ParentLocation = 0;
-		if (Other.ContainerId == 0)
-		{
-			Other.ContainerId = PlayerGuid;
-		}
-		RemoveFromContainerLists(Other.Guid);
-		if (TArray<FACEContainerItemRef>* Contents = ContainerContents.Find(Other.ContainerId))
-		{
-			FACEContainerItemRef Ref;
-			Ref.ItemGuid = Other.Guid;
-			Ref.ContainerType = 0;
-			Contents->Add(Ref);
-		}
-		// Only destroy held weapon/shield/ammo actors — clothing is ObjDesc-only.
-		if (bHadHeldMesh)
-		{
-			RemoveObjectFromWorldVisual(Other.Guid);
-		}
+		FACEWorldObject& Stub = WorldObjects.Add(ItemGuid);
+		Stub.Guid = ItemGuid;
+		Stub.bPhysicsDescriptionPending = true;
 	}
 	if (FACEWorldObject* Obj = WorldObjects.Find(ItemGuid))
 	{
@@ -7280,10 +7235,6 @@ void FACESession::HandleWieldItem(FACEBinaryReader& Reader)
 			Obj->ParentLocation = 0;
 			if ((Location & ACEEquipMask::MissileAmmo) != 0) Obj->ParentGuid = 0;
 		}
-	}
-	else
-	{
-		RemoveFromContainerLists(ItemGuid);
 	}
 	if (ItemGuid == PendingEquipmentGuid && bPendingEquipmentWieldSent)
 	{
@@ -7389,18 +7340,10 @@ void FACESession::HandlePickupEvent(FACEBinaryReader& Reader)
 		if (Obj->bHasPhysicsTimestamps
 			&& !ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Position], IncomingPosition)) return;
 		Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Position] = IncomingPosition;
-		const bool bWasEquipped = Obj->CurrentWieldedLocation != 0
-			&& (Obj->WielderId == PlayerGuid || Obj->ParentGuid == PlayerGuid);
-		const bool bHeldAmmo = bWasEquipped && (Obj->CurrentWieldedLocation & (ACEEquipMask::MissileAmmo | ACEEquipMask::MissileWeapon)) != 0;
-		if (!bHeldAmmo)
-		{
-			Obj->WielderId = 0;
-			Obj->CurrentWieldedLocation = 0;
-			// This is a visual detach, not a move into the main backpack.
-			// ContainId supplies the actual destination and insertion index.
-		}
 	}
-	// Ammo remains equipped until authoritative ContainId/wield/remove updates.
+	// SmartBox::DoPickupEvent only unparents/leaves the physical world. It
+	// cannot erase a newer WieldItem received on the independent UI queue.
+	// All equipment retains its inventory state until ContainId/wield/remove.
 	RemoveObjectFromWorldVisual(ItemGuid);
 }
 void FACESession::HandleParentEvent(FACEBinaryReader& Reader)
@@ -7461,10 +7404,7 @@ void FACESession::HandleParentEvent(FACEBinaryReader& Reader)
 			RemoveFromContainerLists(ChildGuid);
 		}
 		Obj->bHasPosition = false; // world origin comes from parent attachment
-		if (ParentGuid == PlayerGuid)
-		{
-			Obj->WielderId = PlayerGuid;
-		}
+		// Local wield ownership comes from WieldItem, not a physics attachment.
 		OnObjectCreated.Broadcast(*Obj);
 	}
 }
@@ -7659,7 +7599,9 @@ void FACESession::HandlePublicUpdatePropertyInt(FACEBinaryReader& Reader)
 		else if (Prop == 152) Obj->HookItemTypes = static_cast<uint32>(Value);
 		else if (Prop == 10) // PropertyInt.CurrentWieldedLocation
 		{
-			Obj->CurrentWieldedLocation = static_cast<int64>(Value);
+			// ACCWeenieObject::OnStatUpdated leaves owned/requested equipment to
+			// the ordered inventory events, including ACE's preliminary zeroes.
+			if (!HasPlayerInventoryState(*Obj)) Obj->CurrentWieldedLocation = static_cast<int64>(Value);
 		}
 		else if (Prop == 33) // PropertyInt.Bonded
 		{
@@ -7763,6 +7705,14 @@ void FACESession::HandlePrivateUpdatePropertyDataID(FACEBinaryReader& Reader)
 	}
 }
 
+bool FACESession::HasPlayerInventoryState(const FACEWorldObject& Object) const
+{
+	return PlayerGuid && (Object.WielderId == PlayerGuid
+		|| ResolveContainerRoot(Object.Guid) == PlayerGuid
+		|| PendingInventoryTransfers.Contains(Object.Guid)
+		|| PendingEquipmentGuid == Object.Guid || PendingEquipmentRemovals.Contains(Object.Guid));
+}
+
 void FACESession::HandlePublicUpdateInstanceId(FACEBinaryReader& Reader)
 {
 	// 0x02DA: u8 sequence, u32 objectGuid, u32 propertyId, u32 instanceGuid.
@@ -7786,6 +7736,7 @@ void FACESession::HandlePublicUpdateInstanceId(FACEBinaryReader& Reader)
 		}
 		else if (Prop == 3) // PropertyInstanceId.Wielder
 		{
+			if (HasPlayerInventoryState(*Obj)) return;
 			Obj->WielderId = Value;
 			if (Value != 0 && !(PlayerGuid && Obj->ContainerId && ResolveContainerRoot(Guid) == PlayerGuid))
 			{

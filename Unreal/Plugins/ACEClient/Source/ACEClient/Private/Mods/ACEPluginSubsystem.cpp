@@ -755,7 +755,8 @@ bool UACEPluginSubsystem::NewUCMSection(const FString& Section, const FString& N
     auto Defaults=Read(P->Directory/TEXT("default.json"));
     if(!Defaults||!ValidUCMProfile(Defaults)){Notice=TEXT("Cannot read bundled UCM defaults");return false;}
     if(!ACEUCMProfiles::SaveSectionAs(UserDirectory(),Section,Name,Defaults,Notice))return false;
-    if(SelectUCMSection(Section,Name))return true;
+    if(SelectUCMSection(Section,Name))
+    {Notice=TEXT("Created and selected ")+Section+TEXT(": ")+Name+TEXT(".json. Changes save automatically.");return true;}
     IFileManager::Get().Delete(*(UserDirectory()/TEXT("Profiles")/Section/(Name+TEXT(".json"))));return false;
 }
 bool UACEPluginSubsystem::DeleteUCMSection(const FString& Section, const FString& Name)

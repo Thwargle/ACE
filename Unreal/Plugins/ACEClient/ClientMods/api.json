@@ -185,7 +185,8 @@
     "world_plates": {
       "permissions": ["ui", "markers"],
       "output": "world_plates",
-      "fields": ["id", "name", "role", "level", "color", "selection_only", "refresh", "vitals", "effects"],
+      "fields": ["id", "name", "role", "level", "color", "selection_only", "refresh", "vitals", "effects", "opacity", "background_opacity", "vr_opacity", "vr_background_opacity"],
+      "opacity": "Numbers in [0,1]. opacity controls the whole composed plate; background_opacity controls its black backing. Both default to 1 (opaque). Optional vr_opacity and vr_background_opacity override the corresponding desktop value in VR. Mesh selection tint is unaffected; unused canvas stays transparent.",
       "selection_only_default": true,
       "refresh_default": true,
       "refresh": "Background assessments share one request per second globally, alternate seconds with running automation; no QueryHealth selection changes. Unknown or denied fields remain absent.",

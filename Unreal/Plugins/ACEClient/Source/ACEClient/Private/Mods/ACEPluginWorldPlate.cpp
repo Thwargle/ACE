@@ -54,6 +54,11 @@ bool ACEPluginWorldPlate::Parse(const TArray<TSharedPtr<FJsonValue>>& Values,TAr
             ||(J->HasField(TEXT("level"))&&(!PlateNumber(J,TEXT("level"),Level,0,MAX_int32)||Level!=FMath::FloorToDouble(Level))))
         {Error=TEXT("Invalid world plate id, name, role or level");return false;}
         P.Id=int32(uint32(Id));P.Level=int32(Level);
+        for(const auto& Field:TArray<TPair<const TCHAR*,double*>>{
+            {TEXT("opacity"),&P.Opacity},{TEXT("background_opacity"),&P.BackgroundOpacity},
+            {TEXT("vr_opacity"),&P.VROpacity},{TEXT("vr_background_opacity"),&P.VRBackgroundOpacity}})
+            if(J->HasField(Field.Key)&&!PlateNumber(J,Field.Key,*Field.Value,0,1))
+            {Error=TEXT("World plate opacity must be a number in [0,1]");return false;}
         if(Ids.Contains(P.Id)){Error=TEXT("Duplicate world plate object");return false;}Ids.Add(P.Id);
         if(J->HasField(TEXT("selection_only"))&&(J->Values[TEXT("selection_only")]->Type!=EJson::Boolean||!J->TryGetBoolField(TEXT("selection_only"),P.SelectionOnly)))
         {Error=TEXT("selection_only must be boolean");return false;}
@@ -106,11 +111,13 @@ public:
         Invalidate(EInvalidateWidgetReason::Paint);
     }
     void SetFrame(FVector2D Size){Body=Size;}
+    void SetPresentation(bool VR){VRPresentation=VR;Invalidate(EInvalidateWidgetReason::Paint);}
     virtual FVector2D ComputeDesiredSize(float) const override{return {1024,512};}
     virtual int32 OnPaint(const FPaintArgs&,const FGeometry& G,const FSlateRect&,FSlateWindowElementList& Elements,int32 Layer,const FWidgetStyle&,bool) const override
     {
         const auto* White=FCoreStyle::Get().GetBrush("WhiteBrush");
         const auto Measure=FSlateApplication::Get().GetRenderer()->GetFontMeasureService();
+        const FLinearColor Background(0,0,0,float(Plate.BackgroundOpacityFor(VRPresentation)));
         auto Box=[&](FVector2D At,FVector2D Size,FLinearColor Color)
         {FSlateDrawElement::MakeBox(Elements,Layer,G.ToPaintGeometry(Size,FSlateLayoutTransform(At)),White,ESlateDrawEffect::None,Color);};
         auto Text=[&](FString Value,FVector2D At,int Size,FLinearColor Color,double Width=400.,bool Center=false)
@@ -126,7 +133,7 @@ public:
         for(double X:{Left,Right})for(double Y:{Top,Bottom})
         {Box({X==Left?X:X-20,Y},{20,2},Plate.Color);Box({X,Y==Top?Y:Y-20},{2,20},Plate.Color);}
         const double LabelWidth=FMath::Max(240.,Body.X);
-        Box({Left,Top-72},{LabelWidth,66},FLinearColor(0,0,0,.72f));
+        Box({Left,Top-72},{LabelWidth,66},Background);
         Text(Plate.Role,{Left+6,Top-70},14,FLinearColor::White,LabelWidth-12);
         Text(Plate.Name,{Left+6,Top-49},20,Plate.Color,LabelWidth-12);
         if(Plate.Level>0)Text(FString::Printf(TEXT("Level %d"),Plate.Level),{Left+6,Top-23},14,FLinearColor::White,LabelWidth-12);
@@ -134,7 +141,7 @@ public:
         auto Bar=[&](const FACEPluginPlateVital& V,FLinearColor Color)
         {
             if(!V.IsKnown())return;
-            const FVector2D At(Left+6,Y);Box(At,{184,23},FLinearColor(0,0,0,.85f));
+            const FVector2D At(Left+6,Y);Box(At,{184,23},Background);
             Box(At+FVector2D(2,2),{180*FMath::Clamp(V.Ratio(),0.,1.),19},Color);
             const FString Label=V.Current>=0?FString::Printf(TEXT("%.0f / %.0f"),V.Current,V.Maximum):FString::Printf(TEXT("%.0f%%"),100*V.Ratio());
             Text(Label,At+FVector2D(2,1),14,FLinearColor::White,180,true);Y+=25;
@@ -145,10 +152,10 @@ public:
         {
             const double Remaining=Plate.Effects[I].Expires-Now;if(Remaining<=0)continue;
             const FVector2D At(Right+8+(Index/8)*45,Top+(Index%8)*44);++Index;
-            Box(At,{40,40},FLinearColor(0,0,0,.8f));
+            Box(At,{40,40},Background);
             if(Icons.IsValidIndex(I)&&Icons[I]&&Icons[I]->GetResourceObject())
                 FSlateDrawElement::MakeBox(Elements,Layer+1,G.ToPaintGeometry(FVector2D(36,36),FSlateLayoutTransform(At+FVector2D(2,2))),Icons[I]);
-            Box(At+FVector2D(0,24),{40,16},FLinearColor(0,0,0,.8f));
+            Box(At+FVector2D(0,24),{40,16},Background);
             const int32 Seconds=FMath::CeilToInt(Remaining);
             const FString Label=Seconds>=60?FString::Printf(TEXT("%d:%02d"),Seconds/60,Seconds%60):FString::FromInt(Seconds);
             Text(Label,At+FVector2D(0,23),11,FLinearColor::White,40,true);
@@ -157,6 +164,7 @@ public:
     }
 private:
     FACEPluginWorldPlate Plate;
+    bool VRPresentation=false;
     FVector2D Body={220,344};
     TSharedPtr<FACEPluginStyle> Style;
     TArray<const FSlateBrush*> Icons;
@@ -177,7 +185,19 @@ void UACEPluginWorldPlateComponent::SetPlate(const FACEPluginWorldPlate& Value,U
 {
     Plate=Value;Host=InHost;
     if(!Surface){Surface=SNew(SACEPluginWorldPlate);SetSlateWidget(Surface);}
-    Surface->SetData(Plate,FACEPluginStyle::Use(InHost));RequestRedraw();
+    Surface->SetData(Plate,FACEPluginStyle::Use(InHost));
+    auto* PC=InHost?Cast<AACEPlayerController>(InHost->GetGameInstance()->GetFirstLocalPlayerController()):nullptr;
+    UpdatePresentation(PC&&PC->IsVRActive());
+}
+
+void UACEPluginWorldPlateComponent::UpdatePresentation(bool VR)
+{
+    VRPresentation=VR;
+    // The material premultiplies this alpha once, after Slate has composited the
+    // text, icons and backing. Transparent canvas stays transparent at opacity 1.
+    SetTintColorAndOpacity(FLinearColor(1,1,1,float(Plate.OpacityFor(VR))));
+    if(Surface)Surface->SetPresentation(VR);
+    RequestRedraw();
 }
 
 void UACEPluginWorldPlateComponent::TickComponent(float DeltaTime,ELevelTick TickType,FActorComponentTickFunction* TickFunction)
@@ -186,6 +206,7 @@ void UACEPluginWorldPlateComponent::TickComponent(float DeltaTime,ELevelTick Tic
     auto* H=Host.Get();auto* GI=H?H->GetGameInstance():nullptr;
     auto* C=GI?GI->GetSubsystem<UACEClientSubsystem>():nullptr;
     auto* PC=GI?Cast<AACEPlayerController>(GI->GetFirstLocalPlayerController()):nullptr;
+    if(VRPresentation!=bool(PC&&PC->IsVRActive()))UpdatePresentation(PC&&PC->IsVRActive());
     const auto P=H?H->Find(PluginId):nullptr;
     const auto S=C?C->GetSession():nullptr;
     const auto* Object=S?S->GetWorldObjects().Find(Plate.Id):nullptr;

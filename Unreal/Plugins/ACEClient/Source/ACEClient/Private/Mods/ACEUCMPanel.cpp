@@ -140,6 +140,7 @@ namespace ACEUCMPanelPrivate
         {
             const FString Key=Page+TEXT("/")+Title;
             const bool DefaultCollapsed=(Page==TEXT("Buffs")&&Title!=TEXT("Automatic buffing"))
+                ||(Page==TEXT("Route")&&Title!=TEXT("Route points"))
                 ||(Page==TEXT("Buff others")&&Title!=TEXT("Buff requests by tell"))
                 ||(Page==TEXT("Combat")&&Title!=TEXT("Automatic Combat"))
                 ||(Page==TEXT("Recovery")&&Title!=TEXT("Maintain your vitals"))
@@ -160,7 +161,16 @@ namespace ACEUCMPanelPrivate
         {return SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->SectionFrame).Padding(8)[W];}
         TMap<FString,FString> SectionNewNames;
         FString CreatingSection,DeletingSection,DeletingName,MonsterSearch,MonsterFilter;
-        void ResetProfileEditors(){LootDraft.Reset();ConditionDraft.Reset();StateIndex=0;ExpandedMonster=INDEX_NONE;}
+        int32 RoutePage=0;
+        static constexpr int32 RoutePageSize=8;
+        void ResetProfileEditors(){LootDraft.Reset();ConditionDraft.Reset();StateIndex=0;ExpandedMonster=INDEX_NONE;RoutePage=0;}
+        void CreateSection(const FString& Section)
+        {
+            if(!CanLeaveLootRule())return;
+            if(Host->NewUCMSection(Section,SectionNewNames.FindRef(Section).TrimStartAndEnd()))
+            {ResetProfileEditors();CreatingSection.Empty();SectionNewNames.Remove(Section);BodyScroll->ScrollToStart();}
+            Rebuild();
+        }
         TSharedRef<SWidget> ProfileChoice(const FString& Section)
         {
             return SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo)
@@ -185,7 +195,7 @@ namespace ACEUCMPanelPrivate
             Row->AddSlot().FillWidth(1)[ProfileChoice(Section)];
             if(Manage)
             {
-                Row->AddSlot().AutoWidth().Padding(6,0)[Button(TEXT("+ New"),[this,Section](){if(!CanLeaveLootRule())return;CreatingSection=Section;DeletingSection.Empty();Rebuild();})];
+                Row->AddSlot().AutoWidth().Padding(6,0)[Button(Section==TEXT("Routes")?TEXT("+ New route"):TEXT("+ New"),[this,Section](){if(!CanLeaveLootRule())return;CreatingSection=Section;DeletingSection.Empty();Rebuild();})];
                 const FString Name=Host->UCMSectionName(Section);
                 Row->AddSlot().AutoWidth()[SNew(SBox).IsEnabled(!Name.IsEmpty()&&!Name.Equals(TEXT("Default"),ESearchCase::IgnoreCase))
                     [Button(TEXT("Delete"),[this,Section,Name](){if(!CanLeaveLootRule())return;DeletingSection=Section;DeletingName=Name;CreatingSection.Empty();Rebuild();})]];
@@ -193,13 +203,13 @@ namespace ACEUCMPanelPrivate
             Add(Tile(Row));
             if(Manage&&CreatingSection==Section)
             {
-                Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16))
-                    .Text(FText::FromString(SectionNewNames.FindRef(Section))).HintText(FText::FromString(TEXT("New profile name")))
-                    .OnTextChanged_Lambda([this,Section](const FText& Value){SectionNewNames.Add(Section,Value.ToString());}));
-                Add(Text(Section==TEXT("Routes")?TEXT("Creates an empty route. The existing route is kept."):TEXT("Creates a profile with default settings."),14,Muted));
+                Add(SNew(SEditableTextBox).Tag(TEXT("UCMNewProfileName")).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16))
+                    .Text(FText::FromString(SectionNewNames.FindRef(Section))).HintText(FText::FromString(Section==TEXT("Routes")?TEXT("Route name, e.g. Academy_Loop"):TEXT("New profile name")))
+                    .OnTextChanged_Lambda([this,Section](const FText& Value){SectionNewNames.Add(Section,Value.ToString());})
+                    .OnTextCommitted_Lambda([this,Section](const FText&,ETextCommit::Type How){if(How==ETextCommit::OnEnter)CreateSection(Section);}));
+                Add(Text(Section==TEXT("Routes")?TEXT("Creates and selects an empty route file immediately. Use letters, numbers, _ or - (up to 64 characters). Your previous route is kept."):TEXT("Creates and selects a profile with default settings."),14,Muted));
                 auto Actions=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6,6));
-                Actions->AddSlot()[Button(TEXT("Create profile"),[this,Section](){if(!CanLeaveLootRule())return;
-                    if(Host->NewUCMSection(Section,SectionNewNames.FindRef(Section).TrimStartAndEnd())){ResetProfileEditors();CreatingSection.Empty();}Rebuild();})];
+                Actions->AddSlot()[Button(Section==TEXT("Routes")?TEXT("Create and select route"):TEXT("Create profile"),[this,Section](){CreateSection(Section);})];
                 Actions->AddSlot()[Button(TEXT("Cancel"),[this](){CreatingSection.Empty();Rebuild();})];Add(Actions);
             }
             if(Manage&&DeletingSection==Section)
@@ -210,7 +220,11 @@ namespace ACEUCMPanelPrivate
                     if(Host->DeleteUCMSection(Section,DeletingName)){ResetProfileEditors();DeletingSection.Empty();}Rebuild();})];
                 Actions->AddSlot()[Button(TEXT("Cancel"),[this](){DeletingSection.Empty();Rebuild();})];Add(Actions);
             }
-            if(Manage)Add(Text(TEXT("Changes save to this shared ")+Section+TEXT(" profile."),13,Muted));
+            if(Manage&&Section==TEXT("Routes"))
+                Add(SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",14)).ColorAndOpacity(Accent).AutoWrapText(true)
+                    .Text_Lambda([this](){const TArray<TSharedPtr<FJsonValue>>* Points=nullptr;const int32 Count=P()->TryGetArrayField(TEXT("route"),Points)?Points->Num():0;
+                        return FText::FromString(FString::Printf(TEXT("Editing %s.json\n%d saved points | Auto-save on"),*Host->UCMSectionName(TEXT("Routes")),Count));}));
+            else if(Manage)Add(Text(TEXT("Changes save to this shared ")+Section+TEXT(" profile."),13,Muted));
         }
         void Configuration()
         {
@@ -761,23 +775,40 @@ namespace ACEUCMPanelPrivate
             else if(Page==TEXT("Route"))
             {
                 SectionSelector(TEXT("Routes"));
-                Heading(TEXT("Route editor"),TEXT("Record close points along a walkable path. Blue lines show the route in the world; amber points mark jumps. Record the next point after arriving through a portal."));
-                auto Options=SNew(SUniformGridPanel).SlotPadding(FMargin(0,0,8,6));int32 OptionIndex=0;
-                auto Option=[&](const TCHAR* Key,const FString& Label,const FString& Help,bool Default=false){
-                    Options->AddSlot(LootNarrow?0:OptionIndex%2,LootNarrow?OptionIndex:OptionIndex/2)[Toggle(Key,Label,Help,Default)];++OptionIndex;};
-                Option(TEXT("navigation"),TEXT("Enable Route Navigation"),TEXT("Start joins the nearest waypoint, then follows the route in order. Route edits stop the current run."));
-                Option(TEXT("open_doors"),TEXT("Open doors along route"),TEXT("Use a closed door only when it lies on the current walking segment."),true);
-                Option(TEXT("route_preview"),TEXT("Show route in world"),TEXT("Updates as points are added or edited."),true);
-                Option(TEXT("follow_corners"),TEXT("Follow around corners"),TEXT("Follow the selected player's observed footsteps in order, retaining bends and elevation changes."));
-                Option(TEXT("loop_route"),TEXT("Loop route"),TEXT("Repeat from the first point when the route finishes."));
-                Option(TEXT("reverse_route"),TEXT("Reverse at route ends"),TEXT("VT Linear mode: walk back along the same points. Takes priority over Loop."));Add(Options);
+                Heading(TEXT("Route points"),TEXT("Walk to your starting spot and add a waypoint. Move along the path and add another at each turn. Every point saves immediately to the file above."));
+                Add(Button(TEXT("+ Add waypoint at my position"),[this](){AddRoutePoint(TEXT("walk"));}));
+                Add(Toggle(TEXT("route_preview"),TEXT("Show route in world"),TEXT("Blue lines connect saved points; amber marks jumps."),true));
+                Add(Toggle(TEXT("navigation"),TEXT("Enable Route Navigation"),TEXT("Press Start to follow the selected route. Editing stops the current run.")));
+                const TArray<TSharedPtr<FJsonValue>>* Route=nullptr;
+                const int32 Count=P()->TryGetArrayField(TEXT("route"),Route)?Route->Num():0;
+                RoutePage=FMath::Clamp(RoutePage,0,FMath::Max(0,(Count-1)/RoutePageSize));
+                if(!Count)Add(Text(TEXT("No points yet. Add your first waypoint above."),15,Accent));
+                if(Count>RoutePageSize)
+                {
+                    auto Pages=SNew(SHorizontalBox);
+                    Pages->AddSlot().AutoWidth()[SNew(SBox).IsEnabled(RoutePage>0)[Button(TEXT("Previous"),[this](){--RoutePage;Rebuild();})]];
+                    Pages->AddSlot().FillWidth(1).VAlign(VAlign_Center).Padding(8,0)[Text(FString::Printf(TEXT("Points %d–%d of %d"),RoutePage*RoutePageSize+1,FMath::Min(Count,(RoutePage+1)*RoutePageSize),Count),14)];
+                    Pages->AddSlot().AutoWidth()[SNew(SBox).IsEnabled((RoutePage+1)*RoutePageSize<Count)[Button(TEXT("Next"),[this](){++RoutePage;Rebuild();})]];Add(Pages);
+                }
+                for(int I=RoutePage*RoutePageSize;I<FMath::Min(Count,(RoutePage+1)*RoutePageSize);++I)
+                {
+                    auto O=(*Route)[I]->AsObject();FString Kind=Str(O,TEXT("kind"),TEXT("walk"));
+                    if(!Kind.IsEmpty())Kind[0]=FChar::ToUpper(Kind[0]);
+                    FString Label=FString::Printf(TEXT("%d. %s"),I+1,*Kind);
+                    if(O->HasField(TEXT("object_name")))Label+=TEXT(" — ")+Str(O,TEXT("object_name"));
+                    if(Kind==TEXT("Pause"))Label+=FString::Printf(TEXT(" — %.0f seconds"),Num(O,TEXT("seconds")));
+                    auto Row=SNew(SHorizontalBox);Row->AddSlot().FillWidth(1).VAlign(VAlign_Center)
+                        [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[Text(Label,15)]
+                        +SVerticalBox::Slot().AutoHeight()[Text(FString::Printf(TEXT("%.1f, %.1f, %.1f"),Num(O,TEXT("x")),Num(O,TEXT("y")),Num(O,TEXT("z"))),12,Muted)]];
+                    Row->AddSlot().AutoWidth()[SNew(SBox).IsEnabled(I>0)[Button(TEXT("↑"),[this,I](){EditRoute(I,-1);})]];
+                    Row->AddSlot().AutoWidth().Padding(4,0)[SNew(SBox).IsEnabled(I+1<Count)[Button(TEXT("↓"),[this,I](){EditRoute(I,1);})]];
+                    Row->AddSlot().AutoWidth()[Button(TEXT("Remove"),[this,I](){EditRoute(I,0);})];Add(Tile(Row));
+                }
+                Heading(TEXT("Special steps"),TEXT("Add an interaction, portal, jump, pause or recall at the end of the route. After a portal, add the next waypoint at your destination."));
                 auto Buttons=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(5,5));
-                Buttons->AddSlot()[Button(TEXT("Follow selected player"),[this](){Host->SetUCMFollowSelected(true);Rebuild();})];
-                Buttons->AddSlot()[Button(TEXT("Stop following"),[this](){Host->SetUCMFollowSelected(false);Rebuild();})];
-                Buttons->AddSlot()[Button(TEXT("+ Walk here"),[this](){Host->RecordRouteAction(TEXT("walk"));Rebuild();})];
-                Buttons->AddSlot()[Button(TEXT("+ Use selected"),[this](){Host->RecordRouteAction(TEXT("use"));Rebuild();})];
-                Buttons->AddSlot()[Button(TEXT("+ Portal selected"),[this](){Host->RecordRouteAction(TEXT("portal"));Rebuild();})];
-                Buttons->AddSlot()[Button(TEXT("+ Jump here"),[this](){Host->RecordRouteAction(TEXT("jump"),JumpCharge);Rebuild();})];Add(Buttons);
+                Buttons->AddSlot()[Button(TEXT("+ Use selected"),[this](){AddRoutePoint(TEXT("use"));})];
+                Buttons->AddSlot()[Button(TEXT("+ Portal selected"),[this](){AddRoutePoint(TEXT("portal"));})];
+                Buttons->AddSlot()[Button(TEXT("+ Jump here"),[this](){AddRoutePoint(TEXT("jump"),JumpCharge);})];Add(Buttons);
                 Add(Text(TEXT("Jump charge (0 = minimum, 1 = full). Face the jump direction before recording."),14,Muted));
                 Add(SNew(SSpinBox<float>).Style(&FACEPluginStyle::Current()->Spin).MinValue(0).MaxValue(1).Delta(.1).Value(JumpCharge).OnValueChanged_Lambda([this](float V){JumpCharge=V;}));
                 Add(Text(TEXT("Pause duration (seconds)"),14,Muted));Add(SNew(SSpinBox<double>).Style(&FACEPluginStyle::Current()->Spin).MinValue(1).MaxValue(3600).Value(PauseSeconds).OnValueChanged_Lambda([this](double V){PauseSeconds=V;}));
@@ -791,14 +822,17 @@ namespace ACEUCMPanelPrivate
                     {Dat->TryGetSpellInfo(Id,Name,IconId);Recalls->AddSlot()[Button(TEXT("+ ")+Name,[this,Id](){RecordExtra(TEXT("recall"),TEXT("spell"),Id);})];}
                 }
                 Add(Recalls);
-                const TArray<TSharedPtr<FJsonValue>>* Route=nullptr;
-                if(P()->TryGetArrayField(TEXT("route"),Route))for(int I=0;I<Route->Num();++I)
-                {
-                    auto O=(*Route)[I]->AsObject();const FString Info=FString::Printf(TEXT("%d  %s  •  %.1f, %.1f, %.1f"),I+1,*Str(O,TEXT("kind"),TEXT("walk")),Num(O,TEXT("x")),Num(O,TEXT("y")),Num(O,TEXT("z")));
-                    auto Row=SNew(SHorizontalBox);Row->AddSlot().FillWidth(1).VAlign(VAlign_Center)[Text(Info)];
-                    Row->AddSlot().AutoWidth()[Button(TEXT("↑"),[this,I](){EditRoute(I,-1);})];Row->AddSlot().AutoWidth().Padding(4,0)[Button(TEXT("↓"),[this,I](){EditRoute(I,1);})];
-                    Row->AddSlot().AutoWidth()[Button(TEXT("Remove"),[this,I](){EditRoute(I,0);})];Add(Tile(Row));
-                }
+                Heading(TEXT("Route behavior"),TEXT("Start joins the nearest waypoint, then follows points in order. Route edits stop UCM; press Start when ready."));
+                auto Options=SNew(SUniformGridPanel).SlotPadding(FMargin(0,0,8,6));int32 OptionIndex=0;
+                auto Option=[&](const TCHAR* Key,const FString& Label,const FString& Help,bool Default=false){
+                    Options->AddSlot(LootNarrow?0:OptionIndex%2,LootNarrow?OptionIndex:OptionIndex/2)[Toggle(Key,Label,Help,Default)];++OptionIndex;};
+                Option(TEXT("open_doors"),TEXT("Open doors along route"),TEXT("Use a closed door only when it lies on the current walking segment."),true);
+                Option(TEXT("follow_corners"),TEXT("Follow around corners"),TEXT("Follow the selected player's observed footsteps in order, retaining bends and elevation changes."));
+                Option(TEXT("loop_route"),TEXT("Loop route"),TEXT("Repeat from the first point when the route finishes."));
+                Option(TEXT("reverse_route"),TEXT("Reverse at route ends"),TEXT("VT Linear mode: walk back along the same points. Takes priority over Loop."));Add(Options);
+                auto Follow=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(5,5));
+                Follow->AddSlot()[Button(TEXT("Follow selected player"),[this](){Host->SetUCMFollowSelected(true);Rebuild();})];
+                Follow->AddSlot()[Button(TEXT("Stop following"),[this](){Host->SetUCMFollowSelected(false);Rebuild();})];Add(Follow);
             }
             else if(Page==TEXT("Loot"))
             {
@@ -924,16 +958,20 @@ namespace ACEUCMPanelPrivate
         }
         TSharedRef<SWidget> IconWidget(uint32 Id){return Icon(Id);}
         TSharedPtr<FJsonObject> StateObject()const{return P()->GetArrayField(TEXT("states"))[StateIndex]->AsObject();}
+        void ShowLastRoutePoint()
+        {const TArray<TSharedPtr<FJsonValue>>* Points=nullptr;if(P()->TryGetArrayField(TEXT("route"),Points)&&Points->Num())RoutePage=(Points->Num()-1)/RoutePageSize;}
+        void AddRoutePoint(const FString& Kind,float Charge=0)
+        {Host->RecordRouteAction(Kind,Charge);ShowLastRoutePoint();Rebuild();}
         void RecordExtra(const FString& Kind,const TCHAR* Key,double Value)
         {const TArray<TSharedPtr<FJsonValue>>* Before=nullptr;const int32 Count=P()->TryGetArrayField(TEXT("route"),Before)?Before->Num():0;
          Host->RecordRouteAction(Kind);const TArray<TSharedPtr<FJsonValue>>* After=nullptr;
-         if(P()->TryGetArrayField(TEXT("route"),After)&&After->Num()==Count+1){After->Last()->AsObject()->SetNumberField(Key,Value);Save(true);}Rebuild();}
+         if(P()->TryGetArrayField(TEXT("route"),After)&&After->Num()==Count+1){After->Last()->AsObject()->SetNumberField(Key,Value);Save(true);ShowLastRoutePoint();}Rebuild();}
         #include "ACEUCMVendorPanel.inl"
         #include "ACEUCMLootPanel.inl"
         #include "ACEVTImportPanel.inl"
         #include "ACEVTLegacyLootPanel.inl"
         void EditRoute(int I,int Direction)
-        {auto Route=P()->GetArrayField(TEXT("route"));if(!Direction)Route.RemoveAt(I);else if(Route.IsValidIndex(I+Direction))Route.Swap(I,I+Direction);P()->SetArrayField(TEXT("route"),Route);Save(true);Rebuild();}
+        {auto Route=P()->GetArrayField(TEXT("route"));if(!Route.IsValidIndex(I))return;if(!Direction)Route.RemoveAt(I);else if(Route.IsValidIndex(I+Direction)){Route.Swap(I,I+Direction);RoutePage=(I+Direction)/RoutePageSize;}P()->SetArrayField(TEXT("route"),Route);Save(true);Rebuild();}
     };
 }
 TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMPanel(const FString& InitialPage,bool bShowTitle){return SNew(ACEUCMPanelPrivate::SUCMPanel).Host(this).InitialPage(InitialPage).ShowTitle(bShowTitle);}

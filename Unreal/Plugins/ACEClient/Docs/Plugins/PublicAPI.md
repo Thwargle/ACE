@@ -244,6 +244,8 @@ local t = s.selection
 return {world_plates = t and {{
     id = t.id, name = t.name, role = t.title or t.creature_class or t.object_type,
     level = t.level, color = "yellow", selection_only = true,
+    opacity = 1, background_opacity = 1,
+    vr_opacity = 1, vr_background_opacity = 0.75,
     vitals = t.vitals, effects = s.target_effects[string.format("%.0f", t.id)] or {}
 }} or {}}
 ```
@@ -255,6 +257,17 @@ stereo world-space surface in VR; Lua never needs camera coordinates. Countdown
 labels advance locally between callbacks. Hidden or unloaded actors, corpses,
 portal transitions and stopped plugins do not leave floating plates behind.
 Plates are visual only: they do not intercept clicks, controller rays or movement.
+
+`opacity` controls the entire composed plate (text, brackets, bars and icons).
+`background_opacity` controls the black backing behind labels, bars and icons.
+Both are finite numbers in [0,1], defaulting to 1: solid content and backing,
+with the unused canvas still transparent. Overall opacity is applied once after
+composition, so overlapping text and backing do not compound the fade.
+Optional `vr_opacity` and `vr_background_opacity` override the corresponding
+desktop value while VR is active; omitted overrides inherit it. These fields
+never change the selected creature's yellow mesh tint or selection settings.
+For solid text with a softer backing, keep `opacity=1` and lower
+`background_opacity`. Set both to 1 for an opaque nameplate.
 
 An omitted `world_plates` retains this plugin's list; `{}` clears it. A supplied
 list atomically replaces it. `selection_only` defaults to true, hiding the old
@@ -660,11 +673,12 @@ frame at the native 75 m outdoor / 25 m indoor radius. Dungeon light is a tempor
 world color-grading lift, with adjustable strength and tint; it does not overwrite
 saved video settings and is removed outdoors or when disabled.
 
-Third Eye offers **Show plates for this name** when adding a watch rule and a
-**Plate** checkbox on each existing rule. Up to four nearest matching creatures,
-players or vendors receive plates; matching items do not. Plates include known
-role, level, vitals and the same own-confirmed debuff timers as Action Deck.
-Old rules retain their existing marker behavior until plates are enabled.
+Third Eye provides name matching, alerts and world/map markers. Target plates
+belong to separate addons. Each plate addon supplies its own opacity sliders and
+saves its preferences using `state`; the host applies that addon's `world_plates`
+opacity values independently. The [Target Plate example](Examples/target_plate/main.lua)
+demonstrates separate desktop and VR controls. Updating Third Eye retains watch
+rules and removes its obsolete plate preferences.
 
 
 ## Administrative content service (API 2)

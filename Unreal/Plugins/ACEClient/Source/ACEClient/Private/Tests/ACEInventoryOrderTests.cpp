@@ -573,6 +573,112 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
         Send(Bag*10+3,Bag,Position);Contains(Bag*10+3,Bag,Position);
         Check(Bag,{Bag*10+7,Bag*10+3,Bag*10+9});
     }
+    // Manual unequip uses the same room checks as automatic weapon swaps.
+    // ACE may otherwise remove equipment and silently restore it on failure.
+    for (bool HasList : {false, true})
+    {
+        Session.ClearWorldState(); Session.PlayerGuid=100; Session.State=EACESessionState::InWorld;
+        auto Self=Item(100,0,0); Self.ItemsCapacity=1; Session.UpsertWorldObject(Self);
+        auto Bag=Item(10,100,0,true); Bag.ItemsCapacity=1; Session.UpsertWorldObject(Bag);
+        Session.UpsertWorldObject(Item(1,100,0));
+        auto Weapon=Item(2,0,INDEX_NONE); Weapon.ItemType=ACEItemType::MeleeWeapon;
+        Weapon.WielderId=100; Weapon.CurrentWieldedLocation=ACEEquipMask::MeleeWeapon;
+        Session.UpsertWorldObject(Weapon);
+        if (HasList) Session.ContainerContents.Add(100,{{1,0},{10,1}});
+        Session.CachedC2SPackets.Reset(); Session.SendPutItemInContainer(2,100,0);
+        uint32 Last=0; for (const auto& P:Session.CachedC2SPackets) Last=FMath::Max(Last,P.Key);
+        if (TestTrue(TEXT("Manual unequip finds room outside full main pack"),Last!=0))
+        {
+            FACEBinaryReader R(Session.CachedC2SPackets[Last].Payload); R.Skip(24);
+            TestEqual(TEXT("Manual unequip action"),R.ReadUInt32(),ACEGameAction::PutItemInContainer);
+            TestEqual(TEXT("Manual unequip preserves item GUID"),R.ReadUInt32(),2u);
+            TestEqual(TEXT("Manual unequip uses first available side pack"),R.ReadUInt32(),10u);
+        }
+        TestEqual(TEXT("Sending unequip does not predict ownership"),Session.WorldObjects[2].WielderId,100);
+        Session.PendingInventoryTransfers.Reset();
+        if (HasList) Session.ContainerContents.Add(10,{{99,0}}); // description not yet received
+        else Session.UpsertWorldObject(Item(99,10,0));
+        for (int32 Destination : {100,10})
+        {
+            Session.CachedC2SPackets.Reset(); Session.SendPutItemInContainer(2,Destination,0);
+            TestEqual(TEXT("Full destination does not send destructive unequip"),Session.CachedC2SPackets.Num(),0);
+            TestEqual(TEXT("Full destination keeps the weapon equipped"),Session.WorldObjects[2].WielderId,100);
+        }
+        // An attachment preceding WieldItem does not make free inventory space.
+        Session.WorldObjects[1].ParentGuid=100;
+        TestFalse(TEXT("Pending attachment still occupies its inventory slot"),Session.CanStowEquipmentInContainer(100));
+    }
+
+    // The physical model and UI ownership have independent message ordering.
+    // Cover held casters/melee/shields/ammunition, both inventory list modes,
+    // and primary/side-pack destinations without relying on relog recovery.
+    for (bool HasList : {false,true}) for (int32 Destination : {100,10})
+    for (int64 Location : {ACEEquipMask::MeleeWeapon,ACEEquipMask::Held,ACEEquipMask::Shield,ACEEquipMask::MissileAmmo})
+    {
+        Session.ClearWorldState(); Session.PlayerGuid=100; Session.State=EACESessionState::InWorld;
+        Session.UpsertWorldObject(Item(100,0,0)); Session.UpsertWorldObject(Item(10,100,0,true));
+        Session.UpsertWorldObject(Item(1,Destination,0));
+        if (HasList) Session.ContainerContents.Add(Destination,{{1,0}});
+        auto Weapon=Item(2,0,INDEX_NONE); Weapon.WielderId=100; Weapon.CurrentWieldedLocation=Location;
+        Weapon.ParentGuid=100; Weapon.ParentLocation=1; Weapon.bHasPhysicsTimestamps=true;
+        Session.UpsertWorldObject(Weapon);
+        auto Quality=[&](bool Wielder,int32 Value)
+        {
+            FACEBinaryWriter W; W.WriteUInt8(1); W.WriteUInt32(2); W.WriteUInt32(Wielder?3:10); W.WriteInt32(Value);
+            FACEBinaryReader R(W.GetData());
+            if (Wielder) Session.HandlePublicUpdateInstanceId(R); else Session.HandlePublicUpdatePropertyInt(R);
+        };
+        auto Pickup=[&](uint16 Stamp)
+        {
+            FACEBinaryWriter W; W.WriteUInt32(2); W.WriteUInt16(0); W.WriteUInt16(Stamp);
+            FACEBinaryReader R(W.GetData()); Session.HandlePickupEvent(R);
+        };
+        auto Wield=[&]()
+        {
+            FACEBinaryWriter W; W.WriteUInt32(2); W.WriteInt32(int32(Location));
+            FACEBinaryReader R(W.GetData()); Session.HandleWieldItem(R);
+        };
+        Quality(true,0); Quality(false,0); Pickup(1);
+        TestEqual(TEXT("Preliminary dequip messages retain acknowledged owner"),Session.WorldObjects[2].WielderId,100);
+        TestEqual(TEXT("Physical detach retains acknowledged equipment location"),Session.WorldObjects[2].CurrentWieldedLocation,Location);
+        Contains(2,Destination,0); Check(Destination,{2,1});
+        TestEqual(TEXT("ContainID clears equipment location"),Session.WorldObjects[2].CurrentWieldedLocation,int64(0));
+        Quality(true,100); Quality(false,int32(Location));
+        TestEqual(TEXT("Late qualities cannot re-equip contained weapon"),Session.WorldObjects[2].WielderId,0);
+        TestEqual(TEXT("Late qualities cannot invent a bag item's equipment location"),Session.WorldObjects[2].CurrentWieldedLocation,int64(0));
+        Wield(); Check(Destination,{1});
+        // Old pickup/quality zeroes can follow a newer ordered wield receipt.
+        Pickup(2); Quality(true,0); Quality(false,0);
+        TArray<FACEWorldObject> Equipped; Session.GetEquippedItems(Equipped);
+        TestEqual(TEXT("Delayed detach cannot orphan newly equipped item"),Equipped.Num(),1);
+        if (Equipped.Num()) TestEqual(TEXT("Equipped item retains exact location"),Equipped[0].CurrentWieldedLocation,Location);
+        Contains(2,Destination,1); Pickup(3); Check(Destination,{1,2});
+        Session.DeleteWorldObject(2); Check(Destination,{1,2});
+        TestTrue(TEXT("World cleanup retains unequipped weapon description"),Session.WorldObjects.Contains(2));
+    }
+    // Wield receipts arriving before ObjectCreate must retain the acknowledged
+    // equipment record. They must not invent a destination for other equipment.
+    Session.ClearWorldState(); Session.PlayerGuid=100;
+    auto Existing=Item(5,0,INDEX_NONE); Existing.WielderId=100; Existing.CurrentWieldedLocation=ACEEquipMask::Held;
+    Session.UpsertWorldObject(Existing);
+    FACEBinaryWriter EarlyWield; EarlyWield.WriteUInt32(6); EarlyWield.WriteInt32(int32(ACEEquipMask::Held));
+    FACEBinaryReader EarlyWieldReader(EarlyWield.GetData()); Session.HandleWieldItem(EarlyWieldReader);
+    TestTrue(TEXT("Early wield creates a partial inventory record"),Session.WorldObjects.Contains(6));
+    TestEqual(TEXT("Wield does not relocate other items without their receipt"),Session.WorldObjects[5].ContainerId,0);
+    Check(100,{});
+    Session.UpsertWorldObject(Item(6,0,INDEX_NONE));
+    TestEqual(TEXT("Late description retains early wield owner"),Session.WorldObjects[6].WielderId,100);
+    TestEqual(TEXT("Late description retains early wield location"),Session.WorldObjects[6].CurrentWieldedLocation,int64(ACEEquipMask::Held));
+    Contains(5,100,0); Check(100,{5});
+    // Remote equipment still consumes public qualities normally.
+    auto Remote=Item(7,0,INDEX_NONE); Remote.WielderId=200; Remote.CurrentWieldedLocation=ACEEquipMask::Held;
+    Session.UpsertWorldObject(Remote);
+    FACEBinaryWriter RemoteOwner; RemoteOwner.WriteUInt8(1); RemoteOwner.WriteUInt32(7); RemoteOwner.WriteUInt32(3); RemoteOwner.WriteUInt32(0);
+    FACEBinaryReader RemoteOwnerReader(RemoteOwner.GetData()); Session.HandlePublicUpdateInstanceId(RemoteOwnerReader);
+    FACEBinaryWriter RemoteLocation; RemoteLocation.WriteUInt8(1); RemoteLocation.WriteUInt32(7); RemoteLocation.WriteUInt32(10); RemoteLocation.WriteUInt32(0);
+    FACEBinaryReader RemoteLocationReader(RemoteLocation.GetData()); Session.HandlePublicUpdatePropertyInt(RemoteLocationReader);
+    TestEqual(TEXT("Remote unequip owner still updates"),Session.WorldObjects[7].WielderId,0);
+    TestEqual(TEXT("Remote unequip location still updates"),Session.WorldObjects[7].CurrentWieldedLocation,int64(0));
     Session.SocketC2S->Close(); Sockets->DestroySocket(Session.SocketC2S); Session.SocketC2S=nullptr;
     Receiver->Close(); Sockets->DestroySocket(Receiver);
     return true;

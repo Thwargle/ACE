@@ -8,6 +8,8 @@
 #include "Serialization/JsonSerializer.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEDatSubsystem.h"
+#include "ACEClientSubsystem.h"
+#include "ACESession.h"
 #include "Engine/GameInstance.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Slate/WidgetRenderer.h"
@@ -16,6 +18,8 @@
 #include "Misc/App.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SSlider.h"
+#include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SEditableTextBox.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMProfileStorageTest, "ACE.Plugins.LinkedProfiles",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -99,6 +103,37 @@ bool FACEUCMProfileStorageTest::RunTest(const FString&)
         TestEqual(TEXT("New route never copies previous waypoints"),P->Profile->GetArrayField(TEXT("route")).Num(),0);
         TestEqual(TEXT("Route creation preserves Character reference"),H->UCMSectionName(TEXT("Character")),FString(TEXT("Hero")));
         TestFalse(TEXT("New cannot overwrite an existing profile"),H->NewUCMSection(TEXT("Routes"),TEXT("OldPath")));
+        // Exercise the same controls a user clicks, including the immediate
+        // on-disk file and current selection, then actual position recording.
+        auto Panel=H->MakeUCMPanel(TEXT("Route"));
+        TFunction<TSharedPtr<SWidget>(const TSharedRef<SWidget>&,FName)> FindTag;
+        FindTag=[&](const TSharedRef<SWidget>& W,FName Tag)->TSharedPtr<SWidget>{
+            if(W->GetTag()==Tag)return W;
+            auto Children=W->GetChildren();for(int I=0;I<Children->Num();++I)if(auto Found=FindTag(Children->GetChildAt(I),Tag))return Found;
+            return nullptr;};
+        auto Click=[&](const TCHAR* Caption){auto W=FindTag(Panel,FName(*(FString(TEXT("UCMChoice."))+Caption)));
+            if(!TestTrue(Caption,W.IsValid()))return false;StaticCastSharedPtr<SButton>(W)->SimulateClick();return true;};
+        if(!Click(TEXT("+ New route")))return false;
+        auto NameInput=StaticCastSharedPtr<SEditableTextBox>(FindTag(Panel,TEXT("UCMNewProfileName")));
+        if(!TestTrue(TEXT("Route name field is shown"),NameInput.IsValid()))return false;
+        NameInput->SetText(FText::FromString(TEXT("Academy_Loop")));Click(TEXT("Create and select route"));
+        TestEqual(TEXT("Create selects the new route immediately"),H->UCMSectionName(TEXT("Routes")),FString(TEXT("Academy_Loop")));
+        TestTrue(TEXT("Empty route file exists before any point is added"),IFileManager::Get().FileExists(*(H->UserDirectory()/TEXT("Profiles/Routes/Academy_Loop.json"))));
+        TestTrue(TEXT("Creation confirmation names the saved file"),H->Notice.Contains(TEXT("Created and selected Routes: Academy_Loop.json")));
+        TestTrue(TEXT("New route is the persisted selection"),H->InitializeUCMSelection());
+        TestEqual(TEXT("Restart keeps new empty route selected"),H->UCMSectionName(TEXT("Routes")),FString(TEXT("Academy_Loop")));
+        auto Session=GI->GetSubsystem<UACEClientSubsystem>()->GetSession();Session->State=EACESessionState::InWorld;
+        for(int I=0;I<10;++I)
+        {
+            FACEPosition Pos;Pos.CellId=0x7D640001;Pos.Location={double(I),2,3};Session->SetLocalPosition(Pos);
+            if(!Click(TEXT("+ Add waypoint at my position")))return false;
+        }
+        TestEqual(TEXT("One click adds one waypoint"),P->Profile->GetArrayField(TEXT("route")).Num(),10);
+        TestTrue(TEXT("Last point is visible after pagination"),FindTag(Panel,TEXT("UCMChoice.Previous")).IsValid());
+        TestTrue(TEXT("Recorded route reloads without a Save button"),H->InitializeUCMSelection());
+        TestEqual(TEXT("All waypoints persisted"),P->Profile->GetArrayField(TEXT("route")).Num(),10);
+        TestEqual(TEXT("Recording uses current player position"),P->Profile->GetArrayField(TEXT("route"))[9]->AsObject()->GetNumberField(TEXT("x")),9.);
+        Session->State=EACESessionState::Disconnected;
         H->SelectUCMSection(TEXT("Routes"),TEXT("OldPath"));TestEqual(TEXT("Original route remains intact"),P->Profile->GetArrayField(TEXT("route")).Num(),1);
         const FString Folder=H->UserDirectory()/TEXT("ImportInbox");IFileManager::Get().MakeDirectory(*Folder,true);
         const FString Nav=TEXT("uTank2 NAV 1.2\n2\n2\n0\n0\n0\n0.05\n0\n3\n0.01\n0\n0.05\n0\n1500\n");
@@ -188,7 +223,7 @@ bool FACEUCMProfilePanelTest::RunTest(const FString&)
     for(const TCHAR* Page:{TEXT("Buffs"),TEXT("Buff others"),TEXT("Combat"),TEXT("Recovery"),TEXT("Route"),TEXT("Loot"),TEXT("Vendors"),TEXT("Monsters"),TEXT("Metas")})
     {
         const FString Text=CollectText(Host->MakeUCMPanel(Page));
-        TestTrue(*(FString(Page)+TEXT(" has New profile")),Text.Contains(TEXT("+ New\n")));
+        TestTrue(*(FString(Page)+TEXT(" has New profile")),Text.Contains(FString(Page)==TEXT("Route")?TEXT("+ New route\n"):TEXT("+ New\n")));
         TestTrue(*(FString(Page)+TEXT(" has Delete profile")),Text.Contains(TEXT("Delete\n")));
         if(FString(Page)==TEXT("Route"))TestFalse(TEXT("Route has no duplicate import selector"),Text.Contains(TEXT("Navigation route\n")));
         if(FString(Page)==TEXT("Monsters"))TestTrue(TEXT("Monsters can add current target"),Text.Contains(TEXT("Add selected monster")));

@@ -705,6 +705,7 @@ public:
 	void SetReportedContact(bool bContact) { bAutoPosContact = bContact; }
 
 private:
+    friend class FACEUCMProfileStorageTest;
 	void AdoptPlayerPhysicsTimestamps(const FACEWorldObject& Object);
 	struct FReceivedFragment
 	{
@@ -878,6 +879,8 @@ private:
 	void AdvanceEquipmentSwap();
 	void CancelEquipmentSwap();
     int32 FindEquipmentStowContainer(const TMap<int32, int32>& Reserved) const;
+	bool CanStowEquipmentInContainer(int32 Container, int32 Reserved = 0) const;
+	bool HasPlayerInventoryState(const FACEWorldObject& Object) const;
 	int32 PendingEquipmentGuid = 0;
 	TMap<int32,double> PendingInventoryTransfers;
 	uint32 PendingEquipmentCombatMode = 0;

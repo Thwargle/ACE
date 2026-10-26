@@ -28,6 +28,7 @@
 #include "ProceduralMeshComponent.h"
 #include "Components/PostProcessComponent.h"
 #include "Materials/Material.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Sockets.h"
 #include "SocketSubsystem.h"
 #include "IPAddress.h"
@@ -60,7 +61,7 @@ bool FACEPluginWorldPlateTest::RunTest(const FString&)
     ON_SCOPE_EXIT {Receiver->Close();Sockets->DestroySocket(Receiver);if(S.SocketC2S){S.SocketC2S->Close();Sockets->DestroySocket(S.SocketC2S);S.SocketC2S=nullptr;}};
     H->RefreshAutomationData();
     auto P=MakeShared<FACEClientPlugin>();P->Id=TEXT("plate_test");P->Api=2;P->Companion=true;P->Enabled=P->Running=true;
-    P->Permissions={TEXT("ui"),TEXT("markers")};P->Player=S.PlayerGuid;P->Server=S.ServerName;P->VMSession=C->Session;P->Profile=MakeShared<FJsonObject>();H->Plugins.Add(P);
+    P->Permissions={TEXT("ui"),TEXT("markers"),TEXT("state")};P->Player=S.PlayerGuid;P->Server=S.ServerName;P->VMSession=C->Session;P->Profile=MakeShared<FJsonObject>();H->Plugins.Add(P);
     const FString Key=FString::Printf(TEXT("%u"),uint32(Object.Guid));
     auto Snapshot=[&](){return H->CompanionSnapshot(*P);};
     auto Selection=[&](){return Snapshot()->GetObjectField(TEXT("selection"));};
@@ -120,8 +121,24 @@ bool FACEPluginWorldPlateTest::RunTest(const FString&)
     if(!TestTrue(*Error,H->ApplyCompanionOutput(*P,Output,Error)))return false;
     TestEqual(TEXT("Unsigned GUID survives Lua world plate output"),P->WorldPlates[0].Id,Object.Guid);
     TestEqual(TEXT("Example finds string-keyed target effects"),P->WorldPlates[0].Effects.Num(),1);
+    TestEqual(TEXT("Standalone addon supplies its own four opacity sliders"),Output->GetArrayField(TEXT("ui")).Num(),4);
+    auto Preferences=Snapshot();Preferences->SetArrayField(TEXT("events"),Json(TEXT(R"({"events":[{"type":"change","id":"opacity","value":90},{"type":"change","id":"vr_opacity","value":50}]})"))->GetArrayField(TEXT("events")));
+    TSharedPtr<FJsonObject> SettingsOutput;
+    TestTrue(TEXT("Addon opacity controls execute in Lua and native host"),VM.Step(Preferences,P->Profile,SettingsOutput,Error)&&H->ApplyCompanionOutput(*P,SettingsOutput,Error));
+    TestEqual(TEXT("Addon controls desktop opacity"),P->WorldPlates[0].OpacityFor(false),.9);
+    TestEqual(TEXT("Addon controls VR opacity separately"),P->WorldPlates[0].OpacityFor(true),.5);
+    FACEPluginVM Restored;Restored.Load(Source,Error);Preferences->SetArrayField(TEXT("events"),{});Preferences->SetObjectField(TEXT("state"),SettingsOutput->GetObjectField(TEXT("state")));
+    TestTrue(TEXT("Addon restores its own opacity preferences"),Restored.Step(Preferences,P->Profile,SettingsOutput,Error));
+    TestEqual(TEXT("Restored addon retains VR opacity"),SettingsOutput->GetArrayField(TEXT("world_plates"))[0]->AsObject()->GetNumberField(TEXT("vr_opacity")),.5);
+    H->ApplyCompanionOutput(*P,Output,Error);
     TestTrue(TEXT("Omitted list retains native plate"),H->ApplyCompanionOutput(*P,Json(TEXT("{}")),Error)&&P->WorldPlates.Num()==1);
     const auto Valid=Output;
+    TArray<FACEPluginWorldPlate> Parsed;
+    TestTrue(TEXT("Existing plate output without opacity still accepted"),ACEPluginWorldPlate::Parse(Json(TEXT(R"({"plates":[{"id":12}]})"))->GetArrayField(TEXT("plates")),Parsed,Error,0));
+    TestEqual(TEXT("Default plate backing is opaque"),Parsed[0].BackgroundOpacityFor(false),1.);
+    TestTrue(TEXT("Partial opacity supports inherited VR values"),ACEPluginWorldPlate::Parse(Json(TEXT(R"({"plates":[{"id":12,"opacity":0.4,"background_opacity":0}]})"))->GetArrayField(TEXT("plates")),Parsed,Error,0));
+    TestEqual(TEXT("Omitted VR opacity inherits desktop"),Parsed[0].OpacityFor(true),.4);
+    TestEqual(TEXT("Zero backing opacity is supported"),Parsed[0].BackgroundOpacityFor(true),0.);
     // A plate retains an unselected target even with no confirmed-cast timer.
     const auto SavedDebuffs=H->Debuffs;H->Debuffs.Reset();S.SelectedObject.Guid=0;
     P->WorldPlates[0].SelectionOnly=false;
@@ -204,6 +221,8 @@ bool FACEPluginWorldPlateTest::RunTest(const FString&)
     Lens->Enabled=false;H->UpdatePluginTerrain();TestNull(TEXT("Disabling lens releases meshes and light"),H->TerrainOverlayActor.Get());
 
     for(const FString Invalid:{TEXT(R"({"world_plates":[{"id":12,"vitals":{"health":{"current":2,"max":1}}}]})"),
+        TEXT(R"({"world_plates":[{"id":12,"opacity":1.01}]})"),TEXT(R"({"world_plates":[{"id":12,"background_opacity":-1}]})"),
+        TEXT(R"({"world_plates":[{"id":12,"vr_opacity":"0.5"}]})"),TEXT(R"({"world_plates":[{"id":12,"vr_background_opacity":null}]})"),
         TEXT(R"({"world_plates":[{"id":12,"effects":[{"icon":123,"remaining":20}]}]})"),
         TEXT(R"({"world_plates":[{"id":12},{"id":12}]})"),TEXT(R"({"world_plates":[{"id":12,"selection_only":"true"}]})")})
     {TestFalse(TEXT("Malformed plate is rejected atomically"),H->ApplyCompanionOutput(*P,Json(Invalid),Error));TestEqual(TEXT("Rejected replacement retains previous plate"),P->WorldPlates[0].Id,Object.Guid);}
@@ -227,11 +246,24 @@ bool FACEPluginWorldPlateTest::RunTest(const FString&)
     S.SelectedObject.Guid=0;Plate->TickComponent(.016f,LEVELTICK_All,nullptr);TestFalse(TEXT("Selection-only plate hides immediately"),Plate->IsVisible());S.SelectedObject.Guid=Object.Guid;
     Entity->bCellVisible=false;Plate->TickComponent(.016f,LEVELTICK_All,nullptr);TestFalse(TEXT("Hidden cells do not leave floating plates"),Plate->IsVisible());Entity->bCellVisible=true;
     Plate->TickComponent(.016f,LEVELTICK_All,nullptr);
+    auto OpacityPlate=Plate->GetPlate();OpacityPlate.Opacity=.9;OpacityPlate.VROpacity=.5;
+    Plate->SetPlate(OpacityPlate,H);
+    if(auto* Material=Plate->GetMaterialInstance())
+    {
+        TestTrue(TEXT("Plate uses premultiplied alpha, not additive blending"),Material->GetBlendMode()==BLEND_AlphaComposite);
+        TestEqual(TEXT("Desktop opacity applied once in material"),Material->K2_GetVectorParameterValue(TEXT("TintColorAndOpacity")).A,.9f);
+        Plate->UpdatePresentation(true);
+        TestEqual(TEXT("VR opacity changes without a Lua callback"),Material->K2_GetVectorParameterValue(TEXT("TintColorAndOpacity")).A,.5f);
+        Plate->TickComponent(.016f,LEVELTICK_All,nullptr);
+        TestEqual(TEXT("Returning to desktop restores its opacity"),Material->K2_GetVectorParameterValue(TEXT("TintColorAndOpacity")).A,.9f);
+    }
+    TestEqual(TEXT("Changing plate presentation preserves selection"),S.SelectedObject.Guid,Object.Guid);
     if(FApp::CanEverRender())
     {
         FWidgetRenderer Renderer(false,true);const FVector2D Size(1024,512);auto* Texture=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
         const FString Folder=FPaths::ProjectSavedDir()/TEXT("WorldPlateReview");IFileManager::Get().MakeDirectory(*Folder,true);
-        for(int Variant=0;Variant<3;++Variant)
+        int32 OpaqueDesktop=0;
+        for(int Variant=0;Variant<5;++Variant)
         {
             auto View=Plate->GetPlate();
             if(Variant==1)
@@ -241,14 +273,20 @@ bool FACEPluginWorldPlateTest::RunTest(const FString&)
                 for(auto& Effect:View.Effects)Effect={uint32(Spell),Icon,FPlatformTime::Seconds()+90};
             }
             if(Variant==2){View.Health={};View.Stamina={};View.Mana={};View.Effects.Reset();View.Name=TEXT("Unknown vitals");}
+            if(Variant>=3){View.BackgroundOpacity=1;View.VRBackgroundOpacity=.25;View.Opacity=View.VROpacity=1;}
             Plate->SetPlate(View,H);
+            Plate->UpdatePresentation(Variant==4);
             for(int32 Pass=0;Pass<3;++Pass){Renderer.DrawWidget(Texture,Plate->GetSlateWidget().ToSharedRef(),Size,0);FlushRenderingCommands();}
             TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);Texture->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
             TestEqual(TEXT("Native plate renders full surface"),Pixels.Num(),1024*512);
             int32 Painted=0,Blue=0;for(FColor Pixel:Pixels){if(Pixel.A>0)++Painted;if(Pixel.A>200&&Pixel.B>Pixel.R+40&&Pixel.B>Pixel.G)++Blue;}
             TestTrue(TEXT("Plate has visible frame/text/icon pixels"),Painted>2000);
-            if(Variant==2)TestEqual(TEXT("Unknown mana does not paint a blue bar"),Blue,0);
+            if(Variant>=2)TestEqual(TEXT("Unknown mana does not paint a blue bar"),Blue,0);
             else TestTrue(TEXT("Known mana paints its blue bar"),Blue>100);
+            int32 Opaque=0;for(FColor Pixel:Pixels)if(Pixel.A>=250)++Opaque;
+            TestEqual(TEXT("Unused canvas remains transparent with opaque plate"),Pixels[0].A,uint8(0));
+            if(Variant==3)OpaqueDesktop=Opaque;
+            if(Variant==4)TestTrue(TEXT("VR can retain translucent backing independently of opaque desktop"),OpaqueDesktop>Opaque+4000);
             TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(1024,512,Pixels,PNG);
             FFileHelper::SaveArrayToFile(PNG,*(Folder/FString::Printf(TEXT("TargetPlate-%d.png"),Variant)));
         }
