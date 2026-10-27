@@ -2668,7 +2668,7 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 			{
 				Dat->BuildTransitionRootTrack(MotionTableId,ACEMotion::Ready,ACEMotion::Dead,Motion.CurrentStyle,RemoteDeathRootTrack);
 				RemoteDeathRootTrack.bApplyEntry = RemoteWalkingMotion.HasPending();
-				RemoteDeathPlayRate = FMath::Max(.05f,Motion.ActionSpeed);
+				RemoteDeathPlayRate = FMath::Max(0.f,Motion.ActionSpeed);
 			}
 			else if (!bDeath) RemoteDeathRootTrack.Reset();
 			FVector Velocity;

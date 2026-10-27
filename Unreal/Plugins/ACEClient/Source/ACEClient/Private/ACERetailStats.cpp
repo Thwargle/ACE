@@ -4,6 +4,13 @@
 
 void UACEDatSubsystem::RecomputePlayerStats(FACEPlayerVitals& V, const TArray<FACEActiveEnchantment>& Enchantments)
 {
+	// gmSkillUI::RebuildSkillList iterates the DAT catalog, not every skill in
+	// PlayerDesc. ACE may send retired weapon/internal skills that retail never
+	// displays. Keep the shared player-stat view (desktop, VR and Lua) restricted
+	// to the loaded catalog on login and every live update. Do not filter until a
+	// complete table is available, or hard-code a blacklist that breaks custom DATs.
+	if (EnsureSkillTableLoaded())
+		V.Skills.RemoveAll([this](const FACESkillInfo& Skill) { return !SkillInfoCache.Contains(Skill.SkillId); });
 	if (!bVitalFormulasLoaded && EnsureLoaded() && PortalDat)
 	{
 		TArray<uint8> Bytes;

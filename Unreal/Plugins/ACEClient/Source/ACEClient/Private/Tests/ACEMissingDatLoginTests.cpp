@@ -15,6 +15,8 @@
 #include "Engine/World.h"
 #include "Async/TaskGraphInterfaces.h"
 #include "Misc/Paths.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Dat/ACEDatDatabase.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Slate/WidgetRenderer.h"
@@ -26,6 +28,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEMissingDatLoginTest,"ACE.RetailParity.Missi
  EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACEMissingDatLoginTest::RunTest(const FString&)
 {
+ FString RetailDatDirectory=TEXT("C:/Turbine/Asheron's Call");
+ FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),RetailDatDirectory);
  const auto Values=UWorld::InitializationValues().AllowAudioPlayback(false).RequiresHitProxies(false)
   .CreatePhysicsScene(false).CreateNavigation(false).CreateAISystem(false);
  auto* World=UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);
@@ -110,7 +114,7 @@ bool FACEMissingDatLoginTest::RunTest(const FString&)
  Dat->BeginBackgroundLoad(true);
  TestEqual(TEXT("Explicit login retry permits one new indexing attempt"),Dat->BackgroundLoadGeneration,Generation+1);
  Wait();
- Login->DatBox->SetText(FText::FromString(TEXT("C:/Turbine/Asheron's Call")));
+ Login->DatBox->SetText(FText::FromString(RetailDatDirectory));
  Login->RunAction(TEXT("savedat"));
  TestTrue(TEXT("Saving a complete installation clears the error and allows login"),Login->ValidateGameFiles()
   && Login->FileProblem->GetVisibility()==ESlateVisibility::Collapsed);
@@ -131,18 +135,19 @@ bool FACEMissingDatLoginTest::RunTest(const FString&)
  // upload while Unreal pumped game-thread tasks, crashing UCM panel creation.
  const int32 SupersededGeneration=Dat->BackgroundLoadGeneration;
  Dat->bBackgroundLoadInProgress=true;Dat->bCellBackgroundLoadInProgress=true;
- TestTrue(TEXT("Synchronous reload succeeds"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
+ TestTrue(TEXT("Synchronous reload succeeds"),Dat->LoadDatDirectory(RetailDatDirectory));
  TestTrue(TEXT("Synchronous reload invalidates portal and cell workers"),Dat->BackgroundLoadGeneration!=SupersededGeneration
   && !Dat->bBackgroundLoadInProgress && !Dat->bCellBackgroundLoadInProgress);
  auto* ActiveResolver=Dat->GetTextureResolver();auto* ActivePortal=Dat->GetPortalDat();auto* ActiveCell=Dat->CellDat.Get();
  const auto Stale=MakeShared<UACEDatSubsystem::FBackgroundLoadResult>();
  Stale->bOk=true;Stale->Portal=MakeUnique<FACEDatDatabase>();
- TestTrue(TEXT("Stale portal fixture opens"),Stale->Portal->Open(TEXT("C:/Turbine/Asheron's Call/client_portal.dat")));
+ TestTrue(TEXT("Stale portal fixture opens"),Stale->Portal->Open(RetailDatDirectory/TEXT("client_portal.dat")));
  Dat->InstallBackgroundLoadResult(Stale,SupersededGeneration);
  Dat->InstallCellDatBackgroundLoadResult(TUniquePtr<FACEDatDatabase>(),SupersededGeneration);
  TestTrue(TEXT("Stale completions cannot replace live resolvers or erase world data"),Dat->GetTextureResolver()==ActiveResolver
   && Dat->GetPortalDat()==ActivePortal && Dat->CellDat.Get()==ActiveCell && Dat->GetDatLoadError().IsEmpty());
- TestNotNull(TEXT("UI texture upload remains usable after stale completions"),ActiveResolver->GetOrCreateUiTexture(0x06004CC2));
+ if(TestNotNull(TEXT("Synchronous reload provides a texture resolver"),ActiveResolver))
+  TestNotNull(TEXT("UI texture upload remains usable after stale completions"),ActiveResolver->GetOrCreateUiTexture(0x06004CC2));
  GI->Shutdown(); GEngine->DestroyWorldContext(World); World->DestroyWorld(false);
  return !HasAnyErrors();
 }

@@ -1,6 +1,8 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "UObject/StrongObjectPtr.h"
 #include "VR/ACEVRMath.h"
 #include "VR/ACEVRPointerVisuals.h"
@@ -514,6 +516,8 @@ bool FACEVRProtocolTest::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEVRRigTest, "ACE.VR.RigAndMenus", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEVRRigTest::RunTest(const FString& Parameters)
 {
+	FString RetailDatDirectory=TEXT("C:/Turbine/Asheron's Call");
+	FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),RetailDatDirectory);
 	TStrongObjectPtr<UACEVRSettings> SavedPreferences(NewObject<UACEVRSettings>());
 	ON_SCOPE_EXIT { SavedPreferences->Persist(); };
 	const auto Values = UWorld::InitializationValues().AllowAudioPlayback(false).RequiresHitProxies(false)
@@ -588,15 +592,35 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Tracking loss clears held button routes"),VR->HeldControllerActions.IsEmpty());
 		VR->ResetButtonBindings();VR->UpdateTrackingState(true);VR->UpdatePanels();
 		const float SavedFPS=ACERuntimeOptions::Get(TEXT("ShowFrameRate"));
-		ACERuntimeOptions::Set(TEXT("ShowFrameRate"),1);PC->UpdateFrameRateOverlay();VR->UpdatePanels();
-		TestNotNull(TEXT("Enabling the FPS counter creates its VR surface"),VR->FrameRatePanel.Get());
+		const auto SavedFPSState=VR->Client->Session->State;
+		ACERuntimeOptions::Set(TEXT("ShowFrameRate"),1);
+		for (auto State : {EACESessionState::Disconnected,EACESessionState::Connecting,
+			EACESessionState::AwaitConnectRequest,EACESessionState::AwaitCharacterList,
+			EACESessionState::CharacterSelect,EACESessionState::EnteringWorld,EACESessionState::Failed})
+		{
+			VR->Client->Session->State=State;PC->UpdateFrameRateOverlay();VR->UpdatePanels();
+			TestNull(TEXT("Saved FPS toggle does not create a counter outside gameplay"),PC->FrameRateWidget.Get());
+			TestNull(TEXT("Login and character screens do not create a VR FPS surface"),VR->FrameRatePanel.Get());
+		}
+		VR->Client->Session->State=EACESessionState::InWorld;PC->UpdateFrameRateOverlay();VR->UpdatePanels();
+		TestNotNull(TEXT("Entering gameplay with FPS enabled creates its VR surface"),VR->FrameRatePanel.Get());
 		if(VR->FrameRatePanel)
 		{
 			TestTrue(TEXT("FPS surface is visible and follows tracked head pose"),VR->FrameRatePanel->IsVisible() && VR->FrameRatePanel->GetAttachParent()==VR->Head);
 			TestEqual(TEXT("FPS surface cannot intercept a pointer"),VR->FrameRatePanel->GetCollisionEnabled(),ECollisionEnabled::NoCollision);
+			auto* SavedCounter=PC->FrameRateWidget.Get();
+			VR->Client->Session->State=EACESessionState::CharacterSelect;VR->UpdatePanels();
+			TestFalse(TEXT("Logout hides and stops the VR surface even before the controller updates"),VR->FrameRatePanel->IsVisible() || VR->FrameRatePanel->IsComponentTickEnabled());
+			PC->UpdateFrameRateOverlay();
+			TestTrue(TEXT("Returning to character selection collapses the shared counter"),SavedCounter->GetVisibility()==ESlateVisibility::Collapsed);
+			TestEqual(TEXT("Leaving gameplay resets the frame sample"),SavedCounter->GetCounterText(),FString(TEXT("FPS --")));
+			TestEqual(TEXT("Logout preserves the user's FPS preference"),ACERuntimeOptions::Get(TEXT("ShowFrameRate")),1.f);
+			VR->Client->Session->State=EACESessionState::InWorld;PC->UpdateFrameRateOverlay();VR->UpdatePanels();
+			TestTrue(TEXT("Reentering gameplay reuses the counter and its saved placement"),PC->FrameRateWidget==SavedCounter && VR->FrameRatePanel->IsVisible());
 			ACERuntimeOptions::Set(TEXT("ShowFrameRate"),0);PC->UpdateFrameRateOverlay();VR->UpdatePanels();
 			TestFalse(TEXT("Disabling FPS stops drawing and ticking its surface"),VR->FrameRatePanel->IsVisible() || VR->FrameRatePanel->IsComponentTickEnabled());
 		}
+		VR->Client->Session->State=SavedFPSState;
 		ACERuntimeOptions::Set(TEXT("ShowFrameRate"),SavedFPS);PC->UpdateFrameRateOverlay();VR->UpdatePanels();
 		TestFalse(TEXT("First tracked pose replaces the startup menu location"), StartupPanel.Equals(VR->RetailPanel->GetComponentLocation(), 1));
 		TestTrue(TEXT("Login card is near tracked eye height"), FMath::Abs(VR->RetailPanel->GetComponentLocation().Z - VR->Head->GetComponentLocation().Z) < 25);
@@ -685,7 +709,7 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		if (FApp::CanEverRender())
 		{
 			VR->DismissTextEntry();
-			TestTrue(TEXT("Creator loads retail DAT"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
+			TestTrue(TEXT("Creator loads retail DAT"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(RetailDatDirectory));
 			VR->Client->Session->State=EACESessionState::CharacterSelect;
 			auto* CreationCanvas=CreateWidget<UACEUICanvasWidget>(PC);
 			CreationCanvas->InitializeCanvas(VR->Client->GetUIElementManager());
@@ -787,7 +811,7 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		auto* Dat = GI->GetSubsystem<UACEDatSubsystem>();
 		// The creator has already used the resolver's font/texture caches. Do not
 		// replace their underlying DAT database halfway through this fixture.
-		TestTrue(TEXT("Retail UI and avatar fixture loads DAT"), Dat->GetPortalDat() || Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
+		TestTrue(TEXT("Retail UI and avatar fixture loads DAT"), Dat->GetPortalDat() || Dat->LoadDatDirectory(RetailDatDirectory));
 		auto* Manager = NewObject<UACEUIElementManager>(PC); Manager->Initialize();
 		auto* Resources = NewObject<UACEUIResourceResolver>(PC); Resources->Initialize(Dat);
 		auto* Layout = NewObject<UACEUILayoutResolver>(PC); Layout->Initialize(Dat, Manager);
@@ -1776,7 +1800,7 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		}
 		VR->Client->OnChatMessage.Broadcast(TEXT("Not enough mana."), TEXT(""), ACEChatMessageType::TransientInfo);
 		TestEqual(TEXT("Server cast errors remain visible on the wrist"), VR->GetCastFeedback(), FString(TEXT("Not enough mana.")));
-		if (TestTrue(TEXT("Avatar fixture loads retail DAT"), Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))
+		if (TestTrue(TEXT("Avatar fixture loads retail DAT"), Dat->LoadDatDirectory(RetailDatDirectory)))
 		{
 			auto CombatAddress = Sockets->CreateInternetAddr(); CombatAddress->SetIp(TEXT("127.0.0.1"), Valid); CombatAddress->SetPort(0);
 			auto* CombatReceiver = Sockets->CreateSocket(NAME_DGram, TEXT("VR combat fixture"), false);
@@ -2940,6 +2964,7 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
                 // spells while the rendered book stays open.
                 NativeSession.KnownSpells={81,5349,51,27,6,5,4,3,2,1};
                 Menu->SpellSchool=Menu->SpellLevel=0;Menu->Search.Reset();Menu->OpenPage("Spellbook");PaintMenu();
+                TestEqual(TEXT("Reopened spellbook restores the reused search entry"),Menu->TextEntry->GetVisibility(),ESlateVisibility::Visible);
                 auto BookIds=[&]()
                 {
                     TArray<int32> Ids;for(const auto& Target:Menu->MenuTargets)if(Target.SpellId && Target.Bar==INDEX_NONE)Ids.Add(Target.SpellId);
@@ -2999,15 +3024,23 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
                 };
                 UpdateKnownSpell(true);TestTrue(TEXT("Server removal refreshes the open filtered book"),BookIds()==TArray<int32>{81});
                 UpdateKnownSpell(false);TestEqual(TEXT("Server learning refreshes the open filtered book"),BookIds().Num(),2);
+                TestFalse(TEXT("Learning a spell retains the active native book surface"),VR->bUseDesktopMenu);
+                TestEqual(TEXT("The matching learned spell becomes the book selection"),Menu->Spell,27);
+                TestEqual(TEXT("Learning preserves the current matching search"),Menu->Search,FString(TEXT("Flame")));
                 ClickMenu(false,"Clear filters");
+                TestTrue(TEXT("Filter controls remain usable after learning a spell"),Menu->Search.IsEmpty() && BookIds().Num()==6);
                 NativeSession.KnownSpells={1,2};NativeSession.SpellBars.SetNum(8);NativeSession.SpellBars[7]={1,0,0};NativeSession.ActiveSpellBar=7;
                 Menu->OpenPage("Spellbook");Menu->Spell=2;Menu->bDirty=true;
                 NativeSession.CachedC2SPackets.Reset();ClickMenu(false,"Add to bar 8");
                 {
-                    const auto Bytes=ActionPayload(ACEGameAction::AddToSpellBar);FACEBinaryReader NativeReader(Bytes);
-                    TestEqual(TEXT("Spellbook adds the inspected spell"),NativeReader.ReadUInt32(),2u);
-                    TestEqual(TEXT("Spellbook appends past existing spells, before empty padding"),NativeReader.ReadUInt32(),1u);
-                    TestEqual(TEXT("Spellbook targets the displayed hotbar"),NativeReader.ReadUInt32(),7u);
+                    const auto Bytes=ActionPayload(ACEGameAction::AddToSpellBar);
+                    if(TestEqual(TEXT("Spellbook emits a complete add-to-bar payload"),Bytes.Num(),12))
+                    {
+                        FACEBinaryReader NativeReader(Bytes);
+                        TestEqual(TEXT("Spellbook adds the inspected spell"),NativeReader.ReadUInt32(),2u);
+                        TestEqual(TEXT("Spellbook appends past existing spells, before empty padding"),NativeReader.ReadUInt32(),1u);
+                        TestEqual(TEXT("Spellbook targets the displayed hotbar"),NativeReader.ReadUInt32(),7u);
+                    }
                 }
                 TestEqual(TEXT("Appended spell remains after the existing first spell"),NativeSession.SpellBars[7][0],1);
                 AimMenuControl("Spell_2_7_1");VR->RouteControllerButton("VRPrevious",true);VR->RouteControllerButton("VRPrevious",false);PaintMenu();

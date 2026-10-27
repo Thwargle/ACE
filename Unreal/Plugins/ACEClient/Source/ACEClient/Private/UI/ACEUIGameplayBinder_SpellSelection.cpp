@@ -14,6 +14,8 @@ void UACEUIGameplayBinder::HandleSpellLearned(int32 SpellId)
 	if (!Client || !Manager || !Canvas || SpellId <= 0) return;
 	const auto Session = Client->GetSession();
 	if (!Session || Session->GetState() != EACESessionState::InWorld || !Session->GetKnownSpells().Contains(SpellId)) return;
+	if (PlayerController)
+		if (auto* VR = PlayerController->GetVRComponent(); VR && VR->RevealLearnedSpellInMenu(SpellId)) return;
 	// Reveal the learned spell even if its school/level was unchecked. Retain
 	// all other filter choices instead of resetting the player's book filters.
 	if (auto* Dat = Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr)

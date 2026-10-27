@@ -147,6 +147,19 @@ void UACEVRMenu::BuildSpells()
     // Three rows leave the hotbar and the entire current book page visible
     // together, so a controller drag never has to cross a scrolled-away bar.
     constexpr int32 PerPage=6;
+    if(PendingLearnedSpellId)
+    {
+        // gmSpellbookUI::RecvNotice_SpellAdded selects only a visible result;
+        // retain the user's filters if the new spell does not match them.
+        const int32 LearnedIndex=Spells.Find(PendingLearnedSpellId);
+        if(LearnedIndex!=INDEX_NONE)
+        {
+            Spell=PendingLearnedSpellId;PageIndex=LearnedIndex/PerPage;
+            if(ContentScroll)ContentScroll->ScrollToStart();
+            bDirty=true; // Rebuild the selected-name/action rows above on the next refresh.
+        }
+        PendingLearnedSpellId=0;
+    }
     const int32 Pages=FMath::Max(1,FMath::DivideAndRoundUp(Spells.Num(),PerPage));PageIndex=FMath::Clamp(PageIndex,0,Pages-1);
     Body->AddSlot().AutoHeight().Padding(4)[SNew(SHorizontalBox)
         +SHorizontalBox::Slot().AutoWidth()[Button(TEXT("Previous"),[this](){--PageIndex;bDirty=true;},PageIndex>0)]

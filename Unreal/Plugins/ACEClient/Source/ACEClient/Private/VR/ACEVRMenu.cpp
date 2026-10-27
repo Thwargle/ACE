@@ -120,7 +120,7 @@ void UACEVRMenu::OpenPage(FName InPage)
     const bool KeepUseTarget=UseSource && (InPage=="Inventory" || InPage=="Equipment");
     if(Page=="Fellowship" && InPage!=Page && Client)Client->SendFellowshipUpdateRequest(false);
     ClearItemSelection();if(!KeepUseTarget)UseSource=0;
-    Spell=0;FellowSelection=0;bAssignShortcut=false;
+    Spell=0;PendingLearnedSpellId=0;FellowSelection=0;bAssignShortcut=false;
     Page=InPage;PageIndex=0;Confirmation.Reset();bDirty=true;
     if(ContentScroll)ContentScroll->ScrollToStart();
     if(Client && Page=="Fellowship")Client->SendFellowshipUpdateRequest(true);
@@ -139,6 +139,7 @@ TSharedRef<SWidget> UACEVRMenu::Entry(const FString& Hint,const FString& Value)
         auto Style=TextEntry->GetWidgetStyle();Style.SetFont(FCoreStyle::GetDefaultFontStyle("Regular",28));TextEntry->SetWidgetStyle(Style);TextEntry->SetForegroundColor(FLinearColor::Black);
         TextEntry->OnTextChanged.AddDynamic(this,&UACEVRMenu::EntryChanged);
     }
+    TextEntry->SetVisibility(ESlateVisibility::Visible);
     TextEntry->SetHintText(FText::FromString(Hint));TextEntry->SetText(FText::FromString(Value));
     return SNew(SBox).MinDesiredHeight(60)[TextEntry->TakeWidget()];
 }
@@ -169,7 +170,7 @@ void UACEVRMenu::RefreshIfDirty()
     if(Client && MenuOwnerGuid!=Client->GetPlayerGuid())
     {
         MenuOwnerGuid=Pack=Client->GetPlayerGuid();Selected=Spell=UseSource=PageIndex=0;
-        Confirmation.Reset();Search.Reset();bAssignShortcut=false;bInspectionOpen=false;InspectItem=InspectSpell=0;bDirty=true;
+        Confirmation.Reset();Search.Reset();PendingLearnedSpellId=0;bAssignShortcut=false;bInspectionOpen=false;InspectItem=InspectSpell=0;bDirty=true;
     }
 	if(Client && Client->GetSession() && Page=="Spellbook" && SpellRevision!=Client->GetSession()->GetSpellDataRevision())
 	{SpellRevision=Client->GetSession()->GetSpellDataRevision();bDirty=true;}

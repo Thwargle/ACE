@@ -876,7 +876,8 @@ bool AACEPlayerController::InputKey(const FInputKeyEventArgs& Params)
 
 void AACEPlayerController::UpdateFrameRateOverlay()
 {
-	const bool Enabled=ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f && !IsDesktopInterfaceHidden();
+	const bool Enabled=Client && Client->GetSessionState()==EACESessionState::InWorld
+		&& ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f && !IsDesktopInterfaceHidden();
 	if(!Enabled)
 	{
 		if(FrameRateWidget && FrameRateWidget->GetVisibility()!=ESlateVisibility::Collapsed)
@@ -7145,6 +7146,8 @@ void AACEPlayerController::HandleCharacterList(const TArray<FACECharacterInfo>& 
 
 void AACEPlayerController::HandleSessionStateChanged(EACESessionState NewState)
 {
+	// A saved FPS preference belongs to the gameplay HUD, not the login/lobby.
+	if (NewState != EACESessionState::InWorld) UpdateFrameRateOverlay();
 	if (NewState == EACESessionState::Connecting) WorldEntryFailureReason.Reset();
 	if (NewState == EACESessionState::EnteringWorld && bUseEnterWorldLoadScreen)
 		bPendingEnterWorldTransition = true; // Outside the Play button's Slate callback.

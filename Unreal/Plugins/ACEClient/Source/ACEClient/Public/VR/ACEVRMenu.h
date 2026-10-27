@@ -60,6 +60,7 @@ private:
 	uint64 SpellRevision=0;
 	int32 UseSource=0;
     int32 SpellSchool=0, SpellLevel=0;
+    int32 PendingLearnedSpellId=0;
     bool bShareFellowXP=true;
     bool bAssignShortcut=false;
     bool bSkillsPage=false, bVendorSelling=false;

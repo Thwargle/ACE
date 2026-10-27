@@ -8,6 +8,89 @@ button exists, its opcode has a constant, or a focused regression test passes.
 This is the working acceptance record, most recently reviewed on 2026-10-13. The client
 is **not yet a feature-complete retail replacement**.
 
+## Retired skill records and DAT stat definitions: 2026-10-26
+
+The reported skill page mixes modern Light Weapons with iconless Axe, Dagger,
+Mace, Spear, Staff, Sword and Unarmed Combat entries at 5,231. Retail
+`gmSkillUI::RebuildSkillList` (`0049C3A0`) enumerates the DAT skill table and then
+looks up the player's values. Our shared player-stat view instead kept every
+server skill record, with historical fallback names even for IDs absent from
+the DAT. ACE deliberately adds retired definitions in
+`ACE.DatLoader.FileTypes.SkillTable.AddRetiredSkills`; their presence in a server
+packet is not evidence of an outdated client DAT.
+
+The stat resolver now excludes server records absent from the successfully
+loaded, complete DAT skill catalog before publishing values to desktop, VR and
+Lua. It applies on login and subsequent skill updates. There is no historical-ID
+blacklist: definitions explicitly present in a custom DAT remain usable.
+DAT replacement now clears both skill definitions and secondary-attribute
+formulas, which previously survived reloads. DAT-open logs include the embedded
+iteration so reports can identify the actual selected files.
+
+The baseline reproduction supplied 38 modern and 17 retired/internal/unknown
+records and exposed all 55; live updates also restored the invalid entries.
+The local fixture files report end-of-retail iterations matching ACE's
+`DatManager`: portal 2072, cell 982, English language 994 and high-res 497.
+Their skill table contains 38 definitions with names and icons. These checks
+verify the local fixture set; they cannot identify another user's DAT files
+from a screenshot alone.
+
+Validation: Windows Development Editor build and eight suites passed:
+CharacterStats, AugmentationStats, Augmentations, CharacterCreationData,
+MissingDatLogin, UIScreens, VR.RigAndMenus and Plugins.PublicAPI. Tests cover
+all 38 definitions, login/live obsolete-skill filtering, custom catalog
+membership, DAT replacement, current attribute/vital formulas and permanent
+augmentation handling. The rendered skill panel was inspected and has no row
+for the injected obsolete Axe record. Shared Quest sources match. Evidence:
+`TestOutput/SkillParity-2026-10-26/{baseline,after}/` and
+`after-user/Saved/Automation/RetailParity/GameplayCookingBuffed.png` under that
+parent folder. CharacterStats and MissingDatLogin also passed in `final/` after
+the final DAT iteration-logging adjustment. The injected stale-formula baseline is a regression fixture,
+not evidence that the reporting player's actual attributes were incorrect.
+
+## Network action rates and interface lifecycle: 2026-10-26
+
+This pass compared position/teleport sequencing, interpreted movement and action
+playback with the local retail sources (`SmartBox::HandleReceivedPosition`,
+`CPhysics::SetObjectMovement`, `CPhysicsObj::MoveOrTeleport`,
+`InterpolationManager::InterpolateTo`, `CMotionInterp::move_to_interpreted_state`
+at `005289C0`, and `CMotionTable::GetObjectSequence` at `00522860`). Retail passes
+an action's speed to its animation sequence. Our receive, animation queue and
+death-root paths imposed a minimum rate of 0.05, causing a paused or slower
+server action to keep advancing. They now preserve nonnegative rates, including
+zero. This does not add reverse action playback or retune position smoothing.
+Regression coverage checks slow and paused interpreted motions, pause/resume
+without restarting the pose, queued paused gestures, and paused death-root
+displacement. The new rate assertions failed against the previous implementation.
+
+The native VR spellbook had two separate lifecycle faults: reopening a page
+reused a text entry that remained collapsed, and learning a spell switched to
+the desktop book while the native book still appeared visible. That switch
+redirected controller clicks away from the displayed filters. Reused entries
+are now shown, and learning a spell refreshes the active native book in place.
+A matching learned spell is selected and paged into view without clearing the
+user's filters, following `gmSpellbookUI::RecvNotice_SpellAdded`. The three
+previously failing VR filter/tile assertions now pass, with additional checks
+for the visible search entry, retained surface and working filter controls.
+
+The FPS overlay is also limited to the InWorld session state on desktop and VR.
+Leaving gameplay hides it and clears its timing sample while preserving the
+user's enabled setting and placement for the next character session.
+
+Validation: Windows Development Editor build succeeded; all 29 selected suites
+passed in an offscreen D3D12 run using retail DAT files. Coverage includes
+network transport and pump budgeting, custom object replication, position and
+movement replay, turning, emotes, combat/archery animation, support and runtime
+actors, desktop screens/interactions, character management/button masks,
+selection toolbar, text entries/tooltips, housing, FPS lifecycle, and VR menus
+and interior networking. Native spellbook and fellowship screenshots were
+visually inspected. Shared Quest source was synchronized and checked. Evidence:
+`TestOutput/ParityPass-2026-10-26/{baseline,after,complete}/`,
+`build-final.log` in that parent folder, and
+`after-user/Saved/Automation/VR/{GameplaySpellbook,GameplayFellowship}.png`.
+These are offline regression and rendered UI checks, not a live side-by-side
+multiplayer comparison or a claim of complete retail parity.
+
 ## Foundry, blocked terrain overlays, and resource retention: 2026-10-25
 
 The bundled optional **Dereth Foundry** Lua companion follows AceCreator's

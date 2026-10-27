@@ -126,6 +126,18 @@ bool FACENetworkAnimationParityTest::RunTest(const FString&)
   App->TickComponent(.1f,LEVELTICK_All,nullptr);
  }
  App->ClearActionMotion();
+ // Retail keeps the wire speed, including a paused substate and rates below
+ // 0.05. Changing that rate must neither advance nor restart the current pose.
+ for(float Rate:{.01f,0.f,1.f})
+ {
+  const float Before=App->AnimTime;
+  FACEBinaryWriter W;Header(W,0);W.WriteUInt32(6);W.WriteUInt16(uint16(ACEMotion::Sitting&0xffffu));W.WriteFloat(Rate);Receive(W);
+  TestEqual(TEXT("Slow and paused interpreted rates survive the network path"),App->ActionPlayRate,Rate);
+  TestEqual(TEXT("Pausing/resuming preserves the current emote frame"),App->AnimTime,Before);
+  App->TickComponent(.1f,LEVELTICK_All,nullptr);
+  TestTrue(TEXT("Emote clock advances only by the received rate"),FMath::IsNearlyEqual(App->AnimTime,Before+.1f*Rate,.00001f));
+ }
+ App->ClearActionMotion();
  for(uint16 Command:{uint16(0x87),uint16(0x7e)})
  {
   FACEBinaryWriter W;Header(W,0);W.WriteUInt32(1u<<7);W.WriteUInt16(Command);W.WriteUInt16(++ActionStamp);W.WriteFloat(1);Receive(W);
@@ -134,6 +146,25 @@ bool FACENetworkAnimationParityTest::RunTest(const FString&)
  TestEqual(TEXT("A different stamped gesture cannot truncate an in-flight wave"),App->ActionCommand,0x13000087u);
  TestEqual(TEXT("The next distinct gesture is queued"),App->PendingActionCommands.Num(),1);
  App->ClearActionMotion();
+ for(float Rate:{1.f,0.f})
+ {
+  FACEBinaryWriter W;Header(W,0);W.WriteUInt32(1u<<7);W.WriteUInt16(0x87);W.WriteUInt16(++ActionStamp);W.WriteFloat(Rate);Receive(W);
+ }
+ TestTrue(TEXT("A queued paused action retains its wire rate"),App->PendingActionPlayRates==TArray<float>{0.f});
+ for(int Frame=0;Frame<600 && !App->PendingActionCommands.IsEmpty();++Frame)App->TickComponent(1.f/30.f,LEVELTICK_All,nullptr);
+ TestTrue(TEXT("The queued paused action starts after its predecessor"),App->PendingActionCommands.IsEmpty() && App->ActionCommand==0x13000087u);
+ TestEqual(TEXT("Dequeuing does not impose a minimum action rate"),App->ActionPlayRate,0.f);
+ const float PausedTime=App->AnimTime;
+ App->TickComponent(.25f,LEVELTICK_All,nullptr);
+ TestEqual(TEXT("Paused stamped action holds its animation clock"),App->AnimTime,PausedTime);
+ App->ClearActionMotion();
+ // Death's authored root movement must share the same paused rate as its mesh.
+ const FVector BeforeDeath=Actor->GetActorLocation();
+ FACEObjectMotionState PausedDeath;PausedDeath.CurrentStyle=Style;
+ PausedDeath.ForwardCommand=PausedDeath.ActionCommand=ACEMotion::Dead;PausedDeath.ActionSpeed=0.f;
+ Actor->ApplyMotionState(PausedDeath);
+ for(int Frame=0;Frame<30;++Frame){Actor->Tick(1.f/30.f);App->TickComponent(1.f/30.f,LEVELTICK_All,nullptr);}
+ TestTrue(TEXT("A paused death cannot displace its body while its mesh is stopped"),Actor->GetActorLocation().Equals(BeforeDeath,.001));
  // TurnRight is the interpreted modifier; TurnLeft canonicalizes to negative
  // speed. Directed TurnTo and MoveTo must drive the same visible footwork.
  for(int32 Model=-2;Model<UE_ARRAY_COUNT(ACECreatureFixtures::Models);++Model)

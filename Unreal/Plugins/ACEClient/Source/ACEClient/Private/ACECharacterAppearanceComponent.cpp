@@ -1450,7 +1450,7 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 		{
 			// A repeated interpreted substate can change speed without restarting
 			// its entry or cyclic pose (CMotionInterp::apply_interpreted_movement).
-			if (!(Cmd & 0x10000000u)) ActionPlayRate = FMath::Max(0.05f, PlayRate);
+			if (!(Cmd & 0x10000000u)) ActionPlayRate = FMath::Max(0.f, PlayRate);
 			return;
 		}
 		if (!bHoldActionFinal)
@@ -1532,7 +1532,7 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 	{
 		ActionStyle = ACEMotion::StanceMagic;
 	}
-	ActionPlayRate = FMath::Max(0.05f, PlayRate);
+	ActionPlayRate = FMath::Max(0.f, PlayRate);
 	// Local chat requests supply 1.0; received motions supply their own rate.
 	// Do not overwrite an NPC emote, pickup, or combat action's server speed.
 	if (bMagicPowerUp || bMagicCastGesture)
@@ -1561,7 +1561,7 @@ void UACECharacterAppearanceComponent::QueueActionMotion(int32 InActionCommand, 
 	}
 	bHoldActionFinalAfterFinish = false; // A queued action must run before the final hold.
 	PendingActionCommands.Add(Cmd);
-	PendingActionPlayRates.Add(FMath::Max(0.05f, PlayRate));
+	PendingActionPlayRates.Add(FMath::Max(0.f, PlayRate));
 	uint32 St = static_cast<uint32>(Style);
 	if (St != 0 && St <= 0xFFFFu)
 	{
@@ -2363,7 +2363,7 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 				{
 					ActionStyle = ACEMotion::StanceMagic;
 				}
-				ActionPlayRate = FMath::Max(0.05f, NextRate);
+				ActionPlayRate = FMath::Max(0.f, NextRate);
 				bActionEverEvaluated = false;
 				AnimTime = 0.f;
 				DeferredPoseDeltaTime = 0.f;

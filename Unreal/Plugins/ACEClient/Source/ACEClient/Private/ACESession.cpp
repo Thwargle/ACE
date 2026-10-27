@@ -8338,7 +8338,9 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 			const bool bStance = (Full & 0xFF000000u) == 0x80000000u;
 			if (!IsLocoOrDoorOrReady(Low) && !bStance)
 			{
-				const float ClampedSpeed = FMath::Max(0.05f, Speed);
+				// A zero rate pauses the authored motion; do not invent a minimum
+				// playback speed for a server-controlled action.
+				const float ClampedSpeed = FMath::Max(0.f, Speed);
 				if (Motion.ActionCommand == 0)
 				{
 					Motion.ActionCommand = static_cast<int32>(Full);
@@ -8399,7 +8401,7 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 					Motion.ActionCommand = static_cast<int32>(Full);
 					// Interpreted forward speed belongs to this substate, including
 					// held emotes. Retail passes it through to DoInterpretedMotion.
-					Motion.ActionSpeed = FMath::Max(0.05f, ForwardSpeed);
+					Motion.ActionSpeed = FMath::Max(0.f, ForwardSpeed);
 				}
 			}
 			break;

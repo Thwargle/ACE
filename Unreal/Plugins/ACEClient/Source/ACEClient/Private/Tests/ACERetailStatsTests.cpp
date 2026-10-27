@@ -4,6 +4,8 @@
 #include "Misc/Parse.h"
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
+#include "Dat/ACEDatDatabase.h"
+#include "Misc/Paths.h"
 #include "Engine/GameInstance.h"
 
 
@@ -24,6 +26,66 @@ bool FACERetailStatsTest::RunTest(const FString& Parameters)
     auto* GI = NewObject<UGameInstance>();
     auto* Dat = NewObject<UACEDatSubsystem>(GI);
     if (!Dat->LoadDatDirectory(ACERetailStatsTestsDatDirectory())) return false;
+    // Verify the actual fixture files, not their filenames or the server's
+    // extended Skill enum (ACE deliberately adds retired server-side skills).
+    struct FDatVersion { const TCHAR* File; uint32 Iteration; };
+    for (const auto& Expected : {FDatVersion{TEXT("client_portal.dat"),2072},
+        FDatVersion{TEXT("client_cell_1.dat"),982}, FDatVersion{TEXT("client_local_English.dat"),994},
+        FDatVersion{TEXT("client_highres.dat"),497}})
+    {
+        FACEDatDatabase Database; TArray<uint8> Bytes;
+        if (!TestTrue(Expected.File,Database.Open(FPaths::Combine(ACERetailStatsTestsDatDirectory(),Expected.File)))) return false;
+        if (!TestTrue(TEXT("DAT has an iteration record"),Database.ReadFile(0xFFFF0001u,Bytes))) return false;
+        FACEDatCursor Cursor(Bytes); bool Ok=true; const uint32 Iteration=Cursor.ReadU32(Ok);
+        TestTrue(TEXT("Iteration record is readable"),Ok);
+        TestEqual(*FString::Printf(TEXT("%s is end of retail"),Expected.File),Iteration,Expected.Iteration);
+        AddInfo(FString::Printf(TEXT("%s iteration %u"),Expected.File,Iteration));
+    }
+    {
+        // The reported legacy entries had no icons and ranks of 5,231. Recreate
+        // both login and subsequent live updates alongside modern skill IDs.
+        const TArray<uint32> Modern={6,7,14,15,16,18,19,20,21,22,23,24,27,28,29,30,
+            31,32,33,34,35,36,37,38,39,40,41,43,44,45,46,47,48,49,50,51,52,54};
+        const TArray<uint32> Retired={1,2,3,4,5,8,9,10,11,12,13,17,25,26,42,53,999};
+        FString Name; uint32 Icon=0;
+        for (uint32 Id:Modern) TestTrue(TEXT("Modern skill has a DAT name and icon"),Dat->TryGetSkillInfo(Id,Name,Icon) && !Name.IsEmpty() && Icon!=0);
+        for (uint32 Id:Retired) TestFalse(TEXT("Retired/internal skill is absent from the retail table"),Dat->TryGetSkillInfo(Id,Name,Icon));
+        TestEqual(TEXT("End-of-retail skill table has 38 definitions"),Dat->SkillInfoCache.Num(),38);
+        FACESession Legacy;
+        Legacy.StatResolver=[Dat](auto& V,const auto& E){Dat->RecomputePlayerStats(V,E);};
+        auto WriteSkill=[](FACEBinaryWriter& W,uint32 Id)
+        {
+            W.WriteUInt32(Id);W.WriteUInt16(5231);W.WriteUInt16(0);W.WriteUInt32(3);
+            W.WriteUInt32(1000);W.WriteUInt32(10);W.WriteUInt32(0);W.WriteDouble(0);
+        };
+        FACEBinaryWriter Login;
+        Login.WriteUInt32(0);Login.WriteUInt32(1);Login.WriteUInt32(2);Login.WriteUInt32(0);
+        Login.WriteUInt16(Modern.Num()+Retired.Num());Login.WriteUInt16(64);
+        for(uint32 Id:Modern)WriteSkill(Login,Id);
+        for(uint32 Id:Retired)WriteSkill(Login,Id);
+        FACEBinaryReader LoginReader(Login.GetData());Legacy.HandlePlayerDescription(LoginReader);
+        TestEqual(TEXT("Login exposes only DAT-defined player skills to all consumers"),Legacy.GetPlayerVitals().Skills.Num(),Modern.Num());
+        for(uint32 Id:Retired)
+        {
+            FACEBinaryWriter Update;Update.WriteUInt8(1);WriteSkill(Update,Id);
+            FACEBinaryReader Reader(Update.GetData());Legacy.HandlePrivateUpdateSkill(Reader);
+            TestFalse(TEXT("Live retired skill update cannot resurrect a phantom row"),Legacy.GetPlayerVitals().Skills.ContainsByPredicate([Id](const auto& S){return S.SkillId==Id;}));
+        }
+        for(uint32 Id:Modern)
+            TestTrue(TEXT("Modern skill ranks and specialization remain intact"),Legacy.GetPlayerVitals().Skills.ContainsByPredicate([Id](const auto& S){return S.SkillId==Id && S.Ranks==5231 && S.AdvancementClass==3;}));
+        // Simulate definitions/formulas cached from a previous DAT installation.
+        // Reloading must replace them, including a previously added old skill.
+        auto Old=Dat->SkillInfoCache.FindChecked(45);Old.Name=TEXT("Old Light Weapons");
+        Dat->SkillInfoCache.Add(45,Old);Dat->SkillInfoCache.Add(1,Old);
+        FACEPlayerVitals Custom;FACESkillInfo CustomSkill;CustomSkill.SkillId=1;CustomSkill.AdvancementClass=3;Custom.Skills.Add(CustomSkill);
+        Dat->RecomputePlayerStats(Custom,{});
+        TestEqual(TEXT("A custom DAT-defined skill is retained regardless of its historical ID"),Custom.Skills.Num(),1);
+        Dat->VitalFormulas[0][3]=1;Dat->bVitalFormulasLoaded=true;
+        if (!Dat->LoadDatDirectory(ACERetailStatsTestsDatDirectory())) return false;
+        TestFalse(TEXT("DAT replacement invalidates cached vital formulas"),Dat->bVitalFormulasLoaded);
+        TestFalse(TEXT("DAT replacement drops obsolete cached skill definitions"),Dat->TryGetSkillInfo(1,Name,Icon));
+        TestTrue(TEXT("DAT replacement reloads the current skill name"),Dat->TryGetSkillInfo(45,Name,Icon) && Name==TEXT("Light Weapons"));
+    }
     FString Tooltip;
     TestTrue(TEXT("Cooking tooltip resolves from the skill table"), Dat->TryGetSkillTooltip(39, Tooltip));
     const FString CookingFormula = TEXT("( (Coordination + Focus) / 3 )\n");

@@ -1285,6 +1285,11 @@ void UACEDatSubsystem::ClearLoadedState()
 	SoundTableCache.Reset();
 	SpellInfoCache.Reset();
 	bSpellTableLoaded = false;
+	SkillInfoCache.Reset();
+	bSkillTableLoaded = false;
+	bVitalFormulasLoaded = false;
+	const uint32 DefaultVitalFormulas[3][6] = {{0,1,0,2,2,0},{0,1,0,1,2,0},{0,1,0,1,6,0}};
+	FMemory::Memcpy(VitalFormulas, DefaultVitalFormulas, sizeof(VitalFormulas));
 	bXpTableLoaded = false;
 	AttributeXpList.Reset();
 	VitalXpList.Reset();
@@ -9079,14 +9084,8 @@ void UACEDatSubsystem::GetChatPoseKeys(TArray<FString>& OutKeys)
 	ChatPoseCache.GetKeys(OutKeys);
 }
 
-bool UACEDatSubsystem::TryGetSkillInfo(uint32 SkillId, FString& OutName, uint32& OutIconDid)
+bool UACEDatSubsystem::EnsureSkillTableLoaded()
 {
-	OutName.Reset();
-	OutIconDid = 0;
-	if (SkillId == 0)
-	{
-		return false;
-	}
 	if (!bSkillTableLoaded)
 	{
 		if (!EnsureLoaded() || !PortalDat)
@@ -9101,7 +9100,11 @@ bool UACEDatSubsystem::TryGetSkillInfo(uint32 SkillId, FString& OutName, uint32&
 		}
 		FACEDatCursor Cur(Blob);
 		bool bOk = true;
-		Cur.ReadU32(bOk); // file Id
+		if (Cur.ReadU32(bOk) != 0x0E000004u || !bOk)
+		{
+			bSkillTableLoaded = true;
+			return false;
+		}
 		const uint16 Count = Cur.ReadU16(bOk);
 		Cur.ReadU16(bOk); // bucket size
 		for (uint16 i = 0; i < Count && bOk; ++i)
@@ -9121,15 +9124,30 @@ bool UACEDatSubsystem::TryGetSkillInfo(uint32 SkillId, FString& OutName, uint32&
 			Entry.FormulaW = Cur.ReadU32(bOk); Entry.FormulaX = Cur.ReadU32(bOk);
 			Entry.FormulaY = Cur.ReadU32(bOk); Entry.FormulaZ = Cur.ReadU32(bOk);
 			Entry.FormulaAttr1 = Cur.ReadU32(bOk); Entry.FormulaAttr2 = Cur.ReadU32(bOk);
-			Cur.Skip(3 * 8);  // UpperBound / LowerBound / LearnMod doubles
+			bOk = Cur.Skip(3 * 8) && bOk; // UpperBound / LowerBound / LearnMod doubles
 			if (bOk)
 			{
 				SkillInfoCache.Add(Key, MoveTemp(Entry));
 			}
 		}
 		bSkillTableLoaded = true;
+		if (!bOk || SkillInfoCache.Num() != Count)
+		{
+			// A partial catalog cannot decide which server records are obsolete.
+			SkillInfoCache.Reset();
+			UE_LOG(LogTemp, Warning, TEXT("ACEDat: invalid SkillTable in %s"), *DatDirectory);
+			return false;
+		}
 		UE_LOG(LogTemp, Log, TEXT("ACEDat: SkillTable loaded (%d skills)"), SkillInfoCache.Num());
 	}
+	return !SkillInfoCache.IsEmpty();
+}
+
+bool UACEDatSubsystem::TryGetSkillInfo(uint32 SkillId, FString& OutName, uint32& OutIconDid)
+{
+	OutName.Reset();
+	OutIconDid = 0;
+	if (!SkillId || !EnsureSkillTableLoaded()) return false;
 	if (const FSpellInfoCacheEntry* Found = SkillInfoCache.Find(SkillId))
 	{
 		OutName = Found->Name;

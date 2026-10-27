@@ -2736,13 +2736,15 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             }
         };
         FACESkillInfo Cooking; Cooking.SkillId=39; Cooking.AdvancementClass=2; Cooking.InitLevel=5; Cooking.Ranks=10;
-        Stats.Skills={Cooking}; Session.NotifyVitalsChanged();
+        FACESkillInfo Retired;Retired.SkillId=1;Retired.Name=TEXT("Axe");Retired.AdvancementClass=3;Retired.Ranks=5231;
+        Stats.Skills={Cooking,Retired}; Session.NotifyVitalsChanged();
         Gameplay->ShowPanelPage(TEXT("SkillManagementPanel_Field")); Gameplay->SyncSkillPanelTab(TEXT("SkillPage"));
         Gameplay->SelectedSkillId=39;
         FACEActiveEnchantment CookBuff; CookBuff.SpellId=3; CookBuff.SpellCategory=102;
         CookBuff.StatModType=0x8010; CookBuff.StatModKey=39; CookBuff.StatModValue=40;
         Session.ActiveEnchantments={CookBuff}; Session.NotifyVitalsChanged();
         Client->OnVitalsUpdated.Broadcast(Stats); CaptureScreen(TEXT("GameplayCookingBuffed"));
+        TestFalse(TEXT("Retired server weapon skill has no selectable UI row"),Gameplay->SkillRowIds.Contains(1));
         TestEqual(TEXT("Selected skill footer shows total and bonus"),Gameplay->AttrFooterTitle->GetText().ToString(),FString(TEXT("Cooking: 155 (+40)")));
         const int32 CookingRow = Gameplay->SkillRowIds.IndexOfByKey(39);
         if (TestTrue(TEXT("Cooking has a rendered skill row"),CookingRow!=INDEX_NONE))

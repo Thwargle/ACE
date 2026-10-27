@@ -79,7 +79,8 @@ bool UACEVRComponent::IsLoginPanelReady() const
 
 void UACEVRComponent::UpdatePanels(float Dt)
 {
-	const bool ShowFPS=bTracking && ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f && PC->FrameRateWidget;
+	const bool InWorld = Client && Client->GetSessionState() == EACESessionState::InWorld;
+	const bool ShowFPS=InWorld && bTracking && ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f && PC->FrameRateWidget;
 	if(ShowFPS && !IsValid(FrameRatePanel))
 	{
 		FrameRatePanel=NewObject<UWidgetComponent>(PresentationActor,TEXT("VRFrameRate"));
@@ -99,7 +100,6 @@ void UACEVRComponent::UpdatePanels(float Dt)
 	// Only enabled pinned surfaces refresh below. A full name index costs more
 	// than these few lookups on Quest; the gameplay binder retains its own index
 	// for its much larger batch of UI queries.
-	const bool InWorld = Client && Client->GetSessionState() == EACESessionState::InWorld;
 	UUserWidget* Widget = nullptr;
 	if (PC->LoginWidget && PC->LoginWidget->GetVisibility() != ESlateVisibility::Collapsed
 		&& !PC->DatCharSelectBinder && !PC->DatCharGenBinder && !InWorld) Widget = PC->LoginWidget;
@@ -414,6 +414,17 @@ void UACEVRComponent::ToggleSettings()
 	}
 	PositionPanel(RetailPanel); PositionPanel(SettingsPanel);
 	UpdatePanels();
+}
+
+bool UACEVRComponent::RevealLearnedSpellInMenu(int32 SpellId)
+{
+	if (!bActive || !bInventoryOpen || bSettingsOpen || bUseDesktopMenu || !GameplayMenu
+		|| GameplayMenu->GetPage() != "Spellbook") return false;
+	// SpellAdded refreshes the book already being used. Switching surfaces here
+	// hides the controller's live controls underneath an unrelated desktop panel.
+	GameplayMenu->PendingLearnedSpellId = SpellId;
+	GameplayMenu->bDirty = true;
+	return true;
 }
 
 void UACEVRComponent::OpenRetailPanel(FName Name)

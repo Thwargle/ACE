@@ -79,6 +79,7 @@ public:
 	void OpenRetailPanel(FName Name);
 	void OpenPluginManager();
 	void RevealSalvagePanel();
+	bool RevealLearnedSpellInMenu(int32 SpellId);
 	void CycleSpell(int32 Direction);
 	void SelectWristSlot(int32 Slot);
 	bool SelectSpell(int32 Spell);

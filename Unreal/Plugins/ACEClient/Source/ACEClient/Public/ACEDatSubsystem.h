@@ -742,6 +742,7 @@ private:
 	friend class FACEPortalRetirementTest;
 	friend class FACELandblockInfoTest;
 	friend class FACERetailSpellLevelTest;
+	friend class FACERetailStatsTest;
 	// Entries cannot move with TMap growth while a renderer is consuming their parts.
 	TMap<uint64, TSharedPtr<const FACEBuiltSetupMesh>> SetupMeshCache;
 	friend class FACECreatureSpawnCacheTest;
@@ -860,6 +861,7 @@ private:
 	TMap<FString, FChatPoseEntry> ChatPoseCache;
 	bool bChatPoseTableLoaded = false;
 	TMap<uint32, FSpellInfoCacheEntry> SkillInfoCache;
+	bool EnsureSkillTableLoaded();
 	bool bSkillTableLoaded = false;
 	bool bVitalFormulasLoaded = false;
 	// W + X*attribute1 + Y*attribute2, divided by Z (SecondaryAttributeTable).
