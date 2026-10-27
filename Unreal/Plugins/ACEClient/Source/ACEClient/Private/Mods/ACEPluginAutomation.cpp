@@ -219,10 +219,22 @@ void UACEPluginSubsystem::ObserveTargetMotion(int32 Guid,const FACEObjectMotionS
         {RecordCombatDeath(Guid);ReleaseCombatTarget(Guid);}
 }
 void UACEPluginSubsystem::ObserveTargetDeleted(int32 Guid)
-{ClearPluginTarget(Guid);CorpseFirstSeen.Remove(Guid);DefeatedTargets.Remove(Guid);ReleaseCombatTarget(Guid);ForgetTargetEffects(Guid);}
+{
+    // PickupEvent also removes a held visual on every missile shot and on
+    // unequip. The retained owned stack/item has not been deleted or changed.
+    FACEWorldObject Item;
+    if(GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->GetWorldObject(Guid,Item)&&IsOwnedPluginItem(Item))return;
+    ClearPluginTarget(Guid);CorpseFirstSeen.Remove(Guid);DefeatedTargets.Remove(Guid);ReleaseCombatTarget(Guid);ForgetTargetEffects(Guid);
+}
 void UACEPluginSubsystem::ObserveTargetCreated(const FACEWorldObject& Object)
 {
+    // Wield/parent and appearance notifications reuse OnObjectCreated to refresh
+    // meshes. They do not replace an owned item's assessed qualities. Dropping
+    // those here made every weapon swap/reload require another appraisal.
+    if((Object.bAppearanceOnlyUpdate||Object.bAttachmentOnlyUpdate)&&IsOwnedPluginItem(Object))return;
     ClearPluginTarget(Object.Guid);
+    AppraisalRequests.Remove(Object.Guid);
+    DirtyInventoryAppraisals.Add(Object.Guid);++DataRevision;
     ForgetTargetEffects(Object.Guid);
     DefeatedTargets.Remove(Object.Guid);
     if(LastCombatDeath&&int32(uint32(N(LastCombatDeath,TEXT("id"))))==Object.Guid)LastCombatDeath.Reset();
@@ -553,9 +565,21 @@ void UACEPluginSubsystem::RefreshAutomationData()
     // Identify the current opponent first, then look ahead while fighting.
     // Keep the existing one-request-per-second budget; a new opponent should
     // usually be assessed before the kill rather than stalling the handoff.
-    auto Need=[&](int32 Id){const auto* A=Appraisals.Find(Id);return Now-AppraisalRequests.FindRef(Id)>(!A||!A->bSuccess?30:120);};
+    auto Need=[&](int32 Id)
+    {
+        // An object with no prior request is immediately eligible. A missing entry is not a request
+        // at time zero (which delayed first assessments on Linux's startup clock).
+        const double* Last=AppraisalRequests.Find(Id);const auto* A=Appraisals.Find(Id);
+        return !Last||Now-*Last>(!A||!A->bSuccess?30:120);
+    };
     const auto Sel=C->GetSelectedObject();
-    if(UCM->Running && Sel.Guid && Need(Sel.Guid))Request=Sel.Guid;
+    // Selection alone is not a request to assess another player. In particular,
+    // fellowship recovery/buffing can select a deceptive player repeatedly.
+    FACEWorldObject Selected;
+    if(UCM->Running && Sel.Guid && C->GetWorldObject(Sel.Guid,Selected)
+        && Selected.IsAttackable() && (Selected.ItemType&ACEItemType::Creature)
+        && !Selected.bIsPlayer && !Selected.PetOwnerId && !Selected.bDying
+        && !DefeatedTargets.Contains(Sel.Guid) && Need(Sel.Guid))Request=Sel.Guid;
     if(!Request&&UCM->Running&&CombatTarget)
     {
         FACEPosition Player=C->GetPlayerPosition();

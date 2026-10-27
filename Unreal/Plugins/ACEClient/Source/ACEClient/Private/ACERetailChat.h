@@ -37,13 +37,16 @@ namespace ACERetailChat
     inline constexpr uint64 FloatyDefaults[] = {4124ull, 265216ull, 0x80000ull, 2013265920ull};
     struct FFilterGroup { const TCHAR* Label; uint64 Mask; };
     inline constexpr FFilterGroup FilterGroups[] = {
-        {TEXT("Gameplay"),0x83912021ull}, {TEXT("Combat"),0x600040ull},
+        // Appraisal (LogTextType 16) has its own control, so toggling Gameplay
+        // cannot silently re-enable incoming assessment notices.
+        {TEXT("Gameplay"),0x83912021ull & ~(1ull << ACEChatMessageType::Appraisal)}, {TEXT("Combat"),0x600040ull},
         {TEXT("Magic"),0x20080ull}, {TEXT("Area speech"),0x1004ull},
         {TEXT("Tells"),0x18ull}, {TEXT("Allegiance"),0x40C00ull},
         {TEXT("Fellowship"),0x80000ull}, {TEXT("General"),0x8000000ull},
         {TEXT("Trade"),0x10000000ull}, {TEXT("LFG"),0x20000000ull},
         {TEXT("Roleplay"),0x40000000ull}, {TEXT("Society"),0x100000000ull},
-        {TEXT("Errors"),0x4000000ull}
+        {TEXT("Errors"),0x4000000ull},
+        {TEXT("Assessment notices"),1ull << ACEChatMessageType::Appraisal}
     };
     struct FChannel { uint32 Id; const TCHAR* Name; const TCHAR* Alias; };
     inline constexpr FChannel Channels[] = {

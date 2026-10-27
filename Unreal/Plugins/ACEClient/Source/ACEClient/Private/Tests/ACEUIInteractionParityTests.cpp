@@ -223,7 +223,20 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
                 TestEqual(TEXT("Second click restores the group"),Window?Binder->FloatyChatFilters[Window-1]:Binder->MainChatTypeFilter,MAX_uint64);
             }
         }
+        const uint64 Appraisal=1ull<<ACEChatMessageType::Appraisal;
+        TestEqual(TEXT("Assessment notices are independent of the Gameplay category"),ACERetailChat::FilterGroups[0].Mask&Appraisal,0ull);
+        Binder->MainChatTypeFilter=MAX_uint64&~Appraisal;Binder->FloatyChatFilters[1]=MAX_uint64&~Appraisal;
         Binder->SaveFloatyChatSettings();
+        Binder->MainChatTypeFilter=MAX_uint64;Binder->FloatyChatFilters[1]=MAX_uint64;
+        Binder->LoadFloatyChatSettings();
+        TestEqual(TEXT("Main assessment notice filter persists"),Binder->MainChatTypeFilter&Appraisal,0ull);
+        TestEqual(TEXT("Separate window assessment notice filter persists"),Binder->FloatyChatFilters[1]&Appraisal,0ull);
+        for(int32 W=0;W<5;++W)Binder->ChatDisplayLines[W].Reset();
+        Binder->HandleChatMessage(TEXT("Fellow tried and failed to assess you!"),TEXT(""),ACEChatMessageType::Appraisal);
+        TestEqual(TEXT("Incoming assessment notice is hidden in the filtered main window"),Binder->ChatDisplayLines[0].Num(),0);
+        TestEqual(TEXT("Unfiltered window still receives assessment notices"),Binder->ChatDisplayLines[1].Num(),1);
+        Binder->HandleChatMessage(TEXT("Equipment appraisal error"),TEXT(""),ACEChatMessageType::ChatError);
+        TestEqual(TEXT("Assessment filter retains important error messages"),Binder->ChatDisplayLines[0].Num(),1);
     }
 
     // Combat routing must use packet provenance, not the green Default color or

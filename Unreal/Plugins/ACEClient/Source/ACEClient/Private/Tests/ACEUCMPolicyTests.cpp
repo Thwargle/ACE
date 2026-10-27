@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "Misc/FileHelper.h"
 #include "Interfaces/IPluginManager.h"
 #include "Serialization/JsonSerializer.h"
@@ -878,7 +879,7 @@ bool FACEPluginEquipmentTest::RunTest(const FString&)
     // Exercise the native spell and inventory snapshots with real Void data,
     // including high-bit item GUIDs, selected equipment and component stacks.
     auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
-    if(!TestTrue(TEXT("DAT loads for native Void snapshot"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+    if(!TestTrue(TEXT("DAT loads for native Void snapshot"),Dat->LoadDatDirectory(ACETestDatDirectory())))return false;
     FACESkillInfo Void;Void.SkillId=43;Void.AdvancementClass=3;Void.Current=500;
     FACESkillInfo War;War.SkillId=34;War.AdvancementClass=1;War.Current=600;
     Session.PlayerVitals.Skills={Void,War};Session.PlayerVitals.bValid=true;
@@ -1313,7 +1314,7 @@ bool FACEUCMVoidCombatTest::RunTest(const FString&)
     const int32 Categories[]={638,636,637};
     const TCHAR* Names[]={TEXT("Corruption"),TEXT("Destructive Curse"),TEXT("Corrosion")};
     auto* Dat=NewObject<UACEDatSubsystem>(NewObject<UGameInstance>());
-    if (!TestTrue(TEXT("Retail spells load"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+    if (!TestTrue(TEXT("Retail spells load"),Dat->LoadDatDirectory(ACETestDatDirectory()))) return false;
     ON_SCOPE_EXIT { Dat->Deinitialize(); };
     // Use the actual DAT flags, spell families and component requirements. The
     // hand-authored fixtures below cannot catch errors at that boundary.

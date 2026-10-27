@@ -13,6 +13,40 @@ bool FACEUCMSchedulingTest::RunTest(const FString&)
  FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
  auto Snapshot=[&](){return Json(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"action_serial":0,"action_error":0,"container":0,"teleport_sequence":1,"position":{"cell":30998795,"x":30,"y":-34,"z":0},"spells":[],"targets":[],"inventory":[{"id":99,"wcid":99,"count":1,"type":1,"equipped":true,"identified":true,"can_wield":true,"weapon_skill":47,"damage":10,"name":"Sword"},{"id":51,"wcid":51,"name":"Potion","type":32,"identified":true,"usable":true,"count":5,"boost_vital":2,"boost":50}]})"));};
  auto Step=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
+ // Repeated successful assessments must not accumulate into a combat failure.
+ // Actual descriptor/resource changes can require the same weapon/ammo again.
+ for(bool Ammunition:{false,true})
+ {
+  FACEPluginVM VM;TestTrue(TEXT("Appraisal policy loads"),VM.Load(Source,Error));auto S=Snapshot();
+  auto P=Json(TEXT(R"({"buffing":false,"recovery":false,"combat":"melee","looting":false,"item_mana":false})"));
+  S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":500,"name":"Rat","distance":1,"identified":true,"line_of_sight":true})")))});
+  auto Item=S->GetArrayField(TEXT("inventory"))[0]->AsObject();
+  if(Ammunition)
+  {
+   P->SetStringField(TEXT("combat"),TEXT("missile"));
+   Item->SetNumberField(TEXT("type"),256);Item->SetNumberField(TEXT("ammo_type"),1);
+   auto Ammo=Json(TEXT(R"({"id":100,"wcid":100,"name":"Greater Deadly Blunt Atlatl Dart","count":100,"type":256,"slots":8388608,"ammo_type":1,"equipped":true,"identified":true,"can_wield":true,"damage":30,"damage_type":2})"));
+   auto Inventory=S->GetArrayField(TEXT("inventory"));Inventory.Add(MakeShared<FJsonValueObject>(Ammo));S->SetArrayField(TEXT("inventory"),Inventory);Item=Ammo;
+  }
+  for(int Cycle=0;Cycle<6;++Cycle)
+  {
+   S->SetNumberField(TEXT("time"),100.+Cycle*40);Item->SetBoolField(TEXT("identified"),false);
+   auto I=Step(VM,S,P);
+   TestEqual(TEXT("A new appraisal cycle still requests the needed item"),I->GetStringField(TEXT("action")),FString(TEXT("identify")));
+   TestEqual(TEXT("Appraisal is for the selected equipment or its ammunition"),I->GetNumberField(TEXT("item")),Item->GetNumberField(TEXT("id")));
+   Item->SetBoolField(TEXT("identified"),true);S->SetNumberField(TEXT("time"),100.5+Cycle*40);
+   TestEqual(TEXT("Successful appraisal resumes combat without a five-second pause"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+  }
+  // Genuinely unanswered assessments remain bounded; no invented item stats.
+  Item->SetBoolField(TEXT("identified"),false);
+  for(int Attempt=0;Attempt<3;++Attempt)
+  {
+   S->SetNumberField(TEXT("time"),400.+Attempt*31);
+   TestEqual(TEXT("Consecutive missing replies allow only three requests"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("identify")));
+  }
+  S->SetNumberField(TEXT("time"),494);
+  TestEqual(TEXT("Missing equipment data still fails safely"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
+ }
  for(bool IdlePeace:{false,true})for(bool LootFirst:{false,true})for(bool Open:{false,true})
  {
   FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot();

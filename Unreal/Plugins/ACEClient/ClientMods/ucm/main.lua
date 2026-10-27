@@ -3154,6 +3154,14 @@ return function(s,p)
   history_cleanup_at=0
  end
  prune_history(s)
+ -- Count consecutive unresolved requests, not successful assessments over the
+ -- whole session. Loot receipt and real item changes may legitimately require
+ -- a fresh appraisal later, including the currently configured weapon/ammo.
+ for _,list in ipairs({s.inventory or {},s.contents or {},(s.buff_request or {}).equipment or {}}) do
+  for _,item in ipairs(list) do if item.identified then
+   local key='id'..item.id;item_attempts[key]=nil;until_time[key]=nil
+  end end
+ end
  buff_plan=nil
  local intent=run(s,p)
  if intent then

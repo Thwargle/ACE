@@ -1200,6 +1200,8 @@ struct ACECLIENT_API FACEWorldObject
 	GENERATED_BODY()
 	/** Transient event metadata: cached placement is not a fresh physics update. */
 	bool bAppearanceOnlyUpdate = false;
+	/** Transient event metadata: a wield/parent notification, not a new item description. */
+	bool bAttachmentOnlyUpdate = false;
 
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 Guid = 0;

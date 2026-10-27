@@ -7226,7 +7226,8 @@ void FACESession::HandleWieldItem(FACEBinaryReader& Reader)
 				{
 					Obj->PlacementId = HeldPlacement;
 				}
-				OnObjectCreated.Broadcast(*Obj);
+				FACEWorldObject AttachmentUpdate = *Obj; AttachmentUpdate.bAttachmentOnlyUpdate = true;
+				OnObjectCreated.Broadcast(AttachmentUpdate);
 			}
 		}
 		else
@@ -7405,7 +7406,8 @@ void FACESession::HandleParentEvent(FACEBinaryReader& Reader)
 		}
 		Obj->bHasPosition = false; // world origin comes from parent attachment
 		// Local wield ownership comes from WieldItem, not a physics attachment.
-		OnObjectCreated.Broadcast(*Obj);
+		FACEWorldObject AttachmentUpdate = *Obj; AttachmentUpdate.bAttachmentOnlyUpdate = true;
+		OnObjectCreated.Broadcast(AttachmentUpdate);
 	}
 }
 

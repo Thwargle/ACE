@@ -266,6 +266,53 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
     }
     H->RefreshAutomationData();
     {
+        const auto SavedObjects=Session.WorldObjects;const auto SavedAppraisals=H->Appraisals;
+        const auto SavedRequests=H->AppraisalRequests;const auto SavedSelection=Session.SelectedObject;
+        ON_SCOPE_EXIT {Session.WorldObjects=SavedObjects;H->Appraisals=SavedAppraisals;H->AppraisalRequests=SavedRequests;
+            Session.SelectedObject=SavedSelection;H->InventoryRevision=MAX_uint64;};
+        Session.WorldObjects.Empty();H->Appraisals.Empty();H->AppraisalRequests.Empty();
+        FACEWorldObject Owner;Owner.Guid=Session.PlayerGuid;Owner.bIsPlayer=true;Session.WorldObjects.Add(Owner.Guid,Owner);
+        FACEWorldObject Item;Item.Guid=9201;Item.ContainerId=Session.PlayerGuid;Item.ItemType=256;Item.Name=TEXT("Atlatl dart");
+        Session.WorldObjects.Add(Item.Guid,Item);
+        FACEAppraisalInfo Info;Info.ObjectGuid=Item.Guid;Info.bSuccess=true;Info.Damage=30;Info.DamageType=2;
+        H->ObserveAppraisal(Info);
+        for(int Shot=0;Shot<6;++Shot)
+        {
+            FACEBinaryWriter W;W.WriteUInt32(Item.Guid);W.WriteUInt32(ACEEquipMask::MissileAmmo);
+            FACEBinaryReader WR(W.GetData());Session.HandleWieldItem(WR);
+            FACEBinaryWriter Parent;Parent.WriteUInt32(Owner.Guid);Parent.WriteUInt32(Item.Guid);Parent.WriteUInt32(1);Parent.WriteUInt32(1);Parent.WriteUInt16(0);Parent.WriteUInt16(Shot*2+1);
+            FACEBinaryReader PR(Parent.GetData());Session.HandleParentEvent(PR);
+            TestTrue(TEXT("Reload/attachment retains assessed ammunition"),H->Appraisals.Contains(Item.Guid));
+            FACEBinaryWriter Pickup;Pickup.WriteUInt32(Item.Guid);Pickup.WriteUInt16(0);Pickup.WriteUInt16(Shot*2+2);
+            FACEBinaryReader RR(Pickup.GetData());Session.HandlePickupEvent(RR);
+            TestTrue(TEXT("Shot removes only the visual, not the ammunition appraisal"),H->Appraisals.Contains(Item.Guid));
+        }
+        // Held weapon wield and appearance updates use the same cache.
+        FACEBinaryWriter W;W.WriteUInt32(Item.Guid);W.WriteUInt32(ACEEquipMask::MissileWeapon);
+        FACEBinaryReader WR(W.GetData());Session.HandleWieldItem(WR);
+        TestTrue(TEXT("Switching the equipped weapon retains its appraisal"),H->Appraisals.Contains(Item.Guid));
+        auto Visual=Session.WorldObjects[Item.Guid];Visual.bAppearanceOnlyUpdate=true;Session.OnObjectCreated.Broadcast(Visual);
+        TestTrue(TEXT("Appearance-only changes retain owned item stats"),H->Appraisals.Contains(Item.Guid));
+        H->AppraisalRequests.Add(Item.Guid,FPlatformTime::Seconds());
+        Session.OnObjectCreated.Broadcast(Session.WorldObjects[Item.Guid]);
+        TestFalse(TEXT("A real replacement description still invalidates appraisal"),H->Appraisals.Contains(Item.Guid));
+        TestFalse(TEXT("Replacement data can be appraised immediately"),H->AppraisalRequests.Contains(Item.Guid));
+        H->ObserveAppraisal(Info);Session.WorldObjects.Remove(Item.Guid);Session.OnObjectDeleted.Broadcast(Item.Guid);
+        TestFalse(TEXT("Actual removal discards the item's appraisal"),H->Appraisals.Contains(Item.Guid));
+
+        FACEWorldObject Player;Player.Guid=9202;Player.bIsPlayer=true;Player.ItemType=ACEItemType::Creature;
+        Player.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;Session.WorldObjects.Add(Player.Guid,Player);
+        Session.SelectedObject.Guid=Player.Guid;
+        for(int Scan=0;Scan<3;++Scan)
+        {
+            H->NextAppraisalScan=0;H->LastAppraisalRequest=0;H->RefreshAutomationData();
+            TestFalse(TEXT("Selecting a fellow player never schedules UCM appraisal"),H->AppraisalRequests.Contains(Player.Guid));
+        }
+        Session.WorldObjects[Player.Guid].bIsPlayer=false;
+        H->NextAppraisalScan=0;H->LastAppraisalRequest=0;H->RefreshAutomationData();
+        TestTrue(TEXT("Selected enemies still receive background appraisal"),H->AppraisalRequests.Contains(Player.Guid));
+    }
+    {
         TestTrue(TEXT("Native vitals view uses session storage"),&C->GetPlayerVitalsView()==&Session.GetPlayerVitals());
         H->DrawRoute();TestNull(TEXT("No route does not allocate a world actor"),H->RouteActor.Get());
         // A fully appraised inventory previously rescanned at render frequency.
