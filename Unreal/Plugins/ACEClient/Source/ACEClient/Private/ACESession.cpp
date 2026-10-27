@@ -5206,6 +5206,10 @@ void FACESession::SendBuyItems(int32 VendorGuid, const TArray<TPair<int32, int32
 		W.WriteInt32(Pair.Key);   // amount
 		W.WriteUInt32(static_cast<uint32>(Pair.Value)); // objectID
 	}
+	// Retail CM_Vendor::Event_Buy (006AA0F0) always appends this field,
+	// including zero for pyreals. Stock ACE ignores it, but servers that read
+	// the complete retail request cannot process a packet without the trailer.
+	W.WriteUInt32(VendorCurrencyWeenie);
 	SendGameAction(ACEGameAction::Buy, W.GetData(), ACEQueue::WeenieQueue);
 }
 
