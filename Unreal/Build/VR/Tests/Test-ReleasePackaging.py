@@ -111,6 +111,43 @@ class ReleasePackagingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'must ship separately'):
             build.verify_client_plugin_boundary(windows)
 
+    def phone_fixture(self):
+        self.fixture(version=142)
+        self.args.android_version = self.args.windows_version
+        apk = put(self.root, 'Mobile/Packaged/Android_ASTC/ACUnreal-arm64.apk', b'phone APK fixture')
+        manifest = {'package': 'com.acecommunity.acunreal.mobile', 'versionCode': 142,
+                    'version': self.args.android_version, 'bytes': apk.stat().st_size,
+                    'sha256': build.sha(apk)}
+        put(self.root, 'Mobile/Packaged/android-manifest.json', json.dumps(manifest))
+        return apk
+
+    def test_android_preview_has_separate_artifact_and_update_channel(self):
+        apk = self.phone_fixture()
+        release, meta = self.assemble()
+        public = self.publish_local(release)
+        self.assertEqual(meta['android']['file'], 'AC-Unreal-Android-v142.apk')
+        self.assertEqual((release / meta['android']['file']).read_bytes(), apk.read_bytes())
+        self.assertIn(meta['android']['file'], (release / 'SHA256SUMS.txt').read_text())
+        self.assertEqual(public['androidVersion'], self.args.android_version)
+        self.assertEqual(public['date'], '2026-09-30', 'Release date follows the build version across UTC midnight')
+        self.assertTrue(public['androidPreview'])
+        self.assertEqual(public['updates']['android'], meta['android'])
+        self.assertEqual(public['updates']['quest'], meta['questApk'])
+        self.assertNotEqual(public['updates']['android'], public['updates']['quest'])
+
+    def test_android_stale_build_rejected_before_release_is_created(self):
+        apk = self.phone_fixture()
+        apk.write_bytes(b'changed after verification')
+        with self.assertRaisesRegex(ValueError, 'Android APK differs'):
+            self.assemble()
+        self.assertFalse((self.root / 'Releases').exists())
+
+    def test_android_version_must_match_shared_release(self):
+        self.phone_fixture()
+        self.args.android_version = '2026.09.30.141'
+        with self.assertRaisesRegex(ValueError, 'Android must display'):
+            self.assemble()
+
     def test_release_reports_catalog_lua_api_versions(self):
         self.fixture()
         _, meta = self.assemble()

@@ -9,6 +9,7 @@
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
+#include "Mobile/ACEMobileWidget.h"
 #include "ACERuntimeOptions.h"
 #include "UI/ACEUIElementManager.h"
 #include "Engine/GameInstance.h"
@@ -434,7 +435,7 @@ void UACEPluginSubsystem::UpdateDesktopDock()
     auto* GI=GetGameInstance();auto* V=GI->GetGameViewportClient();
     auto* PC=Cast<AACEPlayerController>(GI->GetFirstLocalPlayerController());
     auto* C=GI->GetSubsystem<UACEClientSubsystem>();
-    if(!V||!PC||!C||C->GetSessionState()!=EACESessionState::InWorld||PC->IsVRActive())
+    if(!V||!PC||!C||C->GetSessionState()!=EACESessionState::InWorld||PC->IsVRActive()||PC->IsMobileActive())
     {RemoveDesktopDock();return;}
     if(!DesktopDock)
     {
@@ -453,9 +454,23 @@ void UACEPluginSubsystem::RemoveDesktopDock()
     DesktopDock.Reset();
 }
 void UACEPluginSubsystem::TogglePluginWindow(const FString& Id)
-{UpdateDesktopDock();if(DesktopDock)DesktopDock->Toggle(Id);}
+{
+    if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());PC && PC->IsMobileActive() && PC->MobileWidget)
+    {
+        const FName Page(*(TEXT("Plugin:")+Id));
+        if(PC->MobileWidget->Panel==Page)PC->MobileWidget->ClosePanel();
+        else if(PC->MobileWidget->IsHUDPluginVisible(Id))PC->MobileWidget->ToggleHUDPlugin(Id);
+        else PC->MobileWidget->OpenPanel(Page);
+        return;
+    }
+    UpdateDesktopDock();if(DesktopDock)DesktopDock->Toggle(Id);
+}
 bool UACEPluginSubsystem::IsPluginWindowOpen(const FString& Id) const
-{return DesktopDock&&DesktopDock->IsOpen(Id);}
+{
+    if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());PC && PC->IsMobileActive() && PC->MobileWidget)
+        return PC->MobileWidget->Panel==FName(*(TEXT("Plugin:")+Id)) || PC->MobileWidget->IsHUDPluginVisible(Id);
+    return DesktopDock&&DesktopDock->IsOpen(Id);
+}
 bool UACEPluginSubsystem::IsPointInsidePluginWindow(const FString& Id,FVector2D Absolute) const
 {return DesktopDock&&DesktopDock->ContainsPoint(Id,Absolute);}
 bool UACEPluginSubsystem::WasPluginWindowOpen(const FString& Id) const

@@ -1,4 +1,6 @@
 #include "ACELoginWidget.h"
+#include "Mobile/ACEMobileSettings.h"
+#include "Components/SafeZone.h"
 #include "ACEDesktopDisplay.h"
 #include "ACEPlayerController.h"
 #include "UI/ACERetailTextBlock.h"
@@ -143,9 +145,9 @@ UACELoginActionButton* UACELoginWidget::ActionButton(const FString& Title, const
 	B->Action = Action; B->Value = Value; B->Owner = this;
 	B->OnClicked.AddDynamic(B, &UACELoginActionButton::HandleAction);
 	ButtonStyle(B, bAccent);
-	auto* T = Label(Title, 18); T->SetAutoWrapText(false); T->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
+	auto* T = Label(Title, UACEMobileSettings::IsEnabled()?22:18); T->SetAutoWrapText(false); T->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
 	T->SetJustification(ETextJustify::Center);
-	auto* Size = WidgetTree->ConstructWidget<USizeBox>(); Size->SetMinDesiredHeight(26);
+	auto* Size = WidgetTree->ConstructWidget<USizeBox>(); Size->SetMinDesiredHeight(UACEMobileSettings::IsEnabled()?48:26);
 	Size->SetContent(T); Cast<USizeBoxSlot>(T->Slot)->SetVerticalAlignment(VAlign_Center);
 	B->SetContent(Size);
 	return B;
@@ -179,6 +181,8 @@ void UACELoginWidget::EnsureDefaultLayout()
 	SetIsFocusable(true); SetVisibility(ESlateVisibility::Visible);
 	ResponsiveScale=WidgetTree->ConstructWidget<UScaleBox>(); ResponsiveScale->SetStretch(EStretch::UserSpecified);
 	WidgetTree->RootWidget=ResponsiveScale;
+    if(UACEMobileSettings::IsEnabled())
+    {auto* Safe=WidgetTree->ConstructWidget<USafeZone>();Safe->SetContent(ResponsiveScale);WidgetTree->RootWidget=Safe;}
 	auto* Canvas = WidgetTree->ConstructWidget<UCanvasPanel>(); ResponsiveScale->SetContent(Canvas);
 	// UScaleBoxSlot defaults to Center, which would allocate only the canvas's
 	// tiny desired size instead of the viewport and clip all anchored controls.
@@ -193,9 +197,16 @@ void UACELoginWidget::EnsureDefaultLayout()
 	auto* DashboardSlot = Canvas->AddChildToCanvas(DashboardSize); DashboardSlot->SetAnchors(FAnchors(.5f,0,.5f,1));
 	DashboardSlot->SetOffsets(FMargin(-526,24,1052,64));
 	auto* Root = WidgetTree->ConstructWidget<UVerticalBox>(); DashboardSize->SetContent(Root);
+    if(UACEMobileSettings::IsEnabled())
+    {
+        // Short landscape screens scroll the readable launcher instead of
+        // scaling all text/buttons down to fit a desktop-height dashboard.
+        auto* TouchScroll=WidgetTree->ConstructWidget<UScrollBox>();
+        DashboardSize->SetContent(TouchScroll);TouchScroll->AddChild(Root);
+    }
 	auto* Heading = WidgetTree->ConstructWidget<UHorizontalBox>(); AddLine(Root,Heading,16);
 #if PLATFORM_ANDROID
-	auto* Brand = Label(TEXT("AC:VR"), 34);
+    auto* Brand = Label(UACEMobileSettings::IsEnabled()?TEXT("AC:Unreal Mobile"):TEXT("AC:VR"), 34);
 #else
 	auto* Brand = Label(TEXT("AC:Unreal"), 34);
 #endif
@@ -311,7 +322,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	Row(Files,{{TEXT("Save location"),TEXT("savedat")},{TEXT("Use default"),TEXT("defaultdat")}});
 #else
 	Row(Files,{{TEXT("Save location"),TEXT("savedat")},{TEXT("Use app DAT folder"),TEXT("defaultdat")}});
-	AddLine(Files,Label(PLATFORM_LINUX ? TEXT("Enter an absolute Linux folder path. DAT filenames are case sensitive.") : TEXT("On Quest, the folder must be accessible to this app. The installer uses the app's DAT folder."),18,true),20);
+	AddLine(Files,Label(PLATFORM_LINUX ? TEXT("Enter an absolute Linux folder path. DAT filenames are case sensitive.") : TEXT("The folder must be accessible to this app. The Android installer uses the app's DAT folder."),18,true),20);
 #endif
 	FileStatus=Label(TEXT(""),20); AddLine(Files,FileStatus,24);
 	AddLine(Files,Label(TEXT("Changing an already-loaded installation takes effect after restarting. No game files are moved or copied."),18,true));
@@ -353,7 +364,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	DownloadUpdateButton=ActionButton(TEXT("Download update"),TEXT("downloadupdate"),FString(),true); UpdateActions->AddChildToWrapBox(DownloadUpdateButton);
 	InstallUpdateButton=ActionButton(PLATFORM_ANDROID?TEXT("Install"):TEXT("Install and restart"),TEXT("installupdate"),FString(),true); UpdateActions->AddChildToWrapBox(InstallUpdateButton);
 	CancelUpdateButton=ActionButton(TEXT("Cancel update"),TEXT("cancelupdate")); UpdateActions->AddChildToWrapBox(CancelUpdateButton);
-	UpdateInstallHelp=Label(ACEUpdates::InstallationNotice(PLATFORM_ANDROID),18,true); AddLine(Updates,UpdateInstallHelp);
+	UpdateInstallHelp=Label(UACEMobileSettings::IsEnabled()?TEXT("Android will ask you to confirm installation. Reopen AC:Unreal Mobile when it finishes; saved data is retained."):ACEUpdates::InstallationNotice(PLATFORM_ANDROID),18,true); AddLine(Updates,UpdateInstallHelp);
 	Row(Updates,{{TEXT("Release notes"),TEXT("updatenotes")},{TEXT("Back to play"),TEXT("play")}});
 	auto* PluginPanel=WidgetTree->ConstructWidget<UACEPluginPanel>();
 	Pages->AddChild(PluginPanel);
@@ -491,7 +502,7 @@ void UACELoginWidget::NativeTick(const FGeometry& Geometry, float Dt)
 	// Do not impose a minimum scale that would push controls off small screens.
 	const FVector2D View=Geometry.GetLocalSize();
 	if(View.X<=0 || View.Y<=0) return;
-	const float Scale=FMath::Clamp(float(FMath::Min(View.X/800.,View.Y/960.)),.1f,2.5f);
+	const float Scale=FMath::Clamp(float(UACEMobileSettings::IsEnabled()?FMath::Min(View.X/1052.,FMath::Max(View.Y,540.)/540.):FMath::Min(View.X/800.,View.Y/960.)),.1f,2.5f);
 	if (ResponsiveScale && !FMath::IsNearlyEqual(ResponsiveScale->GetUserSpecifiedScale(),Scale)) ResponsiveScale->SetUserSpecifiedScale(Scale);
 	const float Width=FMath::Clamp(float(View.X)/Scale-48.f,280.f,1160.f);
 	if (DashboardSize && !FMath::IsNearlyEqual(Width,LayoutWidth,1.f))
@@ -758,7 +769,7 @@ bool UACELoginWidget::ValidateGameFiles()
 	FString Message=FString::Printf(TEXT("Game files are missing or empty: %s.\nSearched folder: %s\n"),
 		*FString::Join(Missing,TEXT(", ")),Dir.IsEmpty()?TEXT("No folder selected"):*Dir);
 #if PLATFORM_ANDROID
-	Message+=TEXT("Close the game, connect your Quest to your computer, and run Repair-Quest.cmd from the extracted Quest installer to install the DAT files. Then reopen the game.");
+	Message+=UACEMobileSettings::IsEnabled()?TEXT("Install the game data with Mobile/Install-Android.ps1 from your computer, then reopen the app. Your phone and Quest installations are separate."):TEXT("Close the game, connect your Quest to your computer, and run Repair-Quest.cmd from the extracted Quest installer to install the DAT files. Then reopen the game.");
 #else
 	Message+=TEXT("Select the folder containing your Asheron's Call DAT files below, then click Save location and return to Play. If you have not installed the game data yet, install it first.");
 #endif

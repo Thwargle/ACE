@@ -173,6 +173,20 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
         Binder->HideTradePanel(false); Session.TradePartnerGuid=0; Session.TradeSelfItems.Reset();
         Session.OpenVendorGuid=Partner.Guid; Session.VendorItemTypes=MAX_uint32; Session.VendorMinValue=Session.VendorMaxValue=-1;
         Binder->ShowVendorPanel(Partner.Guid);
+        const auto Arrow=Manager->FindElementByName(TEXT("Menu_Vendor_SelectionWidget"));
+        auto CheckArrow=[&](bool Open)
+        {
+            const auto* Media=Arrow?Arrow->ResolvePaintState(false,false,false):nullptr;
+            TestTrue(TEXT("Vendor arrow has authored retail state media"),Media!=nullptr);
+            if(Media)TestEqual(TEXT("Vendor arrow direction follows popup visibility"),Media->ImageFileId,uint32(Open?0x060012B2:0x060012B1));
+        };
+        CheckArrow(false);
+        Binder->HandleNamedClick(TEXT("Menu_Vendor_SelectionWidget"));CheckArrow(true);
+        Binder->HandleNamedClick(TEXT("Menu_Vendor_SelectionWidget"));CheckArrow(false);
+        Binder->HandleNamedClick(TEXT("Menu_Vendor_SelectionWidget"));CheckArrow(true);
+        Binder->SetVendorItemTypeFilter(0);CheckArrow(false);
+        Binder->HandleNamedClick(TEXT("Menu_Vendor_SelectionWidget"));CheckArrow(true);
+        Binder->CloseVendorFilterDropdown();CheckArrow(false);
         for (float Scale:{1.f,1.25f,2.f})
         {
             TGuardValue<float> SX(Canvas->LastScaleX,Scale), SY(Canvas->LastScaleY,Scale);
@@ -185,6 +199,42 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
         }
         Binder->HideVendorPanel(); Session.OpenVendorGuid=0; Binder->VendorSellCart.Reset();
         Session.WorldObjects.Remove(Item.Guid); Session.WorldObjects.Remove(Partner.Guid);
+
+        Binder->ShowPanelPage(TEXT("QuestManagementPanel_Field"));
+        Binder->ActiveQuestTab=TEXT("ContractsPage");
+        Session.Contracts.Reset();Binder->RefreshQuestOverlays();
+        const auto Abandon=Manager->FindElementByName(TEXT("ContractAbandonButton"));
+        if(TestTrue(TEXT("Journal loads its Abandon button"),Abandon.IsValid()))
+        {
+            TestTrue(TEXT("No contract leaves Abandon disabled"),Abandon->bGhosted&&!Abandon->bActivatable);
+            for(int32 Stage:{1,2,3,8})
+            {
+                FACEContractEntry Contract;Contract.ContractId=17;Contract.Stage=Stage;
+                Session.Contracts={Contract};Binder->SelectedContractId=17;Binder->RefreshQuestOverlays();
+                TestTrue(TEXT("Available, active, complete and kill-count contracts can be abandoned"),!Abandon->bGhosted&&Abandon->bActivatable);
+                Manager->BringFloatyToFront(Abandon);
+                const FVector2D ViewSize(1600,900),Scale=Manager->GetCanvasScale(ViewSize);
+                const FVector2D Point=(FVector2D(Abandon->GetScreenOrigin())+FVector2D(Abandon->Width,Abandon->Height)*.5)*Scale;
+                Session.CachedC2SPackets.Reset();
+                Manager->NotifyMouseDown(Point,ViewSize,EKeys::LeftMouseButton);
+                Manager->NotifyMouseUp(Point,ViewSize,EKeys::LeftMouseButton);
+                int32 Requests=0;
+                for(const auto& Packet:Session.CachedC2SPackets)
+                {
+                    FACEBinaryReader Wire(Packet.Value.Payload);Wire.Skip(16);
+                    if(Wire.ReadUInt32()!=ACEOpcode::GameAction)continue;
+                    Wire.ReadUInt32();if(Wire.ReadUInt32()!=ACEGameAction::AbandonContract)continue;
+                    ++Requests;TestEqual(TEXT("Abandon click sends the selected contract"),Wire.ReadUInt32(),17u);
+                }
+                TestEqual(TEXT("Native pointer activation sends one abandon request"),Requests,1);
+                TestEqual(TEXT("Contract stays until server confirms deletion"),Session.Contracts.Num(),1);
+                FACEBinaryWriter Delete;Delete.WriteUInt32(1);Delete.WriteUInt32(17);Delete.WriteUInt32(Stage);
+                Delete.WriteDouble(0);Delete.WriteDouble(0);Delete.WriteUInt32(1);Delete.WriteUInt32(0);
+                FACEBinaryReader DR(Delete.GetData());Session.HandleContractTracker(DR);Binder->RefreshQuestOverlays();
+                TestTrue(TEXT("Server confirmation clears the contract and disables Abandon"),Session.Contracts.IsEmpty()&&Abandon->bGhosted);
+                TestEqual(TEXT("Removed contract is no longer selected"),Binder->SelectedContractId,0);
+            }
+        }
     }
 
     // Click the visible routing row, then deliver each wire LogTextType. Cover
@@ -237,6 +287,34 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
         TestEqual(TEXT("Unfiltered window still receives assessment notices"),Binder->ChatDisplayLines[1].Num(),1);
         Binder->HandleChatMessage(TEXT("Equipment appraisal error"),TEXT(""),ACEChatMessageType::ChatError);
         TestEqual(TEXT("Assessment filter retains important error messages"),Binder->ChatDisplayLines[0].Num(),1);
+    }
+
+    // Closing a chat window changes visibility, never its matching history.
+    {
+        TGuardValue<uint64> Global(Binder->GlobalChatTypeFilter,MAX_uint64);
+        TGuardValue<TArray<uint64>> Filters(Binder->FloatyChatFilters,Binder->FloatyChatFilters);
+        for(int32 W=1;W<=4;++W)
+        {
+            const auto Root=Manager->FindElementByName(FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"),W));
+            Root->bVisible=false;Binder->ClearChatLog(W);
+            Binder->FloatyChatFilters[W-1]=1ull<<ACEChatMessageType::Fellowship;
+        }
+        Binder->PlaceFloatyChatOverlays();
+        Binder->HandleChatMessage(TEXT("Message while every window is closed"),TEXT("Fellow"),ACEChatMessageType::Fellowship);
+        Binder->HandleChatMessage(TEXT("Filtered out while closed"),FString(),ACEChatMessageType::Combat);
+        for(int32 W=1;W<=4;++W)
+        {
+            auto* Log=Binder->GetChatLogWidget(W);
+            TestEqual(TEXT("Closed windows retain only messages matching their own filters"),Binder->ChatDisplayLines[W].Num(),1);
+            TestEqual(TEXT("Closed window's actual scrollback receives the message"),Log->GetChildrenCount(),1);
+            Manager->FindElementByName(FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"),W))->bVisible=true;
+        }
+        Binder->PlaceFloatyChatOverlays();
+        for(int32 W=1;W<=4;++W)
+        {
+            TestEqual(TEXT("Opening retained history does not duplicate messages"),Binder->GetChatLogWidget(W)->GetChildrenCount(),1);
+            Binder->ClearChatLog(W);TestTrue(TEXT("Explicit Clear still removes retained history"),Binder->ChatDisplayLines[W].IsEmpty());
+        }
     }
 
     // Combat routing must use packet provenance, not the green Default color or

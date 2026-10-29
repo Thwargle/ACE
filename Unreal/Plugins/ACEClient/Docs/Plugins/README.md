@@ -638,6 +638,16 @@ Skip or an already satisfied quantity cap. Unmatched items remain on the corpse.
 Use **Edit**, **Enable/Disable**, **Up/Down** and **Remove** on rule cards. Changing
 rules stops UCM; press Start to use the new set consistently.
 
+The Loot tab has two local chat notification switches, both on by default:
+**Announce looted rule matches** reports the item, quantity and matching rule
+after UCM confirms the item reached your inventory. **Announce selected or
+assessed matches** reports the first matching rule and its Keep, Skip, Salvage,
+Sell or Read action when you select an item or receive a successful assessment.
+The latter also works while UCM is stopped, provided the plugin is enabled.
+Unknown properties wait for a normal assessment; notifications never request
+additional assessments. Repeated assessments of the same item/rule are suppressed;
+reselecting an item tests it again. These messages are not sent to the server.
+
 For example, a Keep rule for Copper, workmanship 7–10, collects suitable copper
 items for later salvaging. A Skip rule for an exact item name above it protects
 that item from broader rules. A Keep rule with minimum value 10,000 and maximum

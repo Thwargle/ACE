@@ -132,6 +132,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEAutoCraftTest;
     friend class FACEUCMProfileStorageTest;
     friend class FACEUCMLootLatencyTest;
+    friend class FACEUCMLootNotificationTest;
     friend class FACEPluginLootIconsTest;
     friend class FACEUCMProfilePanelTest;
     friend class FACEUCMSharedMetaTest;
@@ -293,6 +294,19 @@ public:
     UFUNCTION() void ObserveAppraisal(const FACEAppraisalInfo& Info);
     void ObserveUseDone(uint32 Error);
     void ExtendSnapshot(const TSharedPtr<FJsonObject>& Out);
+    TSharedPtr<FJsonValue> PluginItemSnapshot(const FACEWorldObject& Item);
+    void QueueLootMatch(int32 Guid);
+    void TickLootNotifications();
+    void ShowLootNotification(const FString& Text);
+    TSharedPtr<class FACEPluginVM> LootMatchVM;
+    TWeakPtr<FJsonObject> LootMatchProfile;
+    TWeakPtr<class FACESession> LootMatchSession;
+    TSharedPtr<FJsonObject> LootMatchSnapshot;
+    TArray<int32> LootMatchQueue;
+    TMap<int32,FString> LootMatchReported;
+    int32 LootMatchSelection=0, LootMatchPlayer=0;
+    uint32 LootMatchSerial=0;
+    double LootMatchRevision=-1;
     bool HasClearCombatSight(const FACEWorldObject& Target) const;
     /** Plugin inspection/buffing includes both carried and equipped gear. */
     bool IsOwnedPluginItem(const FACEWorldObject& Item) const;

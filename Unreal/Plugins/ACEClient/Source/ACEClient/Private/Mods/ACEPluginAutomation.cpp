@@ -121,6 +121,7 @@ bool UACEPluginSubsystem::IsOwnedPluginItem(const FACEWorldObject& Item) const
 }
 void UACEPluginSubsystem::ObserveAppraisal(const FACEAppraisalInfo& Info)
 {
+    if(Info.bSuccess)QueueLootMatch(Info.ObjectGuid);
     TargetAppraisalTimes.Add(Info.ObjectGuid,FPlatformTime::Seconds());
     Appraisals.Add(Info.ObjectGuid,Info);DirtyInventoryAppraisals.Add(Info.ObjectGuid);++DataRevision;
     for(const auto& P:Plugins)if(P->WaitAction==TEXT("identify")&&P->WaitItem==Info.ObjectGuid)
@@ -657,6 +658,96 @@ void UACEPluginSubsystem::UpdateRouteVisibility(const FACEPosition& Position,
     if(!Pending)RouteVisibilityOffset=0;
 }
 
+TSharedPtr<FJsonValue> UACEPluginSubsystem::PluginItemSnapshot(const FACEWorldObject& Item)
+{
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    auto* Dat=GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
+    const auto& V=C->GetPlayerVitalsView();
+    auto J=MakeShared<FJsonObject>();J->SetNumberField(TEXT("id"),uint32(Item.Guid));J->SetNumberField(TEXT("wcid"),Item.WeenieClassId);
+    J->SetStringField(TEXT("name"),ACERetailObjectNames::Name(Item));J->SetNumberField(TEXT("type"),uint32(Item.ItemType));J->SetNumberField(TEXT("icon"),uint32(Item.IconId));
+    J->SetNumberField(TEXT("icon_overlay"),uint32(Item.IconOverlayId));J->SetNumberField(TEXT("icon_underlay"),uint32(Item.IconUnderlayId));J->SetNumberField(TEXT("ui_effects"),uint32(Item.UiEffects));
+    J->SetNumberField(TEXT("object_class"),ACEVTObjectClass::Classify(Item));
+    J->SetNumberField(TEXT("material"),Item.MaterialType);J->SetNumberField(TEXT("value"),Item.Value);J->SetNumberField(TEXT("count"),FMath::Max(1,Item.StackSize));
+    J->SetNumberField(TEXT("max_stack"),Item.MaxStackSize);J->SetNumberField(TEXT("container"),uint32(Item.ContainerId));
+    J->SetNumberField(TEXT("spell"),Item.SpellDID);
+    if(ACEVTObjectClass::Classify(Item)==42&&Item.SpellDID)
+    {
+        uint32 School=0,Power=0,Category=0,Flags=0;double Duration=0;
+        if(Dat->TryGetPluginSpellInfo(Item.SpellDID,School,Power,Category,Flags,Duration))
+        {
+            J->SetBoolField(TEXT("scroll_can_learn"),ACEScrollLearning::CanLearn(Power,School,V));
+        }
+    }
+    J->SetNumberField(TEXT("slots"),Item.ValidLocations);
+    J->SetBoolField(TEXT("auto_wield_left"),(Item.ObjectDescriptionFlags&ACEObjectDescFlag::WieldLeft)!=0);
+    TArray<TSharedPtr<FJsonValue>> Palettes;for(const auto& Palette:Item.Appearance.SubPalettes)Palettes.Add(MakeShared<FJsonValueNumber>(uint32(Palette.SubPaletteId)));J->SetArrayField(TEXT("palettes"),Palettes);
+    J->SetNumberField(TEXT("burden"),Item.Burden);
+    J->SetNumberField(TEXT("structure"),Item.Structure);J->SetNumberField(TEXT("max_structure"),Item.MaxStructure);J->SetBoolField(TEXT("retained"),(Item.ObjectDescriptionFlags&ACEObjectDescFlag::Retained)!=0);
+    J->SetNumberField(TEXT("icon_effects"),Item.UiEffects);
+    if(Item.SalvageWorkmanship>=0)J->SetNumberField(TEXT("workmanship"),Item.SalvageWorkmanship);
+    const bool Equipped=Item.WielderId==C->GetPlayerGuid() || (Item.CurrentWieldedLocation && Item.ParentGuid==C->GetPlayerGuid());
+    J->SetBoolField(TEXT("equipped"),Equipped);J->SetNumberField(TEXT("ammo_type"),Item.AmmoType);
+    J->SetBoolField(TEXT("resource_available"),LootItemAvailable(C,Item));
+    J->SetBoolField(TEXT("salvage_tool_available"),SalvageToolAvailable(C,Item));
+    J->SetNumberField(TEXT("equipped_slot"),uint32(Item.CurrentWieldedLocation));
+    J->SetBoolField(TEXT("targeted"),ACEItemUseable::IsTargeted(Item.ItemUseable));J->SetBoolField(TEXT("usable"),ACEInventoryRules::IsUsable(Item.ItemUseable));
+    J->SetBoolField(TEXT("healing_kit"),(Item.ObjectDescriptionFlags&0x10000)!=0); // Retail Healer descriptor.
+    const auto* A=Appraisals.Find(Item.Guid);J->SetBoolField(TEXT("identified"),A&&A->bSuccess);
+    J->SetBoolField(TEXT("pet_device"),ACEPetDevice::IsSummoningDevice(A));
+    auto Ints=MakeShared<FJsonObject>(),Floats=MakeShared<FJsonObject>(),Strings=MakeShared<FJsonObject>();
+    Ints->SetNumberField(TEXT("19"),Item.Value);Ints->SetNumberField(TEXT("5"),Item.Burden);Ints->SetNumberField(TEXT("131"),Item.MaterialType);
+    Strings->SetStringField(TEXT("1"),ACERetailObjectNames::Name(Item));
+    // Public description aliases used by Decal; these are not server property IDs.
+    // VT g6.e stores the packed icon/overlay/underlay indices from PublicWeenieDesc.
+    // Our parser adds the texture DID prefix for rendering. Remove it only for
+    // these aliases (e.g. a level-4 overlay is 27703, not 0x06006C37). Keep all
+    // 24 index bits for custom DATs, and leave the native/rendering IDs intact.
+    auto IconIndex=[](int32 Id){return uint32(Id)&0x00ffffffu;};
+    const TPair<int64,int64> PublicInts[]={{218103808,Item.WeenieClassId},{218103809,IconIndex(Item.IconId)},{218103810,uint32(Item.ContainerId)},{218103811,uint32(Item.Position.CellId)>>16},{218103812,Item.ItemsCapacity},{218103813,Item.ContainersCapacity},{218103814,FMath::Max(1,Item.StackSize)},{218103815,Item.MaxStackSize},{218103816,Item.SpellDID},{218103818,uint32(Item.WielderId)},{218103819,Item.CurrentWieldedLocation},{218103821,Item.ClothingPriority},{218103822,Item.ValidLocations},{218103823,Item.CombatUse},{218103824,Item.UiEffects},{218103825,Item.AmmoType},{218103826,Item.ItemUseable},{218103834,uint32(Item.ItemType)},{218103835,uint32(Item.ObjectDescriptionFlags)},{218103849,IconIndex(Item.IconOverlayId)},{218103850,IconIndex(Item.IconUnderlayId)}};
+    for(const auto& Pair:PublicInts)Ints->SetNumberField(FString::Printf(TEXT("%lld"),Pair.Key),Pair.Value);
+    if(Item.SalvageWorkmanship>=0)Floats->SetNumberField(TEXT("167772169"),Item.SalvageWorkmanship);
+    if(A&&A->bSuccess)
+    {
+        for(const auto& Prop:A->IntProperties)Ints->SetNumberField(FString::FromInt(Prop.Key),Prop.Value);
+        for(const auto& Prop:A->FloatProperties)Floats->SetNumberField(FString::FromInt(Prop.Key),Prop.Value);
+        for(const auto& Prop:A->StringProperties)Strings->SetStringField(FString::FromInt(Prop.Key),Prop.Value.Left(1024));
+        if(A->bHasWeaponProfile)
+        {
+            Ints->SetNumberField(TEXT("218103839"),A->WeaponTime);Ints->SetNumberField(TEXT("218103840"),A->WeaponSkill);
+            Ints->SetNumberField(TEXT("218103841"),A->DamageType);Ints->SetNumberField(TEXT("218103842"),A->Damage);
+            Floats->SetNumberField(TEXT("167772171"),A->DamageVariance);Floats->SetNumberField(TEXT("167772172"),A->WeaponOffense);
+            Floats->SetNumberField(TEXT("167772173"),A->WeaponMaxVelocity);Floats->SetNumberField(TEXT("167772174"),A->WeaponDamageMod);
+        }
+        Ints->SetNumberField(TEXT("218103838"),A->SpellIds.Num());
+        for(int Index=0;Index<A->ArmorResistances.Num()&&Index<7;++Index)Floats->SetNumberField(FString::FromInt(167772160+Index),A->ArmorResistances[Index]);
+        TArray<TSharedPtr<FJsonValue>> SpellNames,SpellIds;
+        for(int32 Id:A->SpellIds){SpellIds.Add(MakeShared<FJsonValueNumber>(Id));FString Name;uint32 Icon=0;if(Dat->TryGetSpellInfo(uint32(Id),Name,Icon))SpellNames.Add(MakeShared<FJsonValueString>(Name));}
+        J->SetArrayField(TEXT("spell_names"),SpellNames);
+        J->SetArrayField(TEXT("spell_ids"),SpellIds);
+    }
+    J->SetObjectField(TEXT("int_properties"),Ints);J->SetObjectField(TEXT("float_properties"),Floats);J->SetObjectField(TEXT("string_properties"),Strings);
+
+    if(A&&A->bSuccess)
+    {
+        J->SetBoolField(TEXT("can_wield"),Equipped||Wieldable(*A,V));
+        if(Item.SalvageWorkmanship<0)if(const auto* W=A->IntProperties.Find(105))
+            J->SetNumberField(TEXT("workmanship"),double(*W)/FMath::Max(1,A->IntProperties.FindRef(170)));
+        J->SetNumberField(TEXT("damage_type"),A->DamageType);J->SetNumberField(TEXT("damage"),A->Damage);
+        J->SetNumberField(TEXT("damage_mod"),A->WeaponDamageMod);J->SetNumberField(TEXT("weapon_time"),A->WeaponTime);
+        J->SetNumberField(TEXT("weapon_skill"),A->WeaponSkill);J->SetNumberField(TEXT("variance"),A->DamageVariance);
+        J->SetNumberField(TEXT("weapon_type"),A->IntProperties.FindRef(353));J->SetNumberField(TEXT("attack_type"),A->IntProperties.FindRef(47));
+        J->SetNumberField(TEXT("slayer"),A->IntProperties.FindRef(166));J->SetNumberField(TEXT("slayer_mod"),A->FloatProperties.FindRef(138));
+        J->SetNumberField(TEXT("element_mod"),A->FloatProperties.FindRef(152));
+        J->SetNumberField(TEXT("boost_vital"),A->IntProperties.FindRef(89));J->SetNumberField(TEXT("boost"),A->IntProperties.FindRef(90));
+        if(const double* HealMod=A->FloatProperties.Find(100))J->SetNumberField(TEXT("heal_mod"),*HealMod);
+        J->SetNumberField(TEXT("mana"),A->IntProperties.FindRef(107));J->SetNumberField(TEXT("max_mana"),A->IntProperties.FindRef(108));
+        J->SetBoolField(TEXT("mana_empty"),A->IntProperties.FindRef(107)<=0);
+        if(const auto* Rating=A->IntProperties.Find(307))J->SetNumberField(TEXT("damage_rating"),*Rating);
+        J->SetNumberField(TEXT("armor"),A->IntProperties.FindRef(28));
+        J->SetNumberField(TEXT("spell"),Item.SpellDID);
+    }
+    return MakeShared<FJsonValueObject>(J);
+}
 void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
 {
     TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginSnapshot);
@@ -774,93 +865,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
     Out->SetObjectField(TEXT("skills"),SkillStats);
     Out->SetArrayField(TEXT("trained_skills"),Skills);
     Out->SetArrayField(TEXT("usable_skills"),UsableSkills);
-    auto ItemJson=[&](const FACEWorldObject& Item)
-    {
-        auto J=MakeShared<FJsonObject>();J->SetNumberField(TEXT("id"),uint32(Item.Guid));J->SetNumberField(TEXT("wcid"),Item.WeenieClassId);
-        J->SetStringField(TEXT("name"),ACERetailObjectNames::Name(Item));J->SetNumberField(TEXT("type"),uint32(Item.ItemType));J->SetNumberField(TEXT("icon"),uint32(Item.IconId));
-        J->SetNumberField(TEXT("icon_overlay"),uint32(Item.IconOverlayId));J->SetNumberField(TEXT("icon_underlay"),uint32(Item.IconUnderlayId));J->SetNumberField(TEXT("ui_effects"),uint32(Item.UiEffects));
-        J->SetNumberField(TEXT("object_class"),ACEVTObjectClass::Classify(Item));
-        J->SetNumberField(TEXT("material"),Item.MaterialType);J->SetNumberField(TEXT("value"),Item.Value);J->SetNumberField(TEXT("count"),FMath::Max(1,Item.StackSize));
-        J->SetNumberField(TEXT("max_stack"),Item.MaxStackSize);J->SetNumberField(TEXT("container"),uint32(Item.ContainerId));
-        J->SetNumberField(TEXT("spell"),Item.SpellDID);
-        if(ACEVTObjectClass::Classify(Item)==42&&Item.SpellDID)
-        {
-            uint32 School=0,Power=0,Category=0,Flags=0;double Duration=0;
-            if(Dat->TryGetPluginSpellInfo(Item.SpellDID,School,Power,Category,Flags,Duration))
-            {
-                J->SetBoolField(TEXT("scroll_can_learn"),ACEScrollLearning::CanLearn(Power,School,V));
-            }
-        }
-        J->SetNumberField(TEXT("slots"),Item.ValidLocations);
-        J->SetBoolField(TEXT("auto_wield_left"),(Item.ObjectDescriptionFlags&ACEObjectDescFlag::WieldLeft)!=0);
-        TArray<TSharedPtr<FJsonValue>> Palettes;for(const auto& Palette:Item.Appearance.SubPalettes)Palettes.Add(MakeShared<FJsonValueNumber>(uint32(Palette.SubPaletteId)));J->SetArrayField(TEXT("palettes"),Palettes);
-        J->SetNumberField(TEXT("burden"),Item.Burden);
-        J->SetNumberField(TEXT("structure"),Item.Structure);J->SetNumberField(TEXT("max_structure"),Item.MaxStructure);J->SetBoolField(TEXT("retained"),(Item.ObjectDescriptionFlags&ACEObjectDescFlag::Retained)!=0);
-        J->SetNumberField(TEXT("icon_effects"),Item.UiEffects);
-        if(Item.SalvageWorkmanship>=0)J->SetNumberField(TEXT("workmanship"),Item.SalvageWorkmanship);
-        const bool Equipped=Item.WielderId==C->GetPlayerGuid() || (Item.CurrentWieldedLocation && Item.ParentGuid==C->GetPlayerGuid());
-        J->SetBoolField(TEXT("equipped"),Equipped);J->SetNumberField(TEXT("ammo_type"),Item.AmmoType);
-        J->SetBoolField(TEXT("resource_available"),LootItemAvailable(C,Item));
-        J->SetBoolField(TEXT("salvage_tool_available"),SalvageToolAvailable(C,Item));
-        J->SetNumberField(TEXT("equipped_slot"),uint32(Item.CurrentWieldedLocation));
-        J->SetBoolField(TEXT("targeted"),ACEItemUseable::IsTargeted(Item.ItemUseable));J->SetBoolField(TEXT("usable"),ACEInventoryRules::IsUsable(Item.ItemUseable));
-        J->SetBoolField(TEXT("healing_kit"),(Item.ObjectDescriptionFlags&0x10000)!=0); // Retail Healer descriptor.
-        const auto* A=Appraisals.Find(Item.Guid);J->SetBoolField(TEXT("identified"),A&&A->bSuccess);
-        J->SetBoolField(TEXT("pet_device"),ACEPetDevice::IsSummoningDevice(A));
-        auto Ints=MakeShared<FJsonObject>(),Floats=MakeShared<FJsonObject>(),Strings=MakeShared<FJsonObject>();
-        Ints->SetNumberField(TEXT("19"),Item.Value);Ints->SetNumberField(TEXT("5"),Item.Burden);Ints->SetNumberField(TEXT("131"),Item.MaterialType);
-        Strings->SetStringField(TEXT("1"),ACERetailObjectNames::Name(Item));
-        // Public description aliases used by Decal; these are not server property IDs.
-        // VT g6.e stores the packed icon/overlay/underlay indices from PublicWeenieDesc.
-        // Our parser adds the texture DID prefix for rendering. Remove it only for
-        // these aliases (e.g. a level-4 overlay is 27703, not 0x06006C37). Keep all
-        // 24 index bits for custom DATs, and leave the native/rendering IDs intact.
-        auto IconIndex=[](int32 Id){return uint32(Id)&0x00ffffffu;};
-        const TPair<int64,int64> PublicInts[]={{218103808,Item.WeenieClassId},{218103809,IconIndex(Item.IconId)},{218103810,uint32(Item.ContainerId)},{218103811,uint32(Item.Position.CellId)>>16},{218103812,Item.ItemsCapacity},{218103813,Item.ContainersCapacity},{218103814,FMath::Max(1,Item.StackSize)},{218103815,Item.MaxStackSize},{218103816,Item.SpellDID},{218103818,uint32(Item.WielderId)},{218103819,Item.CurrentWieldedLocation},{218103821,Item.ClothingPriority},{218103822,Item.ValidLocations},{218103823,Item.CombatUse},{218103824,Item.UiEffects},{218103825,Item.AmmoType},{218103826,Item.ItemUseable},{218103834,uint32(Item.ItemType)},{218103835,uint32(Item.ObjectDescriptionFlags)},{218103849,IconIndex(Item.IconOverlayId)},{218103850,IconIndex(Item.IconUnderlayId)}};
-        for(const auto& Pair:PublicInts)Ints->SetNumberField(FString::Printf(TEXT("%lld"),Pair.Key),Pair.Value);
-        if(Item.SalvageWorkmanship>=0)Floats->SetNumberField(TEXT("167772169"),Item.SalvageWorkmanship);
-        if(A&&A->bSuccess)
-        {
-            for(const auto& Prop:A->IntProperties)Ints->SetNumberField(FString::FromInt(Prop.Key),Prop.Value);
-            for(const auto& Prop:A->FloatProperties)Floats->SetNumberField(FString::FromInt(Prop.Key),Prop.Value);
-            for(const auto& Prop:A->StringProperties)Strings->SetStringField(FString::FromInt(Prop.Key),Prop.Value.Left(1024));
-            if(A->bHasWeaponProfile)
-            {
-                Ints->SetNumberField(TEXT("218103839"),A->WeaponTime);Ints->SetNumberField(TEXT("218103840"),A->WeaponSkill);
-                Ints->SetNumberField(TEXT("218103841"),A->DamageType);Ints->SetNumberField(TEXT("218103842"),A->Damage);
-                Floats->SetNumberField(TEXT("167772171"),A->DamageVariance);Floats->SetNumberField(TEXT("167772172"),A->WeaponOffense);
-                Floats->SetNumberField(TEXT("167772173"),A->WeaponMaxVelocity);Floats->SetNumberField(TEXT("167772174"),A->WeaponDamageMod);
-            }
-            Ints->SetNumberField(TEXT("218103838"),A->SpellIds.Num());
-            for(int Index=0;Index<A->ArmorResistances.Num()&&Index<7;++Index)Floats->SetNumberField(FString::FromInt(167772160+Index),A->ArmorResistances[Index]);
-            TArray<TSharedPtr<FJsonValue>> SpellNames,SpellIds;
-            for(int32 Id:A->SpellIds){SpellIds.Add(MakeShared<FJsonValueNumber>(Id));FString Name;uint32 Icon=0;if(Dat->TryGetSpellInfo(uint32(Id),Name,Icon))SpellNames.Add(MakeShared<FJsonValueString>(Name));}
-            J->SetArrayField(TEXT("spell_names"),SpellNames);
-            J->SetArrayField(TEXT("spell_ids"),SpellIds);
-        }
-        J->SetObjectField(TEXT("int_properties"),Ints);J->SetObjectField(TEXT("float_properties"),Floats);J->SetObjectField(TEXT("string_properties"),Strings);
-
-        if(A&&A->bSuccess)
-        {
-            J->SetBoolField(TEXT("can_wield"),Equipped||Wieldable(*A,V));
-            if(Item.SalvageWorkmanship<0)if(const auto* W=A->IntProperties.Find(105))
-                J->SetNumberField(TEXT("workmanship"),double(*W)/FMath::Max(1,A->IntProperties.FindRef(170)));
-            J->SetNumberField(TEXT("damage_type"),A->DamageType);J->SetNumberField(TEXT("damage"),A->Damage);
-            J->SetNumberField(TEXT("damage_mod"),A->WeaponDamageMod);J->SetNumberField(TEXT("weapon_time"),A->WeaponTime);
-            J->SetNumberField(TEXT("weapon_skill"),A->WeaponSkill);J->SetNumberField(TEXT("variance"),A->DamageVariance);
-            J->SetNumberField(TEXT("weapon_type"),A->IntProperties.FindRef(353));J->SetNumberField(TEXT("attack_type"),A->IntProperties.FindRef(47));
-            J->SetNumberField(TEXT("slayer"),A->IntProperties.FindRef(166));J->SetNumberField(TEXT("slayer_mod"),A->FloatProperties.FindRef(138));
-            J->SetNumberField(TEXT("element_mod"),A->FloatProperties.FindRef(152));
-            J->SetNumberField(TEXT("boost_vital"),A->IntProperties.FindRef(89));J->SetNumberField(TEXT("boost"),A->IntProperties.FindRef(90));
-            if(const double* HealMod=A->FloatProperties.Find(100))J->SetNumberField(TEXT("heal_mod"),*HealMod);
-            J->SetNumberField(TEXT("mana"),A->IntProperties.FindRef(107));J->SetNumberField(TEXT("max_mana"),A->IntProperties.FindRef(108));
-            J->SetBoolField(TEXT("mana_empty"),A->IntProperties.FindRef(107)<=0);
-            if(const auto* Rating=A->IntProperties.Find(307))J->SetNumberField(TEXT("damage_rating"),*Rating);
-            J->SetNumberField(TEXT("armor"),A->IntProperties.FindRef(28));
-            J->SetNumberField(TEXT("spell"),Item.SpellDID);
-        }
-        return MakeShared<FJsonValueObject>(J);
-    };
+    auto ItemJson=[this](const FACEWorldObject& Item){return PluginItemSnapshot(Item);};
     // Keep immutable rows across background assessments. A one-item reply used
     // to reconstruct every item's property/spell tables on the game thread.
     uint32 Eligibility=GetTypeHash(V.Level);

@@ -45,6 +45,10 @@ def stage_release(root, release, site, *, replace_unpublished=False):
         entries.append(('questInstallerUpdate', meta['questInstallerUpdate']))
     if 'linux' in meta:
         entries.append(('linux', meta['linux']))
+    if 'android' in meta:
+        require(meta['androidVersion'] == meta['windowsVersion'], 'Android version differs from shared release')
+        require(meta['android']['file'] == f'AC-Unreal-Android-v{version}.apk', 'Invalid Android phone artifact name')
+        entries.append(('android', meta['android']))
     items = {}
     for key, entry in entries:
         name = entry.get('file', entry.get('name'))
@@ -61,10 +65,14 @@ def stage_release(root, release, site, *, replace_unpublished=False):
     require(meta['windowsVersion'].endswith(f'.{version}'), 'Windows version does not match the release')
     quest_update_version = (quest_installed_version if quest_installed_version.endswith(f'.quest.{version}')
                             else quest_installed_version.rsplit('.', 1)[0] + f'.quest.{version}')
-    public = {'version': version, 'date': meta['createdUtc'][:10], 'windowsVersion': meta['windowsVersion'],
+    public = {'version': version, 'date': meta.get('releaseDate', meta['createdUtc'][:10]), 'windowsVersion': meta['windowsVersion'],
               'questVersion': quest_update_version, 'questInstalledVersion': quest_installed_version,
               'windowsSigned': False, 'gameDataIncluded': False, **items}
     public['updates'] = {'schema': 1, 'windows': items['windows'], 'quest': items['questApk']}
+    if 'android' in items:
+        public['androidVersion'] = meta['androidVersion']
+        public['androidPreview'] = True
+        public['updates']['android'] = items['android']
     if 'linux' in items:
         public['linuxVersion'] = meta['linuxVersion']
         # v124+ verifies and installs this archive through the Linux helper;

@@ -11,17 +11,19 @@ $release = [int]$Matches[1]
 if ($version -notmatch '^\d{4}\.\d{2}\.\d{2}\.(\d+)$' -or [int]$Matches[1] -ne $release) {
     throw 'Client Version must be YYYY.MM.DD.ReleaseNumber on every platform.'
 }
-foreach ($relative in @('Unreal/Config/DefaultGame.ini','Quest/Project/Config/DefaultGame.ini')) {
+foreach ($relative in @('Unreal/Config/DefaultGame.ini','Quest/Project/Config/DefaultGame.ini','Mobile/Project/Config/DefaultGame.ini')) {
     $config = Get-Content -LiteralPath (Join-Path $repoRoot $relative) -Raw
     if ($config -notmatch '(?m)^ProjectVersion=([^\r\n]+)' -or $Matches[1].Trim() -ne $version) {
         throw "ProjectVersion in $relative differs from shared Version $version."
     }
 }
-$android = Get-Content -LiteralPath (Join-Path $repoRoot 'Quest/Project/Config/DefaultEngine.ini') -Raw
+foreach ($target in @('Quest','Mobile')) {
+$android = Get-Content -LiteralPath (Join-Path $repoRoot "$target/Project/Config/DefaultEngine.ini") -Raw
 if ($android -notmatch '(?m)^VersionDisplayName=([^\r\n]+)' -or $Matches[1].Trim() -ne $version) {
-    throw "Quest VersionDisplayName differs from shared Version $version."
+    throw "$target VersionDisplayName differs from shared Version $version."
 }
 if ($android -notmatch '(?m)^StoreVersion=(\d+)\s*$' -or [int]$Matches[1] -ne $release) {
-    throw "Quest StoreVersion differs from shared ReleaseNumber $release."
+    throw "$target StoreVersion differs from shared ReleaseNumber $release."
 }
-Write-Host "Verified unified Windows/Linux/PC VR/Quest version $version (release $release)."
+}
+Write-Host "Verified unified Windows/Linux/PC VR/Quest/Android version $version (release $release)."

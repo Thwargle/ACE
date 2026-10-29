@@ -119,9 +119,17 @@ void UACEVRMenu::OpenPage(FName InPage)
     TextEntry=nullptr;
     const bool KeepUseTarget=UseSource && (InPage=="Inventory" || InPage=="Equipment");
     if(Page=="Fellowship" && InPage!=Page && Client)Client->SendFellowshipUpdateRequest(false);
-    ClearItemSelection();if(!KeepUseTarget)UseSource=0;
+    if(InPage=="Inspect"){CancelItemPointer();Selected=0;}
+    else ClearItemSelection();
+    if(!KeepUseTarget)UseSource=0;
     Spell=0;PendingLearnedSpellId=0;FellowSelection=0;bAssignShortcut=false;
     Page=InPage;PageIndex=0;Confirmation.Reset();bDirty=true;
+    if(Client && Page=="Inspect")
+    {
+        Selected=Client->GetSelectedObject().Guid;
+        if(Selected)InspectSelection();
+        else {bInspectionOpen=false;Confirmation=TEXT("Tap an object in the world, then Inspect.");}
+    }
     if(ContentScroll)ContentScroll->ScrollToStart();
     if(Client && Page=="Fellowship")Client->SendFellowshipUpdateRequest(true);
     if(Client && Page=="Allegiance")Client->SendAllegianceUpdateRequest(true);
@@ -145,11 +153,20 @@ TSharedRef<SWidget> UACEVRMenu::Entry(const FString& Hint,const FString& Value)
 }
 TSharedRef<SWidget> UACEVRMenu::Button(const FString& Text,TFunction<void()> Click,bool Enabled)
 {
+    auto Caption=Label(Text);Caption->SetAutoWrapText(false);Caption->SetJustification(ETextJustify::Center);
     return SNew(SButton).Tag(FName(*Text)).ButtonStyle(&MenuButton()).IsFocusable(false).IsEnabled(Enabled).ContentPadding(FMargin(12,10))
-        .OnClicked_Lambda([Click=MoveTemp(Click)](){Click();return FReply::Handled();})[Label(Text)];
+        .TouchMethod(EButtonTouchMethod::PreciseTap).HAlign(HAlign_Center).VAlign(VAlign_Center)
+        .OnClicked_Lambda([Click=MoveTemp(Click)](){Click();return FReply::Handled();})[Caption];
 }
 TSharedRef<SWidget> UACEVRMenu::RebuildWidget()
 {
+    if(bTouchMode)
+    {
+        bDirty=true;
+        return ACEVRUIStyle::Frame(SNew(SVerticalBox)
+            +SVerticalBox::Slot().AutoHeight()[SAssignNew(HoverLabel,STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Bold",24)).ColorAndOpacity(ACEVRUIStyle::TextColor)]
+            +SVerticalBox::Slot().FillHeight(1)[SAssignNew(ContentScroll,SScrollBox)+SScrollBox::Slot()[SAssignNew(Body,SVerticalBox)]],8.f,true);
+    }
     auto Nav=SNew(SVerticalBox);
     const TCHAR* Names[]={TEXT("Inventory"),TEXT("Spellbook"),TEXT("Fellowship"),TEXT("Character"),TEXT("Vendor"),TEXT("Loot"),TEXT("Trade"),TEXT("Salvage"),TEXT("More")};
     for(const auto* Name:Names)Nav->AddSlot().AutoHeight().Padding(2)[Button(Name,[this,Name](){OpenPage(Name);})];
@@ -164,9 +181,10 @@ TSharedRef<SWidget> UACEVRMenu::RebuildWidget()
         +SHorizontalBox::Slot().FillWidth(1).Padding(12,0)[Content],12.f,true);
 }
 void UACEVRMenu::ReleaseSlateResources(bool Children)
-{ Super::ReleaseSlateResources(Children);Body.Reset();HoverLabel.Reset();ContentScroll.Reset();InspectionWidget.Reset();InspectionBody.Reset();IconBrushes.Reset();IconTextures.Reset(); }
+{ Super::ReleaseSlateResources(Children);Body.Reset();HoverLabel.Reset();ContentScroll.Reset();InspectionWidget.Reset();InspectionBody.Reset();IconBrushes.Reset();IconTextures.Reset();PendingIcons.Reset(); }
 void UACEVRMenu::RefreshIfDirty()
 {
+    RefreshPendingIcons();
     if(Client && MenuOwnerGuid!=Client->GetPlayerGuid())
     {
         MenuOwnerGuid=Pack=Client->GetPlayerGuid();Selected=Spell=UseSource=PageIndex=0;
@@ -178,7 +196,7 @@ void UACEVRMenu::RefreshIfDirty()
 	{InventoryRevision=Client->GetSession()->GetInventoryDataRevision();if(Page!="Plugins")bDirty=true;}
     if(!bDirty || !Body || !Client || !Binder || DragItem || DragSpell)return;
     bDirty=false;++RefreshCount;
-    Body->ClearChildren();ItemDestinations.Reset();MenuTargets.Reset();SpellDestinations.Reset();IconBrushes.Reset();IconTextures.Reset();
+    Body->ClearChildren();ItemDestinations.Reset();MenuTargets.Reset();SpellDestinations.Reset();IconBrushes.Reset();IconTextures.Reset();PendingIcons.Reset();
     if(HoverLabel)HoverLabel->SetText(FText::FromString(Page.ToString()));
     if(Page=="Inventory" || Page=="Equipment")BuildInventory();
     else if(Page=="Salvage")BuildSalvage();
@@ -204,9 +222,14 @@ void UACEVRMenu::RefreshIfDirty()
     else if(Page=="PluginManager")Body->AddSlot().AutoHeight()[SNew(SBox).HeightOverride(610)[GetGameInstance()->GetSubsystem<UACEPluginSubsystem>()->MakePanel()]];
     else if(Page=="Options")BuildOptions();
     else if(Page=="Hotbars")BuildShortcuts();
-    else BuildMore();
+    else if(Page!="Inspect")BuildMore();
     if(!Confirmation.IsEmpty())Body->AddSlot().AutoHeight().Padding(4)[Label(Confirmation)];
     if(bInspectionOpen)BuildInspection();
+    if(bTouchMode && bInspectionOpen)
+    {
+        Body->AddSlot().AutoHeight().Padding(8)[SNew(SBox).HeightOverride(360)[GetInspectionWidget()]];
+        Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Close inspection"),[this](){bInspectionOpen=false;bDirty=true;})];
+    }
 }
 void UACEVRMenu::SelectItem(int32 Guid)
 {
@@ -230,9 +253,9 @@ void UACEVRMenu::AddQuantity(int32 Maximum)
     auto Quantity=SNew(STextBlock).Text(FText::FromString(FString::Printf(TEXT("Quantity: %d / %d"),Binder->SelectedStackAmount,Maximum)))
         .Font(FCoreStyle::GetDefaultFontStyle("Regular",24)).ColorAndOpacity(FLinearColor::White);
     Body->AddSlot().AutoHeight()[Quantity];
-    Body->AddSlot().AutoHeight().Padding(4,12)[SNew(SSlider).MinValue(1).MaxValue(Maximum).StepSize(1)
+    Body->AddSlot().AutoHeight().Padding(4,12)[SNew(SBox).MinDesiredHeight(bTouchMode?56:18)[SNew(SSlider).MinValue(1).MaxValue(Maximum).StepSize(1)
         .Value(Binder->SelectedStackAmount).OnValueChanged_Lambda([this,Quantity,Maximum](float Value)
-        {Binder->SelectedStackAmount=FMath::Clamp(FMath::RoundToInt(Value),1,Maximum);Quantity->SetText(FText::FromString(FString::Printf(TEXT("Quantity: %d / %d"),Binder->SelectedStackAmount,Maximum)));})];
+        {Binder->SelectedStackAmount=FMath::Clamp(FMath::RoundToInt(Value),1,Maximum);Quantity->SetText(FText::FromString(FString::Printf(TEXT("Quantity: %d / %d"),Binder->SelectedStackAmount,Maximum)));})]];
 }
 void UACEVRMenu::Execute(FName Action)
 {

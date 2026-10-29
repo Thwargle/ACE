@@ -171,6 +171,16 @@ def build_release(root, args):
     windows = root / 'Unreal/Saved/VRWindowsArchive/Windows'
     linux = root / 'Unreal/Saved/LinuxArchive/Linux'
     version = args.quest_version
+    android_meta = {}
+    android_apk = root / 'Mobile/Packaged/Android_ASTC/ACUnreal-arm64.apk'
+    if getattr(args, 'android_version', None):
+        require(args.android_version == args.windows_version, 'Android must display the shared release version')
+        android = json.loads((root / 'Mobile/Packaged/android-manifest.json').read_text(encoding='utf-8-sig'))
+        require(android['package'] == 'com.acecommunity.acunreal.mobile'
+                and android['versionCode'] == version and android['version'] == args.android_version,
+                'Android package identity/version differs from release')
+        require(android_apk.stat().st_size == android['bytes'] and sha(android_apk) == android['sha256'],
+                'Android APK differs from verified build metadata')
     require(version < LINUX_FIRST_RELEASE or args.linux_version,
             'Release 88 and later require a native Linux build and --linux-version')
     require(not args.linux_version or args.linux_version == args.windows_version,
@@ -240,10 +250,17 @@ def build_release(root, args):
     shutil.copy2(quest / 'Sharing/RELEASE-NOTES.md', release / 'RELEASE-NOTES.md')
     direct_apk = release / f'AC-VR-Quest-v{version}.apk'
     shutil.copy2(apk, direct_apk)
-    (release / 'SHA256SUMS.txt').write_text(''.join(f'{sha(p)}  {p.name}\n' for p in archives + [direct_apk]), encoding='utf-8')
+    downloads = archives + [direct_apk]
+    if getattr(args, 'android_version', None):
+        phone_apk = release / f'AC-Unreal-Android-v{version}.apk'
+        shutil.copy2(android_apk, phone_apk)
+        downloads.append(phone_apk)
+        android_meta = {'androidVersion': args.android_version, 'android': artifact(phone_apk), 'androidPreview': True}
+    (release / 'SHA256SUMS.txt').write_text(''.join(f'{sha(p)}  {p.name}\n' for p in downloads), encoding='utf-8')
     (release / 'release-manifest.json').write_text(json.dumps({
         'desktopProduct': 'AC:Unreal', 'vrProduct': 'AC:VR',
         'createdUtc': datetime.now(timezone.utc).isoformat(), 'questVersion': manifest['version'],
+        'releaseDate': date.fromisoformat(args.windows_version.rsplit('.', 1)[0].replace('.', '-')).isoformat(),
         'questVersionCode': version, 'installerRevision': args.installer_revision,
         'windowsVersion': args.windows_version, 'apkSha256': sha(apk), 'windowsExeSha256': sha(exe),
         'clientPluginApis': {'lua': api['lua_api'], 'supportedLua': api['supported_lua_apis'],
@@ -251,7 +268,7 @@ def build_release(root, args):
         'gameDataIncluded': False, 'serverIncluded': False, 'savedSettingsIncluded': False,
         'headsetAcceptance': 'See RELEASE-NOTES.md; packaging alone is not live acceptance.',
         'archives': [{'name': p.name, 'bytes': p.stat().st_size, 'sha256': sha(p)} for p in archives],
-        'questApk': artifact(direct_apk), 'windowsFiles': members, **linux_meta,
+        'questApk': artifact(direct_apk), 'windowsFiles': members, **linux_meta, **android_meta,
     }, indent=2) + '\n', encoding='utf-8')
     print(json.dumps({'release': str(release), 'archives': [{'name': p.name, 'bytes': p.stat().st_size} for p in archives]}, indent=2))
     return release
@@ -263,6 +280,7 @@ def main():
     parser.add_argument('--windows-version', required=True)
     parser.add_argument('--linux-version', help='Required for release 88 onward; must match the Windows/Quest display version')
     parser.add_argument('--installer-revision', type=int, default=7)
+    parser.add_argument('--android-version', help='Include the verified Android phone/tablet preview APK')
     args = parser.parse_args()
     try:
         build_release(Path(__file__).resolve().parents[3], args)

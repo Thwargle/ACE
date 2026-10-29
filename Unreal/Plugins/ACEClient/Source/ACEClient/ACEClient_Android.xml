@@ -12,6 +12,7 @@
   </prebuildCopies>
   <gameActivityOnCreateAdditions>
     <insert><![CDATA[
+    if (!getPackageName().equals("com.acecommunity.acunreal.mobile")) {
     // Quest's overlay IME edits an offscreen field. UE otherwise discards
     // its text callbacks because the phone keyboard did not resize the view.
     bUsesVrKeyboard = true;
@@ -34,6 +35,7 @@
                 return false;
             }
         });
+    }
     }
     ]]></insert>
   </gameActivityOnCreateAdditions>

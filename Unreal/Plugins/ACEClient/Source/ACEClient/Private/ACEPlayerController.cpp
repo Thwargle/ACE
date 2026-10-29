@@ -1,5 +1,7 @@
 #include "ACEPlayerController.h"
 #include "ACEOrbitCameraBoom.h"
+#include "Mobile/ACEMobileWidget.h"
+#include "Mobile/ACEMobileSettings.h"
 #include "ACEInventoryRules.h"
 #include "ACEProfiling.h"
 #include "ACERetailTurn.h"
@@ -172,6 +174,7 @@ void AACEPlayerController::BeginPlay()
 {
 	ACERuntimeOptions::Apply();
 	Super::BeginPlay();
+    if(IsMobileActive())ActivateTouchInterface(nullptr);
 	if (IsLocalController()) DesktopDisplay=FACEDesktopDisplay::Create(this);
 	if (IsLocalController()) KeyboardRouter=FACEKeyboardRouter::Create(this,[this]()
 	{
@@ -789,6 +792,16 @@ void AACEPlayerController::SetInputMode(const FInputModeDataBase& InData)
 
 bool AACEPlayerController::InputKey(const FInputKeyEventArgs& Params)
 {
+ if(IsMobileActive() && MobileWidget && (Params.Key==EKeys::Android_Back || Params.Key==EKeys::Escape))
+ {
+  if(Params.Event==IE_Pressed)
+  {
+   if(Client && Client->GetSessionState()==EACESessionState::CharacterSelect)Client->Logout();
+   else if(!MobileWidget->Panel.IsNone())MobileWidget->ClosePanel();
+   else {MobileWidget->bWheel=false;MobileWidget->bEditing=false;MobileWidget->OpenPanel("Menu");}
+  }
+  return true;
+ }
  // Text controls may leave key-down unhandled while consuming the character.
  // Do not let that key reach gameplay. Releases still clear previously held keys.
  if(ACEInputBindings::IsTextEntryFocused() && !Params.Key.IsMouseButton() && Params.Event!=IE_Released)
@@ -877,7 +890,7 @@ bool AACEPlayerController::InputKey(const FInputKeyEventArgs& Params)
 void AACEPlayerController::UpdateFrameRateOverlay()
 {
 	const bool Enabled=Client && Client->GetSessionState()==EACESessionState::InWorld
-		&& ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f && !IsDesktopInterfaceHidden();
+		&& ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f && !IsDesktopInterfaceHidden() && !IsMobileActive();
 	if(!Enabled)
 	{
 		if(FrameRateWidget && FrameRateWidget->GetVisibility()!=ESlateVisibility::Collapsed)
@@ -908,7 +921,9 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	Super::PlayerTick(DeltaTime);
 	auto* VR = GetPawn() ? GetPawn()->FindComponentByClass<UACEVRComponent>() : nullptr;
 	const bool bVR = VR && VR->IsActive();
-	if (DesktopPointer) DesktopPointer->Update(!bVR);
+    const bool bMobile = IsMobileActive();
+    UpdateMobileInterface();
+	if (DesktopPointer) DesktopPointer->Update(!bVR && !bMobile);
 	if (Client) if (auto* Manager=Client->GetUIElementManager())
 		Manager->SetQuickShowUi(!bVR && Client->GetSessionState()==EACESessionState::InWorld
 			&& FSlateApplication::IsInitialized() && FSlateApplication::Get().IsActive()
@@ -916,7 +931,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	if (IsLocalController())
 	{
 		int32 Width=0,Height=0; GetViewportSize(Width,Height);
-		ACERuntimeOptions::ApplyDesktopUIScale(FIntPoint(Width,Height),bVR);
+		ACERuntimeOptions::ApplyDesktopUIScale(FIntPoint(Width,Height),bVR || bMobile);
 		UpdateFrameRateOverlay();
 	}
 	if (bVR) VR->PrepareMovement(DeltaTime);
@@ -1054,13 +1069,13 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		}
 	}
 
-	if (!bVR) { PollObjectHover(); PollObjectClick(); }
+	if (!bVR && !bMobile) { PollObjectHover(); PollObjectClick(); }
 	UpdateObjectHighlights(true,!bVR);
 
 	// Poll logical actions through the retail/rebound keymap: W/X forward/back,
 	// A/D turn, Z/C sidestep by default. Opposing held commands form a stack.
 	// Run is the default hold-key; Shift = walk (retail AC).
-	const bool bChatFocused = bVR || (DatGameplayBinder && DatGameplayBinder->IsChatEntryFocused())
+	const bool bChatFocused = bVR || (bMobile && MobileWidget && MobileWidget->IsBlockingMovement()) || (DatGameplayBinder && DatGameplayBinder->IsChatEntryFocused())
 		|| (GameHUDWidget && GameHUDWidget->IsChatEntryFocused()) || ACEInputBindings::IsEditing() || ACEInputBindings::IsTextEntryFocused();
 	if (!bVR && (!bChatFocused || IsDesktopInterfaceHidden())
 		&& ACEInputBindings::Pressed(this, ACEInputBindings::Action(TEXT("ToggleInterface"))))
@@ -1080,12 +1095,18 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	bRunning = !ACEInputBindings::Down(this, EKeys::LeftShift);
 
 	UpdateKeyboardAutoRun(F, ACEInputBindings::Down(this, EKeys::NumLock));
+    if(bMobile && MobileWidget)
+    {
+        const auto Stick=MobileWidget->Movement();F=-Stick.Y;R=Stick.X;T=MobileWidget->Turning();
+        bRunning=!MobileWidget->IsWalkHeld();bAutoRun=false;
+        MobileLook(MobileWidget->ConsumeLook());
+    }
 
 	// Retail number row: magic = spell bank slots; peace = inventory shortcuts.
 	// DAT HUD owns this when GameHUDWidget is inactive.
 
 	// Retail Space: hold to charge jump bar, release to Jump (0xF61B).
-	const bool bSpaceDown = bVR ? VR->IsJumpHeld() : ACEInputBindings::Down(this, EKeys::SpaceBar) && !bChatFocused;
+	const bool bSpaceDown = bVR ? VR->IsJumpHeld() : bMobile ? (MobileWidget && MobileWidget->IsJumpHeld()) : ACEInputBindings::Down(this, EKeys::SpaceBar) && !bChatFocused;
 	if (!bVR && bSpaceDown && !bSpaceWasDown)
 	{
 		BeginJumpCharge();
@@ -4788,7 +4809,7 @@ void AACEPlayerController::EnableGameplayViewportShadows()
 
 void AACEPlayerController::EnsureRetailMouseCursor()
 {
-	if (IsVRActive()) { bShowMouseCursor = false; return; }
+	if (IsVRActive() || IsMobileActive()) { bShowMouseCursor = false; return; }
 	const float CursorScale = ACERuntimeOptions::Get(TEXT("CursorScale"));
 	if (MouseCursorWidget) MouseCursorWidget->SetCursorScale(CursorScale);
 	for (const auto& Cursor : RetailWindowCursorWidgets) if (Cursor) Cursor->SetCursorScale(CursorScale);

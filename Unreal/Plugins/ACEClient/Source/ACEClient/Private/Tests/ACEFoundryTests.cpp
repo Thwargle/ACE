@@ -20,6 +20,9 @@
 #include "ImageUtils.h"
 #include "RenderingThread.h"
 #include "HAL/FileManager.h"
+#include "Sockets.h"
+#include "SocketSubsystem.h"
+#include "IPAddress.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEFoundryTest,"ACE.Plugins.Foundry",
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
@@ -78,6 +81,42 @@ bool FACEFoundryTest::RunTest(const FString&)
     P->Permissions.Remove(TEXT("admin_content"));TestFalse(TEXT("File service requires explicit permission"),H->ContentService(*P,List,Reply,Error));P->Permissions.Add(TEXT("admin_content"));
     auto WrongTarget=Json(TEXT(R"({"operation":"command","text":"/delete","target":99})"));
     TestFalse(TEXT("Stale selection is rejected before sending anything"),H->ContentService(*P,WrongTarget,Reply,Error));
+    {
+        auto* Sockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+        auto* Receiver=Sockets->CreateSocket(NAME_DGram,TEXT("Foundry command receiver"),false);
+        auto Address=Sockets->CreateInternetAddr();bool Valid=false;
+        Address->SetIp(TEXT("127.0.0.1"),Valid);Address->SetPort(0);
+        ON_SCOPE_EXIT {
+            if(Receiver){Receiver->Close();Sockets->DestroySocket(Receiver);}
+            if(S.SocketC2S){S.SocketC2S->Close();Sockets->DestroySocket(S.SocketC2S);S.SocketC2S=nullptr;}
+            S.ServerC2SAddr.Reset();S.IssacClient.Reset();S.CachedC2SPackets.Reset();
+        };
+        if(!TestTrue(TEXT("Bind isolated Foundry command receiver"),Receiver&&Receiver->Bind(*Address)))return false;
+        Receiver->GetAddress(*Address);S.ServerC2SAddr=Address;S.IssacClient=MakeUnique<FACEIsaac>(123u);
+        S.SocketC2S=Sockets->CreateSocket(NAME_DGram,TEXT("Foundry command sender"),false);
+        // Run the real Lua button output through services, not just presentation.
+        for(const TCHAR* Button:{TEXT("create"),TEXT("ci")})
+        {
+            const FString Events=FString::Printf(TEXT(R"([{"type":"change","id":"wcid","value":"123"},{"type":"click","id":"%s"}])"),Button);
+            if(!Step(*Events))return false;
+            // The VM's simulated clock advances two seconds per click; expire
+            // the native wall-clock service/command gates for that same interval.
+            P->NextCommand=P->NextService=0;P->PluginEvents.Reset();S.CachedC2SPackets.Reset();
+            TestTrue(TEXT("Foundry create dispatches through the public plugin API"),H->ApplyPublicOutput(*P,Out,Error));
+            TestTrue(TEXT("Foundry reports successful dispatch to Lua"),P->PluginEvents.ContainsByPredicate([](const auto& E)
+                {const auto R=E->AsObject();return R->HasField(TEXT("ok"))&&R->GetBoolField(TEXT("ok"))&&R->HasField(TEXT("command"));}));
+            int32 Commands=0;
+            for(const auto& Packet:S.CachedC2SPackets)
+            {
+                FACEBinaryReader Wire(Packet.Value.Payload);Wire.Skip(16);
+                if(Wire.ReadUInt32()!=ACEOpcode::GameAction)continue;
+                Wire.ReadUInt32();if(Wire.ReadUInt32()!=ACEGameAction::Talk)continue;
+                ++Commands;
+                TestEqual(TEXT("ACE receives an executable admin command, not slash-prefixed speech"),Wire.ReadString16L(),FString::Printf(TEXT("@%s 123"),Button));
+            }
+            TestEqual(TEXT("Each create button sends exactly one command"),Commands,1);
+        }
+    }
     if(FApp::CanEverRender())
     {
         GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(ACETestDatDirectory());

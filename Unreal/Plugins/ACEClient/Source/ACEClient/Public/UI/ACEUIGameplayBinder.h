@@ -74,6 +74,8 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEVRProtocolTest;
 	friend class UACEVRComponent;
 	friend class UACEVRMenu;
+    friend class UACEMobileWidget;
+    friend class FACEMobileTouchTest;
 	friend class UACEVRChat;
 	friend class FACEVRChatTest;
 	friend class AACEPlayerController;

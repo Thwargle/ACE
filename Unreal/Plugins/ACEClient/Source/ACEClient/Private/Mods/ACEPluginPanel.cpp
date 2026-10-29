@@ -8,6 +8,7 @@
 #include "Mods/ACEActionDeckSubsystem.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
+#include "Mobile/ACEMobileWidget.h"
 #include "ACEDatSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Engine/GameViewportClient.h"
@@ -122,7 +123,7 @@ namespace ACEPluginPanelPrivate
             auto* GI=Host->GetGameInstance();
             auto* Client=GI->GetSubsystem<UACEClientSubsystem>();
             auto* PC=Cast<AACEPlayerController>(GI->GetFirstLocalPlayerController());
-            if(Client&&Client->GetSessionState()==EACESessionState::InWorld&&PC&&!PC->IsVRActive())
+            if(Client&&Client->GetSessionState()==EACESessionState::InWorld&&PC&&!PC->IsVRActive()&&!PC->IsMobileActive())
             {
                 // The manager is a launcher. Each desktop tool has its own
                 // window; opening settings must not embed a second loot editor.
@@ -131,7 +132,7 @@ namespace ACEPluginPanelPrivate
                 H->TogglePanel();
                 return;
             }
-            // Login and VR use the same manager in a single panel.
+            // Login, VR and touch use the same manager in a single panel.
             Id=PluginId;Rebuild();
         }
         void Rebuild()
@@ -353,6 +354,11 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakePanel(const FString& PluginId)
 void UACEPluginSubsystem::TogglePanel()
 {
     using namespace ACEPluginPanelPrivate;FACEPluginStyle::Use(this);
+    if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());PC && PC->IsMobileActive() && PC->MobileWidget)
+    {
+        if(PC->MobileWidget->Panel=="Plugins")PC->MobileWidget->ClosePanel();else PC->MobileWidget->OpenPanel("Plugins");
+        return;
+    }
     if(auto* PC=GetGameInstance()->GetFirstLocalPlayerController())if(APawn* Pawn=PC->GetPawn())
         if(auto* VR=Pawn->FindComponentByClass<UACEVRComponent>();VR && VR->IsActive())
         {

@@ -16,6 +16,7 @@
 #include "Widgets/Layout/SScaleBox.h"
 #include "Widgets/Layout/SUniformGridPanel.h"
 #include "Widgets/Layout/SWrapBox.h"
+#include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Text/STextBlock.h"
@@ -46,31 +47,49 @@ TSharedRef<SWidget> UACEVRMenu::Tab(const FString& Name,bool Active,TFunction<vo
 }
 TSharedRef<SWidget> UACEVRMenu::Icon(uint32 Did,float Size)
 {
-    auto* Resources=Client->GetUIResourceResolver();
-    auto* Texture=Resources?Resources->ResolveTexture(Did):nullptr;
+    return DeferredIcon([this,Did](){auto* R=Client->GetUIResourceResolver();return R?R->ResolveTexture(Did):nullptr;},Size);
+}
+TSharedRef<SWidget> UACEVRMenu::DeferredIcon(TFunction<UTexture2D*()> Resolve,float Size)
+{
+    auto* Texture=Resolve();
     auto Brush=MakeShared<FSlateBrush>();Brush->ImageSize=FVector2D(Size,Size);
     Brush->DrawAs=Texture?ESlateBrushDrawType::Image:ESlateBrushDrawType::NoDrawType;
     Brush->SetResourceObject(Texture);IconBrushes.Add(Brush);if(Texture)IconTextures.Add(Texture);
-    return SNew(SBox).WidthOverride(Size).HeightOverride(Size)
+    auto Widget=SNew(SBox).WidthOverride(Size).HeightOverride(Size)
         [SNew(SImage).Image_Lambda([Brush](){return &Brush.Get();}).Visibility(EVisibility::HitTestInvisible)];
+    if(!Texture)PendingIcons.Add({Brush,Widget,MoveTemp(Resolve)});
+    return Widget;
+}
+void UACEVRMenu::RefreshPendingIcons()
+{
+    // Retry only missing resources, without rebuilding the inventory or changing
+    // its selection/scroll. Bound work and back off for absent custom DAT assets.
+    const double Now=FPlatformTime::Seconds();int32 Budget=4;
+    for(int32 I=0;I<PendingIcons.Num() && Budget>0;)
+    {
+        auto& Pending=PendingIcons[I];const auto Widget=Pending.Widget.Pin();
+        if(!Widget){PendingIcons.RemoveAt(I);continue;}
+        if(Now<Pending.NextTry){++I;continue;}
+        --Budget;
+        if(auto* Texture=Pending.Resolve())
+        {
+            Pending.Brush->SetResourceObject(Texture);Pending.Brush->DrawAs=ESlateBrushDrawType::Image;
+            IconTextures.Add(Texture);Widget->Invalidate(EInvalidateWidgetReason::Paint);
+            PendingIcons.RemoveAt(I);
+        }
+        else {Pending.NextTry=Now+Pending.Delay;Pending.Delay=FMath::Min(2.f,Pending.Delay*2);++I;}
+    }
 }
 TSharedRef<SWidget> UACEVRMenu::ItemIcon(const FACEWorldObject& Item,float Size)
 {
-    auto Layer=[this,Size](UTexture2D* Texture)
-    {
-        auto Brush=MakeShared<FSlateBrush>();Brush->ImageSize=FVector2D(Size,Size);
-        Brush->DrawAs=Texture?ESlateBrushDrawType::Image:ESlateBrushDrawType::NoDrawType;
-        Brush->SetResourceObject(Texture);IconBrushes.Add(Brush);if(Texture)IconTextures.Add(Texture);
-        return SNew(SImage).Image_Lambda([Brush](){return &Brush.Get();}).Visibility(EVisibility::HitTestInvisible);
-    };
-    auto* Resources=Client->GetUIResourceResolver();
     const bool Offered=Binder->SalvageQueueGuids.Contains(Item.Guid)
         || Binder->VendorSellCart.ContainsByPredicate([&Item](const auto& O){return O.Value==Item.Guid;});
     return SNew(SBox).WidthOverride(Size).HeightOverride(Size)
         [SNew(SOverlay)
-            +SOverlay::Slot()[Layer(Resources?Resources->ResolveItemBackground(Item.ItemType,Item.IconUnderlayId):nullptr)]
-            +SOverlay::Slot()[Layer(Resources?Resources->ResolveItemForeground(Item.IconId,Item.IconOverlayId,Item.UiEffects,Offered,
-                Item.Structure,Item.MaxStructure):nullptr)]];
+            +SOverlay::Slot()[DeferredIcon([this,Type=Item.ItemType,Underlay=Item.IconUnderlayId]()
+                {auto* R=Client->GetUIResourceResolver();return R?R->ResolveItemBackground(Type,Underlay):nullptr;},Size)]
+            +SOverlay::Slot()[DeferredIcon([this,Id=Item.IconId,Overlay=Item.IconOverlayId,Effects=Item.UiEffects,Offered,Structure=Item.Structure,Max=Item.MaxStructure]()
+                {auto* R=Client->GetUIResourceResolver();return R?R->ResolveItemForeground(Id,Overlay,Effects,Offered,Structure,Max):nullptr;},Size)]];
 }
 TSharedRef<SWidget> UACEVRMenu::ItemButton(const FACEWorldObject& Item,float Size,bool SalvageOffer)
 {
@@ -82,6 +101,7 @@ TSharedRef<SWidget> UACEVRMenu::ItemButton(const FACEWorldObject& Item,float Siz
             .ShadowOffset(FVector2D(1,1)).ShadowColorAndOpacity(FLinearColor::Black).Visibility(EVisibility::HitTestInvisible)];
     auto Control=SNew(SBox).WidthOverride(Size).HeightOverride(Size)
         [SNew(SButton).Tag(FName(*FString::Printf(TEXT("Item_%d"),Item.Guid))).ButtonStyle(&SlotStyle()).IsFocusable(false)
+            .TouchMethod(EButtonTouchMethod::PreciseTap)
             .HAlign(HAlign_Center).VAlign(VAlign_Center).ContentPadding(2)
             .ButtonColorAndOpacity_Lambda([this,Id=Item.Guid](){return bItemDragging && DragItem==Id?FLinearColor(.25f,.25f,.25f):FLinearColor::White;})
             .OnHovered_Lambda([this,Name=ACERetailObjectNames::Name(Item)](){if(HoverLabel && !bItemDragging)HoverLabel->SetText(FText::FromString(Name));})
@@ -110,24 +130,34 @@ void UACEVRMenu::ClearItemSelection()
 void UACEVRMenu::SelectPack(int32 Guid)
 {
     if(Page=="Equipment")OpenPage("Inventory");
-    ClearItemSelection();Pack=Guid;Binder->SelectedPackGuid=Guid;bDirty=true;
+    ClearItemSelection();Pack=Guid;TouchPackPage=0;Binder->SelectedPackGuid=Guid;bDirty=true;
 }
 TSharedRef<SWidget> UACEVRMenu::PackGrid(int32 Container,float Height)
 {
     const auto Items=Client->GetPackItems(Container);
     FACEWorldObject Bag;Client->GetWorldObject(Container,Bag);
     const int32 Capacity=FMath::Max(Items.Num(),Bag.ItemsCapacity>0?Bag.ItemsCapacity:Container==Client->GetPlayerGuid()?102:24);
-    const int32 Columns=Capacity<=24?6:FMath::Max(12,FMath::CeilToInt(FMath::Sqrt(Capacity*1.3f)));
+    const int32 Columns=bTouchMode?8:Capacity<=24?6:FMath::Max(12,FMath::CeilToInt(FMath::Sqrt(Capacity*1.3f)));
     auto Grid=SNew(SUniformGridPanel).SlotPadding(FMargin(2));
-    for(int32 I=0;I<Capacity;++I)
+    const int32 PageSize=bTouchMode?16:24;
+    const int32 Pages=FMath::Max(1,FMath::DivideAndRoundUp(Capacity,PageSize));
+    TouchPackPage=FMath::Clamp(TouchPackPage,0,Pages-1);
+    const int32 First=bTouchMode?TouchPackPage*PageSize:0,Last=bTouchMode?FMath::Min(Capacity,First+PageSize):Capacity;
+    for(int32 I=First;I<Last;++I)
     {
         const auto* Item=Items.IsValidIndex(I)?&Items[I]:nullptr;
         TSharedRef<SWidget> Cell=Item?ItemButton(*Item):StaticCastSharedRef<SWidget>(SNew(SBox).WidthOverride(64).HeightOverride(64)
             [SNew(SButton).ButtonStyle(&SlotStyle()).IsFocusable(false).ContentPadding(2)]);
         Cell->SetTag(FName(*FString::Printf(TEXT("PackSlot_%d_%d"),Container,I)));
-        Grid->AddSlot(I%Columns,I/Columns)[Cell];
+        Grid->AddSlot((I-First)%Columns,(I-First)/Columns).HAlign(HAlign_Center).VAlign(VAlign_Center)[Cell];
         ItemDestinations.Add({Cell,Container,I,Item?Item->Guid:0});
     }
+    if(bTouchMode)return SNew(SVerticalBox)
+        +SVerticalBox::Slot().AutoHeight()[Grid]
+        +SVerticalBox::Slot().AutoHeight().Padding(4)[SNew(SHorizontalBox)
+            +SHorizontalBox::Slot().FillWidth(1)[Button(TEXT("Previous"),[this](){--TouchPackPage;bDirty=true;},TouchPackPage>0)]
+            +SHorizontalBox::Slot().FillWidth(1).Padding(8)[Text(FString::Printf(TEXT("%d / %d"),TouchPackPage+1,Pages))]
+            +SHorizontalBox::Slot().FillWidth(1)[Button(TEXT("Next"),[this](){++TouchPackPage;bDirty=true;},TouchPackPage+1<Pages)]];
     // Both full and nearly empty bags retain the same panel footprint.
     return SNew(SBox).HeightOverride(Height).HAlign(HAlign_Center).VAlign(VAlign_Center)
         [SNew(SScaleBox).Stretch(EStretch::ScaleToFit).StretchDirection(EStretchDirection::DownOnly)[Grid]];
@@ -249,23 +279,37 @@ void UACEVRMenu::BuildInventory()
         Layout->AddSlot().FillWidth(1)[Grid];
     }
     else Layout->AddSlot().FillWidth(1)[PackGrid(Pack)];
-    Layout->AddSlot().AutoWidth().Padding(8,0)[PackIcons()];
+    if(bTouchMode)Layout->AddSlot().AutoWidth().Padding(8,0)[SNew(SBox).WidthOverride(100).HeightOverride(210)[SNew(SScrollBox)+SScrollBox::Slot()[PackIcons()]]];
+    else Layout->AddSlot().AutoWidth().Padding(8,0)[PackIcons()];
     Body->AddSlot().AutoHeight()[Layout];
     // Reserve the same footer geometry before and after selection, including
     // single items versus stacks. Auto-height rows used to change the scrollbar
     // and shrink the pack grid as soon as the player clicked an item.
     FACEWorldObject Item;const bool Valid=Selected && Client->GetWorldObject(Selected,Item) && Client->IsOwnedInventoryItem(Item);
-    Body->AddSlot().AutoHeight().Padding(4)[SNew(SBox).HeightOverride(64).Clipping(EWidgetClipping::ClipToBoundsAlways)
+    Body->AddSlot().AutoHeight().Padding(4)[SNew(SBox).HeightOverride(bTouchMode?48:64).Clipping(EWidgetClipping::ClipToBoundsAlways)
         [Text(Valid?ACERetailObjectNames::Name(Item):TEXT("Select an item to use, equip, or inspect."),28)]];
     auto Quantity=SNew(SVerticalBox);const auto MainBody=Body;Body=Quantity;
     if(Valid)AddQuantity(Item.StackSize);
     Body=MainBody;
-    Body->AddSlot().AutoHeight()[SNew(SBox).HeightOverride(76)[Quantity]];
+    if(!bTouchMode)Body->AddSlot().AutoHeight()[SNew(SBox).HeightOverride(76)[Quantity]];
     auto Actions=SNew(SWrapBox).UseAllottedSize(true);
     for(const TCHAR* Name:{TEXT("Use / Equip"),TEXT("Inspect"),TEXT("Give"),TEXT("Drop")})
         Actions->AddSlot().Padding(2)[Button(Name,[this,Name](){Execute(Name);},Valid)];
     Body->AddSlot().AutoHeight().Padding(2)[SNew(SBox).HeightOverride(60)[Actions]];
+    if(bTouchMode)Body->AddSlot().AutoHeight()[Quantity];
+    if(bTouchMode && Valid && ACEEquipmentRules::CanWieldInSlot(Item,ACEEquipMask::Shield))
+        Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Equip in left hand"),[this](){Client->SendGetAndWieldItem(Selected,ACEEquipMask::Shield);bDirty=true;})];
     Body->AddSlot().AutoHeight().Padding(2)[SNew(SBox).HeightOverride(60)[Button(UseSource?TEXT("Choose receiving item / Cancel"):TEXT("Use selected on an item..."),[this](){UseSource=UseSource?0:Selected;Confirmation.Reset();bDirty=true;},Valid || UseSource!=0)]];
+    if(bTouchMode && Valid)
+    {
+        Body->AddSlot().AutoHeight().Padding(4)[Text(TEXT("Move selected quantity to:"))];
+        auto Destinations=SNew(SWrapBox).UseAllottedSize(true);
+        auto AddDestination=[&](int32 Guid,const FString& Name)
+        {Destinations->AddSlot().Padding(4)[Button(Name,[this,Guid](){Binder->MoveInventoryAmount(Selected,Guid,Client->GetPackItems(Guid).Num(),Binder->GetSelectedItemAmount(Selected));bDirty=true;},Guid!=Selected)];};
+        AddDestination(Client->GetPlayerGuid(),TEXT("Main pack"));
+        for(const auto& Bag:Client->GetPlayerPacks())AddDestination(Bag.Guid,ACERetailObjectNames::Name(Bag));
+        Body->AddSlot().AutoHeight()[Destinations];
+    }
     if(Client->GetOpenVendorGuid())Body->AddSlot().AutoHeight()[Button(TEXT("Add selected quantity to sell list"),[this](){Execute("Sell");})];
     if(Client->GetTradePartnerGuid())Body->AddSlot().AutoHeight()[Button(TEXT("Add selected quantity to trade"),[this](){Execute("Trade");})];
 }
@@ -286,7 +330,7 @@ TSharedRef<SWidget> UACEVRMenu::PackIcons()
                 [SNew(SBox).WidthOverride(34).HeightOverride(23)[SNew(SImage).Image(&Shoulders).Visibility(EVisibility::HitTestInvisible)]]];
         Packs->AddSlot().AutoHeight().Padding(2)[SNew(SBox).WidthOverride(68).HeightOverride(68)
             [SNew(SButton).Tag("EquipmentToggle").ButtonStyle(&SlotStyle()).IsFocusable(false)
-                .HAlign(HAlign_Center).VAlign(VAlign_Center).ContentPadding(2)
+                .HAlign(HAlign_Center).VAlign(VAlign_Center).ContentPadding(2).TouchMethod(EButtonTouchMethod::PreciseTap)
                 .ButtonColorAndOpacity(Page=="Equipment"?FLinearColor(.25f,.7f,.4f):FLinearColor::White)
                 .ToolTipText(FText::FromString(Page=="Equipment"?TEXT("Return to inventory"):TEXT("Equipment")))
                 .OnHovered_Lambda([this](){if(HoverLabel)HoverLabel->SetText(FText::FromString(Page=="Equipment"?TEXT("Return to inventory"):TEXT("Equipment")));})
@@ -295,7 +339,7 @@ TSharedRef<SWidget> UACEVRMenu::PackIcons()
     auto AddPack=[&](int32 Guid,const FString& Name,const TSharedRef<SWidget>& Art)
     {
         auto Control=SNew(SBox).WidthOverride(68).HeightOverride(68)[SNew(SButton).Tag(FName(*FString::Printf(TEXT("Pack_%d"),Guid))).ButtonStyle(&SlotStyle()).IsFocusable(false)
-            .HAlign(HAlign_Center).VAlign(VAlign_Center).ContentPadding(2)
+            .HAlign(HAlign_Center).VAlign(VAlign_Center).ContentPadding(2).TouchMethod(EButtonTouchMethod::PreciseTap)
             .ButtonColorAndOpacity(Page!="Equipment" && Guid==Pack?FLinearColor(.25f,.7f,.4f):FLinearColor::White)
             .OnHovered_Lambda([this,Name](){if(HoverLabel)HoverLabel->SetText(FText::FromString(Name));})
             .OnPressed_Lambda([this,Guid](){BeginItemPointer(Guid);})

@@ -45,6 +45,8 @@
   "excluded_buffs": [],
   "looting": false,
   "loot_range": 15,
+  "loot_notify_pickup": true,
+  "loot_notify_match": true,
   "loot_rules": [],
   "route_preview": true,
   "waypoint_radius": 0.8,

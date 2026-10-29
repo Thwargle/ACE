@@ -86,6 +86,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEAppraisalCommandContextTest;
 	friend class FACEVendorTransactionsTest;
 	friend class FACEUCMLootLatencyTest;
+	friend class FACEUCMLootNotificationTest;
 	friend class FACEPluginLootIconsTest;
     friend class FACEPluginCompanionTest;
     friend class FACEThirdEyeTest;
@@ -100,6 +101,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEInteractionRecoveryTest;
 	friend class FACEVRRenderReplicationTest;
 	friend class FACEVRRigTest;
+    friend class FACEMobileTouchTest;
 	friend class FACESpellDataRevisionTest;
 	friend class FACESalvageTest;
 	friend class FACEHousingTest;
@@ -882,6 +884,12 @@ private:
     int32 FindEquipmentStowContainer(const TMap<int32, int32>& Reserved) const;
 	bool CanStowEquipmentInContainer(int32 Container, int32 Reserved = 0) const;
 	bool HasPlayerInventoryState(const FACEWorldObject& Object) const;
+	enum EEquipmentRemovalEvidence : uint8 { WielderCleared = 1, WieldLocationCleared = 2, WorldDeleted = 4 };
+	// ACE consumes equipped items using UI quality clears plus a Smartbox delete,
+	// which can arrive in either queue order. Neither alone removes ownership.
+	TMap<int32, uint8> EquipmentRemovalEvidence;
+	bool UpdateEquipmentRemovalEvidence(int32 Guid, uint8 Evidence, bool bSet = true);
+	void RemoveInventoryObject(int32 ItemGuid);
 	int32 PendingEquipmentGuid = 0;
 	TMap<int32,double> PendingInventoryTransfers;
 	uint32 PendingEquipmentCombatMode = 0;
@@ -1006,6 +1014,8 @@ private:
 	double LastServerPacketAt = 0.0;
 	double LastServerDatagramAt = 0.0;
 	double LastReceivePortKeepaliveAt = 0.0;
+	// Mobile networks can expire the inbound UDP mapping after only 60 seconds.
+	double ReceivePortKeepaliveInterval = PLATFORM_ANDROID ? 20.0 : 110.0;
 	/** Retail ClientFlowQueue sends cmdNOP to port+1 every 220 half-second intervals. */
 	void MaintainReceivePort(double Now);
 #if WITH_DEV_AUTOMATION_TESTS

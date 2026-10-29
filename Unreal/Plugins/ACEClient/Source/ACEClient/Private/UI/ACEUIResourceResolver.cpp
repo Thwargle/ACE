@@ -423,7 +423,7 @@ UTexture2D* UACEUIResourceResolver::ResolveItemBackground(uint32 ItemType,uint32
 	if (!DecodeIcon(Resolver,BackgroundId,Pixels)) return nullptr;
 	if (DecodeIcon(Resolver,UnderlayId,Underlay)) OverIcon(Pixels,Underlay);
 	auto* Texture=FACEDatTextureResolver::CreateTransientRgbaUiIcon(32,32,Pixels);
-	ItemCompositeCache.Add(Key,Texture); return Texture;
+	if (Texture) ItemCompositeCache.Add(Key,Texture); return Texture;
 }
 
 UTexture2D* UACEUIResourceResolver::ResolveItemForeground(uint32 IconId,uint32 OverlayId,uint32 Effects,bool bForSale,
@@ -466,7 +466,7 @@ UTexture2D* UACEUIResourceResolver::ResolveItemForeground(uint32 IconId,uint32 O
 		}
 	}
 	auto* Texture=FACEDatTextureResolver::CreateTransientRgbaUiIcon(32,32,Pixels);
-	ItemCompositeCache.Add(Key,Texture); return Texture;
+	if (Texture) ItemCompositeCache.Add(Key,Texture); return Texture;
 }
 
 UTexture2D* UACEUIResourceResolver::ResolveSpellIcon(uint32 SpellId)

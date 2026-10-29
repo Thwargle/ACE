@@ -1,7 +1,13 @@
 #include "ACEClientBuild.h"
+#include "Mobile/ACEMobileSettings.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
 #include "Widgets/SWindow.h"
+
+const TCHAR* ACEClientBuild::ProductName(bool bVR)
+{
+    return UACEMobileSettings::IsEnabled() && !bVR ? TEXT("AC:Unreal Mobile") : PLATFORM_ANDROID || bVR ? VRProductName : DesktopProductName;
+}
 
 void ACEClientBuild::UpdateWindowTitle(UWorld* World, bool bVR)
 {

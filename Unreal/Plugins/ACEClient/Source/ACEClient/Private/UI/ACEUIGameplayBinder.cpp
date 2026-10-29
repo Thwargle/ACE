@@ -6505,7 +6505,8 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 	}
 
 	// Main window honours the quick filter cycle; retail floaty windows use their
-	// own 64-bit type filters and only receive lines while visible.
+	// own 64-bit type filters. Visibility only controls presentation: closed
+	// windows must retain matching messages for when the player opens them again.
 	const auto* Plugins = Client ? Client->GetGameInstance()->GetSubsystem<UACEPluginSubsystem>() : nullptr;
 	const uint8 PluginHidden = Plugins ? Plugins->FilterPluginChatWindows(Text, Sender, ChatType) : 0;
 	if (!(PluginHidden & 1) && PassesChatFilter(FilterType) && (MainChatTypeFilter & (1ull << (static_cast<uint32>(FilterType) & 63))) != 0)
@@ -6521,12 +6522,6 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 		for (int32 W = 1; W <= NumFloatyChats; ++W)
 		{
 			if (PluginHidden & (1u << W)) continue;
-			TSharedPtr<FACEUIElement> Root = Manager->FindElementByName(
-				FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"), W));
-			if (!Root.IsValid() || !Root->bVisible)
-			{
-				continue;
-			}
 			if (FloatyChatFilters.IsValidIndex(W - 1)
 				&& (FloatyChatFilters[W - 1] & (1ull << (static_cast<uint32>(FilterType) & 63))) == 0)
 			{
@@ -14424,6 +14419,21 @@ void UACEUIGameplayBinder::RebuildVendorVisibleFilters()
 	}
 }
 
+static void UpdateVendorFilterArrow(UACEUIElementManager* Manager, bool bOpen)
+{
+	if (!Manager) return;
+	if (auto Arrow = Manager->FindElementByName(TEXT("Menu_Vendor_SelectionWidget")))
+	{
+		// Retail's menu uses states 1/2 when closed and 6/7 when open.
+		// Select the state as well as the fallback image; state media wins at paint.
+		Arrow->bVisible = true;
+		Arrow->bUseExplicitState = true;
+		Arrow->DefaultState = bOpen ? 6 : 1;
+		Arrow->ImageFileId = bOpen ? 0x060012B2 : 0x060012B1;
+		Arrow->DrawMode = 3;
+	}
+}
+
 void UACEUIGameplayBinder::PlaceVendorFilterCaption()
 {
 	if (!Canvas || !Manager || OpenVendorGuid == 0)
@@ -14447,12 +14457,7 @@ void UACEUIGameplayBinder::PlaceVendorFilterCaption()
 		Display = Manager->FindElementByName(TEXT("Menu_Vendor_SelectionDisplay"));
 	}
 	PlaceTextOnElement(VendorFilterText, Display, VendorFilterLabel(), 9, TextGold, 200010);
-	if (auto Arrow = Manager->FindElementByName(TEXT("Menu_Vendor_SelectionWidget")))
-	{
-		Arrow->bVisible = true;
-		Arrow->ImageFileId = 0x060012B1;
-		Arrow->DrawMode = 3;
-	}
+	UpdateVendorFilterArrow(Manager, bVendorFilterDropdownOpen);
 }
 
 void UACEUIGameplayBinder::ToggleVendorFilterDropdown()
@@ -14471,6 +14476,7 @@ void UACEUIGameplayBinder::SetVendorItemTypeFilter(int32 FilterIndex)
 void UACEUIGameplayBinder::CloseVendorFilterDropdown()
 {
 	bVendorFilterDropdownOpen = false;
+	UpdateVendorFilterArrow(Manager, false);
 	if (VendorFilterDropdownBg)
 	{
 		VendorFilterDropdownBg->SetVisibility(ESlateVisibility::Collapsed);
@@ -14503,6 +14509,7 @@ void UACEUIGameplayBinder::RefreshVendorFilterDropdown()
 	}
 	EnsureOverlays();
 	RebuildVendorVisibleFilters();
+	UpdateVendorFilterArrow(Manager, true);
 	constexpr int32 RowH = 18;
 	constexpr int32 DropZ = 200000;
 	const int32 Rows = FMath::Max(1, VendorVisibleFilterIndices.Num());

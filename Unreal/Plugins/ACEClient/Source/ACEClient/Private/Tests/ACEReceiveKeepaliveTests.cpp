@@ -17,12 +17,14 @@ bool FACEReceiveKeepaliveTest::RunTest(const FString&)
  if(!TestNotNull(TEXT("Loopback listener"),Server))return false;
  auto Destination=Sockets->CreateInternetAddr();Destination->SetIp(0x7f000001);Destination->SetPort(Server->GetPortNo());
  for(bool GDLE:{false,true})
+ for(double Interval:{20.0,110.0})
  {
   FACESession Session;Session.Creds.bGDLE=GDLE;Session.State=EACESessionState::InWorld;
+  Session.ReceivePortKeepaliveInterval=Interval;
   Session.SocketS2C=FUdpSocketBuilder(TEXT("Receive port client")).AsNonBlocking().BoundToPort(0).Build();
   Session.ServerS2CAddr=Destination;Session.LastReceivePortKeepaliveAt=100;
   const uint32 Sequence=Session.NextPacketSequence;
-  // Model a router that expires UDP mappings after 180 seconds without an
+  // Model mobile (60-second) and desktop (180-second) NAT expiry without an
   // outbound datagram. Verify actual socket, destination, and retail wire bytes
   // over eleven minutes, without sleeping or contacting a real game server.
   double LastOutbound=100;int Count=0;
@@ -45,12 +47,12 @@ bool FACEReceiveKeepaliveTest::RunTest(const FString&)
     TestEqual(TEXT("Connectionless interval"),Time,uint16(0));TestEqual(TEXT("Connectionless iteration"),Iteration,uint16(0));
     TestEqual(TEXT("Valid cleartext CRC"),Checksum,FACESession::HeaderHash32(0,Flags,0,Time,Size,Iteration)+FACEHash32::Calculate(Bytes+20,8));
     TestEqual(TEXT("cmdNOP"),R.ReadUInt32(),1u);TestEqual(TEXT("NOP param zero"),R.ReadUInt32(),0u);
-    TestEqual(TEXT("Retail 110-second keepalive cadence"),Now-LastOutbound,110.0);
+    TestEqual(TEXT("Platform keepalive cadence"),Now-LastOutbound,Interval);
     LastOutbound=Now;++Count;
    }
-   TestTrue(TEXT("Receive NAT mapping never reaches its 180-second expiry"),Now-LastOutbound<180.0);
+   TestTrue(TEXT("Receive NAT mapping never expires"),Now-LastOutbound<(Interval==20.0?60.0:180.0));
   }
-  TestEqual(TEXT("Keepalives continue across multiple reported disconnect windows"),Count,6);
+  TestEqual(TEXT("Keepalives continue across multiple reported disconnect windows"),Count,int32(660/Interval));
   TestEqual(TEXT("Keepalives never consume gameplay sequence numbers"),Session.NextPacketSequence,Sequence);
   TestTrue(TEXT("No keepalive enters the gameplay retransmission cache"),Session.CachedC2SPackets.IsEmpty());
   for(auto State:{EACESessionState::Disconnected,EACESessionState::AwaitConnectRequest,EACESessionState::Failed})

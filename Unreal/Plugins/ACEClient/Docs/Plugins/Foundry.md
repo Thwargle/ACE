@@ -36,6 +36,12 @@ load arbitrary DLLs, connect to a database or execute SQL locally. The server
 must authorize each developer/admin command. A sent-command result is not proof
 that ACE accepted it: check chat for the server response.
 
+The workshop displays slash commands, while the native content service sends
+ACE's `@` command prefix in the Talk packet (for example `/ci 123` becomes
+`@ci 123`). `ACE.Plugins.Foundry` exercises both creation buttons through Lua,
+the public service dispatcher and the outgoing packet, in addition to checking
+permissions and target validation.
+
 The local content folder contains `json/weenies`, `sql/weenies` and equivalent
 `landblocks`, `quests` and `recipes` directories. Windows offers a native folder
 picker and opens files in Notepad. Other platforms use `ClientMods/Content` and

@@ -363,7 +363,13 @@ bool FACEVRProtocolTest::RunTest(const FString& Parameters)
 		}
 		else
 		{
-			FACEBinaryWriter Remove; Remove.WriteUInt32(uint32(Arrows.Guid)); FACEBinaryReader RemoveInput(Remove.GetData()); Session.HandleInventoryRemoveObject(RemoveInput);
+			// ACE's actual ConsumeItem path, shared by desktop and VR.
+			FACEBinaryWriter Owner; Owner.WriteUInt8(1); Owner.WriteUInt32(uint32(Arrows.Guid)); Owner.WriteUInt32(3); Owner.WriteUInt32(0);
+			FACEBinaryReader OR(Owner.GetData()); Session.HandlePublicUpdateInstanceId(OR);
+			FACEBinaryWriter Location; Location.WriteUInt8(1); Location.WriteUInt32(uint32(Arrows.Guid)); Location.WriteUInt32(10); Location.WriteUInt32(0);
+			FACEBinaryReader LR(Location.GetData()); Session.HandlePublicUpdatePropertyInt(LR);
+			FACEBinaryWriter Remove; Remove.WriteUInt32(uint32(Arrows.Guid)); Remove.WriteUInt16(1); Remove.Align();
+			FACEBinaryReader RemoveInput(Remove.GetData()); Session.HandleObjectDelete(RemoveInput);
 			TestFalse(TEXT("Only consuming the final arrow removes its stack"), Session.WorldObjects.Contains(Arrows.Guid));
 		}
 	}

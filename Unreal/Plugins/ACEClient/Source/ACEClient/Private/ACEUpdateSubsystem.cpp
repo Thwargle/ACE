@@ -1,4 +1,5 @@
 #include "ACEUpdateSubsystem.h"
+#include "Mobile/ACEMobileSettings.h"
 #include "ACEClientBuild.h"
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
@@ -68,7 +69,7 @@ FString FACEUpdateRelease::DownloadURL() const
     return FString::Printf(TEXT("https://thwargle.com/downloads/ac/v%d/%s"), Number, *File);
 }
 
-bool ACEUpdates::ParseManifest(const FString& Json, bool bQuest, FACEUpdateRelease& Out, FString& Error, bool bLinux)
+bool ACEUpdates::ParseManifest(const FString& Json, bool bQuest, FACEUpdateRelease& Out, FString& Error, bool bLinux, bool bMobile)
 {
     Error = TEXT("The update information is invalid. Please try again later.");
     if (Json.Len() > 65536) return false;
@@ -80,17 +81,18 @@ bool ACEUpdates::ParseManifest(const FString& Json, bool bQuest, FACEUpdateRelea
     if (!Root->TryGetNumberField(TEXT("version"), Number) || !FMath::IsFinite(Number) || Number < 1 || Number > 100000 || Number != FMath::FloorToDouble(Number)) return false;
     if (!Root->TryGetObjectField(TEXT("updates"), Updates) || !(*Updates)->TryGetNumberField(TEXT("schema"), Schema) || Schema != 1)
     { Error = TEXT("This release does not offer in-game updates yet. Downloads are available on thwargle.com."); return false; }
-    if (bQuest && bLinux) return false;
-    if (!(*Updates)->TryGetObjectField(bQuest ? TEXT("quest") : bLinux ? TEXT("linux") : TEXT("windows"), Artifact))
-    { if (bLinux) Error = TEXT("No Linux release is listed yet. Downloads are available on thwargle.com."); return false; }
+    if (int32(bQuest)+int32(bLinux)+int32(bMobile)>1) return false;
+    if (!(*Updates)->TryGetObjectField(bMobile ? TEXT("android") : bQuest ? TEXT("quest") : bLinux ? TEXT("linux") : TEXT("windows"), Artifact))
+    { if (bMobile) Error=TEXT("No Android phone release is published yet. Install the latest mobile preview package to update.");
+      else if (bLinux) Error = TEXT("No Linux release is listed yet. Downloads are available on thwargle.com."); return false; }
     FACEUpdateRelease Parsed; Parsed.Number = int32(Number);
-    if (!Root->TryGetStringField(bQuest ? TEXT("questVersion") : bLinux ? TEXT("linuxVersion") : TEXT("windowsVersion"), Parsed.Version)
+    if (!Root->TryGetStringField(bMobile ? TEXT("androidVersion") : bQuest ? TEXT("questVersion") : bLinux ? TEXT("linuxVersion") : TEXT("windowsVersion"), Parsed.Version)
         || !(*Artifact)->TryGetStringField(TEXT("file"), Parsed.File)
         || !(*Artifact)->TryGetStringField(TEXT("sha256"), Parsed.Sha256)
         || !(*Artifact)->TryGetNumberField(TEXT("bytes"), Bytes)) return false;
     if (!FMath::IsFinite(Bytes) || Bytes < 1 || Bytes > 2147483648. || Bytes != FMath::FloorToDouble(Bytes)) return false;
     Parsed.Bytes = int64(Bytes);
-    const FString Expected = bQuest ? FString::Printf(TEXT("AC-VR-Quest-v%d.apk"), Parsed.Number)
+    const FString Expected = bMobile ? FString::Printf(TEXT("AC-Unreal-Android-v%d.apk"), Parsed.Number) : bQuest ? FString::Printf(TEXT("AC-VR-Quest-v%d.apk"), Parsed.Number)
         : bLinux ? FString::Printf(TEXT("AC-Unreal-Linux-v%d.tar.gz"), Parsed.Number) : FString::Printf(TEXT("AC-Unreal-Setup-v%d.exe"), Parsed.Number);
     if (Parsed.File != Expected || Parsed.Sha256.Len() != 64 || Parsed.Version.IsEmpty() || Parsed.Version.Len() > 48) return false;
     for (TCHAR C : Parsed.Sha256) if (!FChar::IsHexDigit(C)) return false;
@@ -257,7 +259,8 @@ void UACEUpdateSubsystem::Check(bool bAutomatic)
         if (!Success || !Closed || !Response || Response->GetResponseCode() != 200 || Response->GetEffectiveURL() != ACEUpdates::ManifestURL)
         { Fail(TEXT("Could not check for updates. You can still log in; try again later.")); return; }
         FString Error;
-        if (!ACEUpdates::ParseManifest(Body->Text(), PLATFORM_ANDROID, Release, Error, PLATFORM_LINUX)) { Fail(Error); return; }
+        const bool Mobile=PLATFORM_ANDROID && UACEMobileSettings::IsEnabled();
+        if (!ACEUpdates::ParseManifest(Body->Text(), PLATFORM_ANDROID && !Mobile, Release, Error, PLATFORM_LINUX, Mobile)) { Fail(Error); return; }
         State = Release.Number > ACEClientBuild::ReleaseNumber ? EACEUpdateState::Available : EACEUpdateState::Current;
         Message = State == EACEUpdateState::Available ? FString::Printf(TEXT("Version %s is available (%.0f MB)."), *Release.Version, Release.Bytes / 1048576.) : TEXT("You have the latest version.");
     });

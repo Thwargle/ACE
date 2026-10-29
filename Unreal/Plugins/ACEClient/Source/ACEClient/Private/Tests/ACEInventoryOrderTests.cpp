@@ -656,6 +656,46 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
         Session.DeleteWorldObject(2); Check(Destination,{1,2});
         TestTrue(TEXT("World cleanup retains unequipped weapon description"),Session.WorldObjects.Contains(2));
     }
+    // ACE consumes the final equipped missile through quality clears (UIQueue)
+    // and ObjectDelete (SmartboxQueue), not InventoryRemoveObject. Exercise all
+    // receipt orders, including a delete before either quality reaches the UI.
+    for (int64 Location : {ACEEquipMask::MissileAmmo, ACEEquipMask::MissileWeapon})
+    for (const auto& Order : TArray<TArray<int32>>{{0,1,2},{0,2,1},{1,0,2},{1,2,0},{2,0,1},{2,1,0}})
+    {
+        Session.ClearWorldState(); Session.PlayerGuid=100; Session.State=EACESessionState::InWorld;
+        auto Ammo=Item(200,0,INDEX_NONE); Ammo.WielderId=100; Ammo.CurrentWieldedLocation=Location;
+        Ammo.StackSize=1; Ammo.MaxStackSize=250; Ammo.bHasPhysicsTimestamps=true;
+        Ammo.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]=7;
+        Session.UpsertWorldObject(Ammo); Session.SelectObject(Ammo.Guid,true);
+        const auto Revision=Session.InventoryDataRevision;
+        for (int32 I=0; I<Order.Num(); ++I)
+        {
+            FACEBinaryWriter W;
+            if(Order[I]==2)
+            {
+                W.WriteUInt32(200); W.WriteUInt16(7); W.Align();
+                FACEBinaryReader R(W.GetData()); Session.HandleObjectDelete(R);
+            }
+            else
+            {
+                W.WriteUInt8(1); W.WriteUInt32(200); W.WriteUInt32(Order[I]==0?3:10); W.WriteInt32(0);
+                FACEBinaryReader R(W.GetData());
+                if(Order[I]==0)Session.HandlePublicUpdateInstanceId(R);else Session.HandlePublicUpdatePropertyInt(R);
+            }
+            TestEqual(TEXT("Only the complete server removal retires the last missile"),Session.WorldObjects.Contains(200),I<2);
+        }
+        TArray<FACEWorldObject> Equipped; Session.GetEquippedItems(Equipped);
+        TestTrue(TEXT("Final missile releases its equipment slot"),Equipped.IsEmpty());
+        TestEqual(TEXT("Consumed missile selection is cleared"),Session.SelectedObject.Guid,0);
+        TestTrue(TEXT("Consumed ammo invalidates the inventory snapshot"),Session.InventoryDataRevision>Revision);
+        TestTrue(TEXT("Completed removal leaves no pending evidence"),Session.EquipmentRemovalEvidence.IsEmpty());
+        auto Refill=Ammo; Refill.Guid=201; Refill.StackSize=250; Refill.WielderId=0; Refill.CurrentWieldedLocation=0; Refill.ContainerId=100;
+        Session.UpsertWorldObject(Refill);
+        FACEBinaryWriter Wield; Wield.WriteUInt32(201); Wield.WriteInt32(int32(Location));
+        FACEBinaryReader WR(Wield.GetData()); Session.HandleWieldItem(WR); Session.GetEquippedItems(Equipped);
+        TestEqual(TEXT("Fresh ammo can occupy the slot without relogging"),Equipped.Num(),1);
+        if(Equipped.Num())TestEqual(TEXT("Equipped ammo is the replacement stack"),Equipped[0].Guid,201);
+    }
     // Wield receipts arriving before ObjectCreate must retain the acknowledged
     // equipment record. They must not invent a destination for other equipment.
     Session.ClearWorldState(); Session.PlayerGuid=100;

@@ -18,6 +18,8 @@ class ACECLIENT_API UACEVRMenu : public UUserWidget
 {
     GENERATED_BODY()
 public:
+    bool bTouchMode = false;
+    TFunction<void()> TouchClose;
     void InitializeMenu(UACEVRComponent* InRig, UACEClientSubsystem* InClient, UACEUIGameplayBinder* InBinder);
     void OpenPage(FName InPage);
     void RefreshIfDirty();
@@ -37,12 +39,24 @@ public:
 private:
     friend class FACEVRRigTest;
     friend class FACEUIInteractionParityTest;
+    friend class FACEMobileTouchTest;
     friend class UACEVRComponent;
     UPROPERTY(Transient) TObjectPtr<UACEVRComponent> Rig;
     UPROPERTY(Transient) TObjectPtr<UACEClientSubsystem> Client;
     UPROPERTY(Transient) TObjectPtr<UACEUIGameplayBinder> Binder;
     UPROPERTY(Transient) TArray<TObjectPtr<UTexture2D>> IconTextures;
     TArray<TSharedPtr<FSlateBrush>> IconBrushes;
+    struct FPendingIcon
+    {
+        TSharedPtr<FSlateBrush> Brush;
+        TWeakPtr<SWidget> Widget;
+        TFunction<UTexture2D*()> Resolve;
+        double NextTry=0;
+        float Delay=.1f;
+    };
+    TArray<FPendingIcon> PendingIcons;
+    TSharedRef<SWidget> DeferredIcon(TFunction<UTexture2D*()> Resolve,float Size);
+    void RefreshPendingIcons();
     TSharedPtr<SVerticalBox> Body;
     TSharedPtr<STextBlock> HoverLabel;
     TSharedPtr<SScrollBox> ContentScroll;
@@ -54,6 +68,7 @@ private:
     FACEAppraisalInfo InspectionAppraisal;
     FName Page="Inventory";
     int32 Pack=0, Selected=0, Spell=0, PageIndex=0, RefreshCount=0;
+    int32 TouchPackPage=0;
     int32 MenuOwnerGuid=0;
     bool bDirty=true;
 	uint64 InventoryRevision=0;

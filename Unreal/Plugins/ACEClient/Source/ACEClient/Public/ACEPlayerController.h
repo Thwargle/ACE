@@ -42,6 +42,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACEWorldLootPlacementTest;
 	friend class UACEVRComponent;
 	friend class FACEVRRigTest;
+    friend class FACEMobileTouchTest;
 	friend class FACEVRInteriorTest;
 	friend class FACEEntranceTransitionTest;
 	friend class FACEVRWallContactTest;
@@ -81,11 +82,20 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
     friend class FACERetailCharacterCreationScreenTest;
 
 public:
+    float GetJumpChargeFraction() const { return bJumpCharging ? FMath::Clamp(JumpChargeExtent,0.f,1.f) : 0.f; }
+    bool IsChargingJump() const { return bJumpCharging; }
     void SetPluginAttackPower(float Power);
     void ShowPluginAttack(int32 Target, uint32 Height, float Power);
 	AACEPlayerController();
 	int32 FindNearbyTarget(bool bEnemies, int32 Direction = 0, int32 ExcludeGuid = 0) const;
 	bool IsVRActive() const;
+    bool IsMobileActive() const;
+    void UpdateMobileInterface();
+    void MobileLook(FVector2D Delta);
+    void MobileSelectAt(FVector2D Absolute);
+    void MobileAction(FName Action, int32 Spell = 0);
+    void CancelMobileMovement();
+    UPROPERTY(Transient) TObjectPtr<class UACEMobileWidget> MobileWidget;
     void QueuePluginJump(float Charge,float Heading,float Forward,float Strafe=0,bool Walk=false);
     void CancelPluginJump();
     bool TryFastBuffTap();

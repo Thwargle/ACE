@@ -66,7 +66,7 @@ TSharedRef<SWidget> UACEVRMenu::GetInspectionWidget()
     if(!InspectionWidget)
     {
         InspectionWidget=ACEVRUIStyle::Frame(SNew(SVerticalBox)
-            +SVerticalBox::Slot().AutoHeight()[Button(TEXT("Close inspection"),[this](){bInspectionOpen=false;bDirty=true;})]
+            +SVerticalBox::Slot().AutoHeight()[Button(TEXT("Close inspection"),[this](){bInspectionOpen=false;bDirty=true;if(bTouchMode && Page=="Inspect" && TouchClose)TouchClose();})]
             +SVerticalBox::Slot().FillHeight(1).Padding(8)[SNew(SScrollBox)+SScrollBox::Slot()[SAssignNew(InspectionBody,SVerticalBox)]],12,true);
     }
     return InspectionWidget.ToSharedRef();

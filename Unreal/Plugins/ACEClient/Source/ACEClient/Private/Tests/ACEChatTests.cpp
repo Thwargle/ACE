@@ -154,6 +154,34 @@ bool FACEChatParityTest::RunTest(const FString&)
             Ctrl(EKeys::C); ReadClipboard(Copied);
             TestEqual(TEXT("Dragging across chat messages copies both complete lines"),Copied,FString(TEXT("Copy this chat message\r\nSecond message")));
             Slate.GetUser(0)->ReleaseCursorCapture();
+            const auto* Font=Output->GetBitmapFont();
+            if(Font)
+            {
+                auto Width=[&](const TCHAR* Text){float X=0;for(TCHAR C:FString(Text))X+=ACEDatText::Advance(*Font,C);return X;};
+                // The active row has just scrolled/resized: its event geometry
+                // is current while other retained rows still have old geometry.
+                // Selecting text inside this row must not use those stale rows.
+                const auto Moved=FGeometry::MakeRoot(FVector2D(400,40),FSlateLayoutTransform(1.5f,FVector2D(120,600)));
+                const FVector2D A=Moved.LocalToAbsolute(FVector2D(Width(TEXT("Copy ")),1));
+                const FVector2D B=Moved.LocalToAbsolute(FVector2D(Width(TEXT("Copy this chat")),1));
+                for(bool Reverse:{false,true})
+                {
+                    const auto From=Reverse?B:A,To=Reverse?A:B;
+                    First->OnMouseButtonDown(Moved,FPointerEvent(0,From,From,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
+                    Slate.GetUser(0)->SetCursorCaptor(First,FirstPath);
+                    // Also exercise a fast drag with no intermediate move event.
+                    First->OnMouseButtonUp(Moved,FPointerEvent(0,To,From,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
+                    Slate.GetUser(0)->ReleaseCursorCapture();
+                    Ctrl(EKeys::C);ReadClipboard(Copied);
+                    TestEqual(TEXT("Scaled partial drag copies only the chosen words in either direction"),Copied,FString(TEXT("this chat")));
+                }
+                const auto Word=Moved.LocalToAbsolute(FVector2D(Width(TEXT("Copy th")),1));
+                First->OnMouseButtonDoubleClick(Moved,FPointerEvent(0,Word,Word,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
+                Ctrl(EKeys::C);ReadClipboard(Copied);
+                TestEqual(TEXT("Double-click copies one word, not the whole message"),Copied,FString(TEXT("this")));
+                Main->SetChatText(TEXT("say "));Focus(Main);Key(EKeys::End);Ctrl(EKeys::V);
+                TestEqual(TEXT("Selected word pastes at the chat caret"),Main->GetText().ToString(),FString(TEXT("say this")));
+            }
         }
         // The editable chat command is intentionally single-line; test its
         // clipboard behavior separately from copying multiline chat history.

@@ -307,6 +307,11 @@ docker-compose.arm64
 !/Unreal/Config/
 !/Unreal/Plugins/**/Config/
 !/Quest/Project/Config/
+!/Mobile/Project/Config/
+/Mobile/Project/Source/
+/Mobile/Project/Plugins/
+/Mobile/Project/Content/
+/Mobile/Project/Build/
 
 # Local build outputs, SDKs, captures, game data and credentials.
 **/Binaries/

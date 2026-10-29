@@ -16,6 +16,7 @@ local corpse_pending=nil
 local corpse_contents_wait=nil
 local corpse_spawn_wait,combat_death_seen=nil,nil
 local completed_corpse=nil
+local confirmed_loot_notice=nil
 local mana_refill_pending=nil
 local mana_fill_pending,pet_refill_pending=nil,nil
 local mana_sources={} -- only junk whose corpse-to-inventory receipt was confirmed
@@ -2214,6 +2215,10 @@ local function tick(s,p)
      -- corpse so combat/recovery continue; retry it later without flooding Use.
      return failed('Loot transfer unconfirmed; leaving items untouched')
     end
+    if loot_pending.rule then
+     confirmed_loot_notice=string.format('Picked up %.0f x %s (rule "%s", %s).',loot_pending.amount,loot_pending.name,loot_pending.rule,loot_pending.after or 'keep')
+     loot_pending.rule=nil
+    end
     if loot_pending.after and loot_pending.after~='keep' then
      if #loot_jobs>=128 then return failed('Too many pending loot actions; visit a vendor') end
      local received
@@ -2301,7 +2306,7 @@ local function tick(s,p)
       local amount=rule.keep_up_to and rule.keep_up_to>0 and math.min(item.count,math.max(0,rule.keep_up_to-have)) or item.count
       if rule.action~='skip' and amount>0 then
        local before={};for _,v in ipairs(inventory) do before[v.id]=true end
-       loot_scan={};loot_pending={container=s.container,empties=#contents==1 and amount==item.count,before=before,amount=amount,id=item.id,count=item.count,wcid=item.wcid,expected=(owned[item.wcid] or 0)+amount,expires=s.time+10,after=rule.action}
+       loot_scan={};loot_pending={container=s.container,empties=#contents==1 and amount==item.count,before=before,amount=amount,id=item.id,count=item.count,wcid=item.wcid,expected=(owned[item.wcid] or 0)+amount,expires=s.time+10,after=rule.action,name=item.name or 'Item',rule=rule.label or 'Matching rule'}
        return {action='loot',item=item.id,amount=amount,status='Looting '..item.name..' ('..(rule.label or 'matching rule')..')'}
       end
       break
@@ -3129,6 +3134,7 @@ end
 
 return function(s,p)
  completed_corpse=nil
+ confirmed_loot_notice=nil
  targeting_status=nil
  activity_time=s.time;activity='meta'
  if p.ucm_resume then
@@ -3179,6 +3185,7 @@ return function(s,p)
   end
  end
  if completed_corpse then intent=intent or result(nil,'Loot complete');intent.completed_corpse=completed_corpse end
+ if confirmed_loot_notice and p.loot_notify_pickup~=false then intent=intent or result(nil,'Loot complete');intent.loot_notification=confirmed_loot_notice end
  buff_plan=nil -- do not retain the previous full snapshot across callbacks
  catalog_snapshot=nil;catalog_by_id=nil;catalog_supplied=nil;catalog_usable=nil;catalog_groups=nil
  object_snapshot=nil -- references keep IDs; the full world snapshot can be collected

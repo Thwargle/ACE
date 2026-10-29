@@ -64,13 +64,15 @@ public:
 	{
 		if (!HasMouseCapture()) return FReply::Unhandled();
 		bDragged|=FVector2D::Distance(PressPosition,E.GetScreenSpacePosition())>3.f;
-		SelectThrough(E.GetScreenSpacePosition());
+		SelectThrough(G,E.GetScreenSpacePosition());
 		Invalidate(EInvalidateWidgetReason::Paint);
 		return FReply::Handled();
 	}
-	virtual FReply OnMouseButtonUp(const FGeometry&,const FPointerEvent& E) override
+	virtual FReply OnMouseButtonUp(const FGeometry& G,const FPointerEvent& E) override
 	{
 		if (!HasMouseCapture() || E.GetEffectingButton()!=EKeys::LeftMouseButton) return FReply::Unhandled();
+		bDragged|=FVector2D::Distance(PressPosition,E.GetScreenSpacePosition())>3.f;
+		if(bDragged)SelectThrough(G,E.GetScreenSpacePosition());
 		if (!bDragged && Owner.IsValid())
 		{
 			if (Owner->IsLinkAt(Caret) && Owner->OnLinkClicked && Owner->OnLinkClicked(Caret))
@@ -79,10 +81,21 @@ public:
 		}
 		return FReply::Handled().ReleaseMouseCapture();
 	}
-	virtual FReply OnMouseButtonDoubleClick(const FGeometry&,const FPointerEvent& E) override
+	virtual FReply OnMouseButtonDoubleClick(const FGeometry& G,const FPointerEvent& E) override
 	{
 		if (!SupportsKeyboardFocus() || E.GetEffectingButton()!=EKeys::LeftMouseButton) return FReply::Unhandled();
-		Anchor=0; Caret=GetText().ToString().Len(); bDragged=true;
+		ClearPeerSelection();
+		const FString Text=GetText().ToString();
+		Anchor=Caret=FMath::Min(CharacterAt(G,E.GetScreenSpacePosition()),FMath::Max(0,Text.Len()-1));
+		// Double-click selects a word; whole-message/window copying remains in
+		// the context menu. Dragging or Shift-click still chooses exact characters.
+		if(!Text.IsEmpty())
+		{
+			const bool Space=FChar::IsWhitespace(Text[Anchor]);
+			while(Anchor>0 && FChar::IsWhitespace(Text[Anchor-1])==Space)--Anchor;
+			while(Caret<Text.Len() && FChar::IsWhitespace(Text[Caret])==Space)++Caret;
+		}
+		bDragged=true;
 		Invalidate(EInvalidateWidgetReason::Paint);
 		return FReply::Handled().SetUserFocus(SharedThis(this));
 	}
@@ -304,19 +317,24 @@ private:
 	{
 		for (auto* Peer : Peers()) { Peer->Anchor=Peer->Caret=0; Peer->Invalidate(EInvalidateWidgetReason::Paint); }
 	}
-	void SelectThrough(FVector2D Position)
+	void SelectThrough(const FGeometry& StartGeometry,FVector2D Position)
 	{
 		const auto Rows=Peers();
 		const int32 Start=Rows.Find(this);
 		if (Start==INDEX_NONE) return;
-		int32 End=Rows.Num()-1;
-		for (int32 I=0; I<Rows.Num(); ++I)
+		// Scrolled/clipped peers can retain geometry from an earlier layout. A
+		// drag within this message must use the actual event geometry, not let an
+		// offscreen peer turn a partial-word selection into several whole lines.
+		const auto Local=StartGeometry.AbsoluteToLocal(Position);
+		const bool SameRow=Local.Y>=0 && Local.Y<StartGeometry.GetLocalSize().Y;
+		int32 End=SameRow?Start:Rows.Num()-1;
+		for (int32 I=0; !SameRow && I<Rows.Num(); ++I)
 		{
 			const auto& Geometry=Rows[I]->GetCachedGeometry();
 			if (Position.Y < Geometry.LocalToAbsolute(FVector2D(0,Geometry.GetLocalSize().Y)).Y) { End=I; break; }
 		}
 		const int32 StartChar=Anchor;
-		const int32 EndChar=Rows[End]->CharacterAt(Rows[End]->GetCachedGeometry(),Position);
+		const int32 EndChar=Rows[End]->CharacterAt(SameRow?StartGeometry:Rows[End]->GetCachedGeometry(),Position);
 		for (int32 I=0; I<Rows.Num(); ++I)
 		{
 			auto* Row=Rows[I];

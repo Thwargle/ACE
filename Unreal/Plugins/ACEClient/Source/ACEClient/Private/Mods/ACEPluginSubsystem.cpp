@@ -1428,6 +1428,7 @@ bool UACEPluginSubsystem::Tick(float)
     {
         NextMaintenanceAt=FPlatformTime::Seconds()+.5;
         UpdateLedgers();UpdateDesktopDock();RefreshAutomationData();DrawRoute();
+        TickLootNotifications();
     }
     auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     UpdateItemToolsCharacter();
@@ -1637,6 +1638,13 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
             }
     }
     LogUCMIntent(P,I);
+    bool NotifyPickup=true;
+    P.Profile->TryGetBoolField(TEXT("loot_notify_pickup"),NotifyPickup);
+    if(P.IsPolicy()&&P.Permissions.Contains(TEXT("loot"))&&NotifyPickup)
+    {
+        const FString LootNotice=String(I,TEXT("loot_notification"));
+        if(!LootNotice.IsEmpty())ShowLootNotification(LootNotice);
+    }
     if(!MetaState.IsEmpty())P.MetaState=MetaState;
     if(I->HasTypedField<EJson::String>(TEXT("meta_status")))P.MetaStatus=String(I,TEXT("meta_status")).Left(1600);
     const FString Status = String(I, TEXT("status")); if (!Status.IsEmpty()) P.Status = Status;

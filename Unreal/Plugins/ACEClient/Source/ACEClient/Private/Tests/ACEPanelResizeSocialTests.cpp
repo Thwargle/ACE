@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "UI/ACERetailTextEntry.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
@@ -46,7 +47,7 @@ bool FACEPanelResizeSocialTest::RunTest(const FString&)
     FConfigFile Preferences; Preferences.NoSave=true; GConfig->SetFile(GGameUserSettingsIni,&Preferences);
     auto* GI=NewObject<UGameInstance>();
     auto* Dat=NewObject<UACEDatSubsystem>(GI);
-    if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     const FString ArtDirectory=FPaths::ProjectSavedDir()/TEXT("Automation/PanelResizeSocial");
     IFileManager::Get().MakeDirectory(*ArtDirectory,true);
     auto* Resources=NewObject<UACEUIResourceResolver>(); Resources->Initialize(Dat);
@@ -207,6 +208,33 @@ bool FACEPanelResizeSocialTest::RunTest(const FString&)
     Session.Fellowship.LeaderGuid=5678;Binder->RefreshFellowshipOverlays();
     Session.CachedC2SPackets.Reset();Click(TEXT("FellowshipPage"),TEXT("FellowDisbandButton"));TestFalse(TEXT("Nonleader cannot disband"),HasAction(ACEGameAction::FellowshipQuit,1));
     Session.CachedC2SPackets.Reset();Click(TEXT("FellowshipPage"),TEXT("FellowQuitButton"));TestTrue(TEXT("Member can leave"),HasAction(ACEGameAction::FellowshipQuit,0));
+    // Custom servers can return more than retail's nine-member recruitment
+    // limit. Decode a large roster and exercise both tall and compact panels.
+    FACEBinaryWriter Large;Large.WriteUInt16(16);Large.WriteUInt16(16);
+    for(uint32 I=0;I<16;++I)
+    {
+        Large.WriteUInt32(30000+I);Large.WriteUInt32(0);Large.WriteUInt32(0);Large.WriteUInt32(100+I);
+        for(uint32 Vital:{300u,250u,200u,150u,125u,100u})Large.WriteUInt32(Vital);
+        Large.WriteUInt32(16);Large.WriteString16L(FString::Printf(TEXT("Fellow %u"),I+1));
+    }
+    Large.WriteString16L(TEXT("Large fellowship"));Large.WriteUInt32(30000);
+    for(uint32 Flag:{1u,1u,0u,0u})Large.WriteUInt32(Flag);
+    Large.WriteUInt16(0);Large.WriteUInt16(16);Large.WriteUInt16(0);Large.WriteUInt16(16);
+    FACEBinaryReader LargeRead(Large.GetData());Session.HandleFellowshipFullUpdate(LargeRead);
+    TestEqual(TEXT("All sixteen fellows survive the wire update"),Session.Fellowship.Members.Num(),16);
+    Panel->UserResizeH=800-Panel->AuthoredHeight;UACEUIElementManager::ApplyFloatyResizeLayout(Panel);Draw(TEXT("FellowshipLarge"));
+    TestTrue(TEXT("Tall fellowship panel displays beyond the ninth member"),Binder->FellowVisibleRows>9&&Binder->FellowRows.Num()>9&&Binder->FellowRowGuids[9]==30009);
+    if(Binder->FellowRowElements.IsValidIndex(9))
+    {
+        const auto Tenth=Binder->FellowRowElements[9];ClickPoint(FVector2D(Tenth->GetScreenOrigin())+FVector2D(15,10));
+        TestEqual(TEXT("Tenth member row selects the correct GUID"),Binder->SelectedFellowGuid,30009);
+    }
+    Panel->UserResizeH=372-Panel->AuthoredHeight;UACEUIElementManager::ApplyFloatyResizeLayout(Panel);
+    Binder->FellowScrollOffset=100;Draw(TEXT("FellowshipLargeScrolled"));
+    TestEqual(TEXT("Compact roster scrolls to the final member"),Binder->FellowRowGuids[Binder->FellowVisibleRows-1],30015);
+    const auto LastFellow=Binder->FellowRowElements[Binder->FellowVisibleRows-1];
+    ClickPoint(FVector2D(LastFellow->GetScreenOrigin())+FVector2D(15,10));
+    TestEqual(TEXT("Scrolled roster selection uses the final member GUID"),Binder->SelectedFellowGuid,30015);
     Session.Fellowship=FACEFellowshipInfo();Binder->RefreshFellowshipOverlays();Binder->RefreshSocialButtonLabels();
     // Programmatic SetText does not emit the user-edit event in UE 5.8.
     // Simulate that event before exercising the actual Create button click.

@@ -261,7 +261,7 @@ void UACEVRMenu::BuildTrade()
 void UACEVRMenu::BuildMore()
 {
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Manage Plugins"),[this](){OpenPage("Plugins");})];
-    Body->AddSlot().AutoHeight()[Button(TEXT("VR settings"),[this](){Rig->ToggleSettings();})];
+    if(Rig)Body->AddSlot().AutoHeight()[Button(TEXT("VR settings"),[this](){Rig->ToggleSettings();})];
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Allegiance"),[this](){OpenPage("Allegiance");})];
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Character and chat options"),[this](){OpenPage("Options");})];
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Item hotbars"),[this](){OpenPage("Hotbars");})];
@@ -269,12 +269,15 @@ void UACEVRMenu::BuildMore()
     // controller. The desktop surface is rendered only when explicitly opened.
     const TPair<const TCHAR*,const TCHAR*> Pages[]={{TEXT("Chess / Game Center"),TEXT("MiniGamePanel_Field")},{TEXT("Journal"),TEXT("QuestManagementPanel_Field")},
         {TEXT("Map"),TEXT("WorldPanel_Field")},{TEXT("Options"),TEXT("OptionsPanel_Field")},{TEXT("All classic panels"),TEXT("InventoryPanel_Field")}};
-    for(const auto& P:Pages)Body->AddSlot().AutoHeight().Padding(4)[Button(P.Key,[this,Panel=FName(P.Value)](){Rig->bUseDesktopMenu=true;Rig->OpenRetailPanel(Panel);})];
+    if(Rig)for(const auto& P:Pages)Body->AddSlot().AutoHeight().Padding(4)[Button(P.Key,[this,Panel=FName(P.Value)](){Rig->bUseDesktopMenu=true;Rig->OpenRetailPanel(Panel);})];
 }
 void UACEVRMenu::BuildShortcuts()
 {
     Body->AddSlot().AutoHeight().Padding(4)[PageText(TEXT("Choose an inventory item, then assign it to a shortcut below."))];
-    Body->AddSlot().AutoHeight()[PackGrid(Pack?Pack:Client->GetPlayerGuid())];
+    if(bTouchMode)Body->AddSlot().AutoHeight()[SNew(SHorizontalBox)
+        +SHorizontalBox::Slot().FillWidth(1)[PackGrid(Pack?Pack:Client->GetPlayerGuid())]
+        +SHorizontalBox::Slot().AutoWidth().Padding(8,0)[SNew(SBox).WidthOverride(100).HeightOverride(210)[SNew(SScrollBox)+SScrollBox::Slot()[PackIcons()]]]];
+    else Body->AddSlot().AutoHeight()[PackGrid(Pack?Pack:Client->GetPlayerGuid())];
     FACEWorldObject Item;const bool Owned=Client->GetWorldObject(Selected,Item) && Client->IsOwnedInventoryItem(Item);
     Body->AddSlot().AutoHeight().Padding(4)[Button(bAssignShortcut?TEXT("Cancel assignment"):TEXT("Assign selected inventory item"),[this](){bAssignShortcut=!bAssignShortcut;bDirty=true;},Owned)];
     if(bAssignShortcut)Body->AddSlot().AutoHeight()[PageText(TEXT("Choose a slot for ")+ACERetailObjectNames::Name(Item),28)];

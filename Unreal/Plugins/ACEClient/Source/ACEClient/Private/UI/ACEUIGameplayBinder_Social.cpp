@@ -624,8 +624,11 @@ void UACEUIGameplayBinder::RefreshFellowshipOverlays()
 
 	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(
 		TEXT("FellowshipPage"), TEXT("FellowsListBox"));
-	constexpr int32 MaxRows = 9;
 	constexpr int32 RowH = 32; // classic_fellowship: name/level, then H/S/M meters
+	// Retail gmFellowshipUI::Update lists every server-supplied fellow. Nine is
+	// a server recruitment rule, not a limit on the roster the UI can display.
+	FellowVisibleRows=ListEl ? FMath::Max(1,ListEl->Height/RowH) : 1;
+	const int32 MaxRows=FMath::Min(FellowVisibleRows,Info.Members.Num());
 	while (FellowRows.Num() < MaxRows && Canvas->WidgetTree)
 	{
 		UTextBlock* Row = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
@@ -633,8 +636,7 @@ void UACEUIGameplayBinder::RefreshFellowshipOverlays()
 		FellowRowElements.Add(UACEUILayoutResolver::LoadTemplate(0x21000030,0x10000281));
 		for(int32 J=0;J<4;++J) FellowDetailLabels.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
 	}
-	FellowRowGuids.SetNum(MaxRows);
-	FellowVisibleRows=ListEl ? FMath::Max(1,ListEl->Height/RowH) : 1;
+	FellowRowGuids.SetNum(FellowRows.Num());
 	const int32 MaxOffset=FMath::Max(0,Info.Members.Num()-FellowVisibleRows);
 	FellowScrollOffset=FMath::Clamp(FellowScrollOffset,0,MaxOffset);
 	SyncDatScrollbar(Manager->FindElementUnder(TEXT("FellowshipPage"),TEXT("FellowsListBoxScrollbar")),MaxOffset?float(FellowScrollOffset)/MaxOffset:0, Info.Members.IsEmpty()?1.f:FMath::Min(1.f,float(FellowVisibleRows)/Info.Members.Num()));
@@ -1224,6 +1226,14 @@ void UACEUIGameplayBinder::RefreshQuestOverlays()
 	{
 		Sel = &Contracts[0];
 		SelectedContractId = Sel->ContractId;
+	}
+	if (!Sel) SelectedContractId = 0;
+	if (auto Abandon = Manager->FindElementByName(TEXT("ContractAbandonButton")))
+	{
+		// The DAT starts this button ghosted. Any selected tracked contract can
+		// be abandoned, including an available or completed contract.
+		Abandon->bGhosted = Sel == nullptr;
+		Abandon->bActivatable = Sel != nullptr;
 	}
 	const FACEDatContractInfo* Info = (Sel && Dat)
 		? Dat->GetContractInfo(static_cast<uint32>(Sel->ContractId)) : nullptr;

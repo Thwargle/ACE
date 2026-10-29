@@ -104,7 +104,9 @@ bool UACEPluginSubsystem::ContentService(FACEClientPlugin& P,const TSharedPtr<FJ
             {S->SendGameActionU32(ACEGameAction::QueryHealth,0);S->SendGameActionU32(ACEGameAction::QueryItemMana,0);}
             S->SendIdentifyObject(O.Guid,false);
         }
-        P.NextCommand=Now+1;S->SendTalk(Text);Reply->SetStringField(TEXT("command"),Text);
+        // Slash is the client-facing command syntax; ACE's Talk handler executes
+        // server commands only with the retail '@' wire prefix.
+        P.NextCommand=Now+1;S->SendTalk(TEXT("@")+Text.RightChop(1));Reply->SetStringField(TEXT("command"),Text);
         // A queued command is not a server acknowledgement; responses stay in chat.
         return true;
     }

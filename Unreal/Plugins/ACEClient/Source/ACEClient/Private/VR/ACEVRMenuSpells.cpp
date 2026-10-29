@@ -39,6 +39,7 @@ TSharedRef<SWidget> UACEVRMenu::SpellButton(int32 Id,int32 Bar,int32 Index,bool 
     if(WithName)Content->AddSlot().FillWidth(1).Padding(10,0).VAlign(VAlign_Center)[SpellLabel(Name,22)];
     auto Cell=SNew(SBox).HeightOverride(WithName?76:64).WidthOverride(WithName?430:64)
         [SNew(SButton).Tag(FName(*FString::Printf(TEXT("Spell_%d_%d_%d"),Id,Bar,Index))).ButtonStyle(&SpellSlotStyle()).IsFocusable(false).ContentPadding(4)
+            .TouchMethod(EButtonTouchMethod::PreciseTap)
             .HAlign(WithName?HAlign_Fill:HAlign_Center).VAlign(VAlign_Center)
             .ButtonColorAndOpacity_Lambda([this,Id,Bar](){return bItemDragging && DragSpell==Id && DragSpellBar==Bar?FLinearColor(.25f,.25f,.25f):Id && Id==Spell?FLinearColor(.25f,.7f,.4f):FLinearColor::White;})
             .OnHovered_Lambda([this,Name](){if(HoverLabel && !bItemDragging)HoverLabel->SetText(FText::FromString(Name));})
@@ -96,7 +97,7 @@ void UACEVRMenu::BuildSpells()
     auto* Dat=Client->GetGameInstance()->GetSubsystem<UACEDatSubsystem>();if(!Dat)return;
     const int32 BarIndex=Client->GetActiveSpellBar();
     const auto Bar=Client->GetSpellBar(BarIndex).FilterByPredicate([](int32 Id){return Id!=0;});
-    Body->AddSlot().AutoHeight().Padding(4)[SpellLabel(TEXT("Drag spells onto a hotbar slot. Drag back to the book to remove."),22)];
+    Body->AddSlot().AutoHeight().Padding(4)[SpellLabel(bTouchMode?TEXT("Select a spell, then add it to a bar for the spell wheel."):TEXT("Drag spells onto a hotbar slot. Drag back to the book to remove."),22)];
     auto Tabs=SNew(SHorizontalBox);
     for(int32 I=0;I<8;++I)
     {

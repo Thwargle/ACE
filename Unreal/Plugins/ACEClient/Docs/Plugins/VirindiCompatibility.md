@@ -1027,3 +1027,22 @@ for the timed buffs that remain after switching back to combat equipment.
 disappearing, normal and forced buff cycles, melee/dual-wield/missile restoration,
 continued attacks, and rebuffing after a real dispel. These are offline policy
 checks; they do not claim a live server reproduction.
+
+## Loot-rule chat notifications
+
+Reviewed the supplied `utank2_decompiled/uTank2/PluginCore.cs` TestItem callback
+(`a(int, bool)`) and `hv.cs` storage-change receipt handler. VT's TestItem names
+the first matched rule and its keep/salvage/no-loot action. Its loot receipt path
+waits for storage ownership to change. UCM uses those same distinctions: a local
+pickup message follows confirmed receipt, while a rule-match message describes
+the rule without claiming an item was acquired. Automatic selected/assessed-item
+notifications are an AC:Unreal extension of TestItem, independently switchable
+from pickup messages in Loot settings.
+
+Both paths use UCM's existing evaluator and item-property snapshot, including
+imported VT conditions and first-match Skip rules. The read-only notification
+service requests no assessments, yields expensive scans, bounds its event queue
+and duplicate history, and does no snapshot work on unchanged idle frames.
+`ACE.Plugins.LootNotifications` covers unknown appraisal fields, rule order,
+selected and unselected assessments, reselection, duplicate suppression, large
+profiles, disabled switches, confirmed pickups, timeouts, and local-only output.

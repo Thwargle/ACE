@@ -1,0 +1,72 @@
+{
+  "FileVersion": 3,
+  "EngineAssociation": "5.8",
+  "Category": "Games",
+  "Description": "AC:Unreal for Android phones and tablets.",
+  "Modules": [
+    {
+      "Name": "ACUnreal",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    }
+  ],
+  "Plugins": [
+    {
+      "Name": "AndroidDeviceProfileSelector",
+      "Enabled": true
+    },
+    {
+      "Name": "AndroidPermission",
+      "Enabled": true
+    },
+    {
+      "Name": "OpenXR",
+      "Enabled": true
+    },
+    {
+      "Name": "ACEWorldBake",
+      "Enabled": false
+    },
+    {
+      "Name": "EditorScriptingUtilities",
+      "Enabled": false
+    },
+    {
+      "Name": "BlueprintMaterialTextureNodes",
+      "Enabled": false
+    },
+    {
+      "Name": "Interchange",
+      "Enabled": false,
+      "SupportedTargetPlatforms": [
+        "Win64",
+        "Linux",
+        "Mac"
+      ]
+    },
+    {
+      "Name": "ACEClient",
+      "Enabled": true
+    },
+    {
+      "Name": "ProceduralMeshComponent",
+      "Enabled": true
+    },
+    {
+      "Name": "ModelContextProtocol",
+      "Enabled": false
+    },
+    {
+      "Name": "Terminal",
+      "Enabled": false
+    },
+    {
+      "Name": "AndroidFileServer",
+      "Enabled": false
+    },
+    {
+      "Name": "ResonanceAudio",
+      "Enabled": false
+    }
+  ]
+}
