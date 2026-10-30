@@ -145,6 +145,10 @@ struct FACEUIElement : public TSharedFromThis<FACEUIElement>
 			if (bCaptured || (bRollover && bHovered)) Desired = bHighlighted ? 7 : 2;
 			if (bCaptured && bHovered) Desired = bHighlighted ? 8 : 3;
 			if (bGhosted || !bActivatable) Desired = 13;
+			// Retail UpdateState_ calls SetState only when that state exists.
+			// Many buttons omit rollover (2/7); leaving a pressed button must
+			// retain its last valid artwork instead of resetting to empty state 0.
+			if (!States.Contains(Desired)) Desired = States.Contains(PaintState) ? PaintState : DefaultState;
 		}
 		else if (!bUseExplicitState && bFocused) Desired = 4;
 		// Composite checkbox definitions omit rollover states 2/7.

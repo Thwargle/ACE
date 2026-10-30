@@ -364,7 +364,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	DownloadUpdateButton=ActionButton(TEXT("Download update"),TEXT("downloadupdate"),FString(),true); UpdateActions->AddChildToWrapBox(DownloadUpdateButton);
 	InstallUpdateButton=ActionButton(PLATFORM_ANDROID?TEXT("Install"):TEXT("Install and restart"),TEXT("installupdate"),FString(),true); UpdateActions->AddChildToWrapBox(InstallUpdateButton);
 	CancelUpdateButton=ActionButton(TEXT("Cancel update"),TEXT("cancelupdate")); UpdateActions->AddChildToWrapBox(CancelUpdateButton);
-	UpdateInstallHelp=Label(UACEMobileSettings::IsEnabled()?TEXT("Android will ask you to confirm installation. Reopen AC:Unreal Mobile when it finishes; saved data is retained."):ACEUpdates::InstallationNotice(PLATFORM_ANDROID),18,true); AddLine(Updates,UpdateInstallHelp);
+	UpdateInstallHelp=Label(ACEUpdates::InstallationNotice(PLATFORM_ANDROID,UACEMobileSettings::IsEnabled()),18,true); AddLine(Updates,UpdateInstallHelp);
 	Row(Updates,{{TEXT("Release notes"),TEXT("updatenotes")},{TEXT("Back to play"),TEXT("play")}});
 	auto* PluginPanel=WidgetTree->ConstructWidget<UACEPluginPanel>();
 	Pages->AddChild(PluginPanel);

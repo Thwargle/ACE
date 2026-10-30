@@ -90,7 +90,7 @@ void UACEMobileWidget::InitializeMobile(AACEPlayerController* Controller)
     PC=Controller;Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     Client->OnChatMessage.AddUniqueDynamic(this,&UACEMobileWidget::ChatReceived);
     Client->OnBookChanged.AddUniqueDynamic(this,&UACEMobileWidget::BookChanged);
-    Settings=GetMutableDefault<UACEMobileSettings>();Settings->Sanitize();Layout=Settings->Controls;ACEMobile::FitLayout(Layout,ViewSize);
+    Settings=GetMutableDefault<UACEMobileSettings>();Settings->Sanitize();FitControls();
     UACEMobileSettings::ApplyTextureBudget();
     BackgroundHandle=FCoreDelegates::ApplicationWillEnterBackgroundDelegate.AddUObject(this,&UACEMobileWidget::CancelTouches);
     DeactivateHandle=FCoreDelegates::ApplicationWillDeactivateDelegate.AddUObject(this,&UACEMobileWidget::CancelTouches);
@@ -151,9 +151,13 @@ void UACEMobileWidget::RefreshChat()
 bool UACEMobileWidget::IsBlockingMovement() const
 {return !Panel.IsNone() || bEditing || (PinnedChatEntry && PinnedChatEntry->HasKeyboardFocus()) || !Client || Client->GetSessionState()!=EACESessionState::InWorld || !PC || PC->IsWorldTransitionActive();}
 void UACEMobileWidget::CancelFinger(int32 Finger)
-{if(Fingers.Remove(Finger)>0 && PC)PC->CancelMobileMovement();}
+{
+    if(bEditing && Fingers.Contains(Finger))SaveLayout();
+    if(Fingers.Remove(Finger)>0 && PC)PC->CancelMobileMovement();
+}
 void UACEMobileWidget::CancelTouches()
 {
+    if(bEditing)SaveLayout();
     Fingers.Reset();LookDelta=FVector2D::ZeroVector;
     // Backgrounding must also cancel tap-started attacks/approaches after the
     // initiating finger has already been released.
@@ -188,7 +192,24 @@ void UACEMobileWidget::SurfaceResized(FVector2D Size)
     CancelTouches();ViewSize=Size;FitControls();
 }
 void UACEMobileWidget::SaveLayout()
-{if(Settings){Settings->Controls=Layout;Settings->SaveConfig();}}
+{
+    if(!Settings)return;
+    bool Changed=false;
+    for(const auto& Control:Layout)
+    {
+        auto* Preferred=Settings->Controls.FindByPredicate([&](const auto& C){return C.Id==Control.Id;});
+        if(!Preferred){Settings->Controls.Add(Control);Changed=true;continue;}
+        const auto* Before=FittedLayout.FindByPredicate([&](const auto& C){return C.Id==Control.Id;});
+        // Persist only the fields the user changed. Fitting controls around a
+        // panel or foldable screen must not rewrite the preferred layout.
+        if(!Before || Control.Action!=Before->Action){Preferred->Action=Control.Action;Changed=true;}
+        if(!Before || !Control.Position.Equals(Before->Position,1.e-6)){Preferred->Position=Control.Position;Changed=true;}
+        if(!Before || Control.Size!=Before->Size){Preferred->Size=Control.Size;Changed=true;}
+        if(!Before || Control.bVisible!=Before->bVisible){Preferred->bVisible=Control.bVisible;Changed=true;}
+    }
+    FittedLayout=Layout;
+    if(Changed)Settings->SaveConfig();
+}
 FName UACEMobileWidget::HeaderAt(FVector2D P)const
 {
     if(P.Y<12 || P.Y>76)return NAME_None;
@@ -293,7 +314,7 @@ void UACEMobileWidget::Action(FName Name)
 {
     if(Name=="Menu" || Name=="Inventory" || Name=="Chat" || Name=="Plugins" || Name=="Inspect"){OpenPanel(Name);return;}
     if(Name=="Done"){bEditing=false;SaveLayout();CancelTouches();return;}
-    if(Name=="Reset"){Settings->ResetLayout();FitControls();SelectedControl=INDEX_NONE;SaveLayout();return;}
+    if(Name=="Reset"){Settings->ResetLayout();Settings->SaveConfig();FitControls();SelectedControl=INDEX_NONE;return;}
     if(Name=="Rebind" || Name=="Resize"){if(Layout.IsValidIndex(SelectedControl))OpenPanel(Name);return;}
     if(IsBlockingMovement())return;
     if(Name=="Spell wheel"){bWheel=!bWheel;WheelPage=0;RefreshWheel();CancelTouches();return;}
@@ -470,11 +491,11 @@ void UACEMobileWidget::BuildPanel()
         Body->AddSlot().AutoHeight().Padding(8)[Text(TEXT("Control opacity"))];
         Body->AddSlot().AutoHeight().Padding(16)[SNew(SBox).HeightOverride(56)[SNew(SSlider).MinValue(.25f).MaxValue(1.f).Value(Settings->ControlOpacity)
             .OnValueChanged_Lambda([this](float V){Settings->ControlOpacity=V;Settings->SaveConfig();})]];
-        Body->AddSlot().AutoHeight().Padding(8)[Button(TEXT("Mirror layout (left / right handed)"),[this](){for(auto& C:Layout)C.Position.X=1-C.Position.X;Settings->bLeftHanded=!Settings->bLeftHanded;ACEMobile::FitLayout(Layout,ViewSize,ControlsTop);SaveLayout();})];
-        Body->AddSlot().AutoHeight().Padding(8)[Button(TEXT("Add a button"),[this](){if(Layout.Num()<20){FACETouchControl C;C.Id=FName(*FString::Printf(TEXT("Extra%d"),Layout.Num()));C.Action="Attack";C.Position={.5f,.5f};Layout.Add(C);ACEMobile::FitLayout(Layout,ViewSize,ControlsTop);SaveLayout();SelectedControl=Layout.Num()-1;ClosePanel();bEditing=true;}},Layout.Num()<20)];
+        Body->AddSlot().AutoHeight().Padding(8)[Button(TEXT("Mirror layout (left / right handed)"),[this](){for(auto& C:Settings->Controls)C.Position.X=1-C.Position.X;Settings->bLeftHanded=!Settings->bLeftHanded;Settings->SaveConfig();FitControls();})];
+        Body->AddSlot().AutoHeight().Padding(8)[Button(TEXT("Add a button"),[this](){if(Layout.Num()<20){FACETouchControl C;C.Id=FName(*FString::Printf(TEXT("Extra%d"),Layout.Num()));C.Action="Attack";C.Position={.5f,.5f};Layout.Add(C);SaveLayout();FitControls();SelectedControl=Layout.Num()-1;ClosePanel();bEditing=true;}},Layout.Num()<20)];
         Body->AddSlot().AutoHeight().Padding(8)[Text(TEXT("Edit layout to move buttons. Tap a control, then Rebind or Resize. Overlapping placements are rejected. The menu rail always stays reachable."))];
         for(int32 I=0;I<Layout.Num();++I)if(!Layout[I].bVisible)
-            Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Show ")+Layout[I].Id.ToString(),[this,I](){Layout[I].bVisible=true;ACEMobile::FitLayout(Layout,ViewSize,ControlsTop);SaveLayout();BuildPanel();})];
+            Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Show ")+Layout[I].Id.ToString(),[this,I](){Layout[I].bVisible=true;SaveLayout();FitControls();BuildPanel();})];
     }
     else if(Page=="Video")
     {

@@ -9,6 +9,7 @@ namespace ACEUCMLootPresentation
     struct FCalculated { FString Name; TArray<FString> Arguments; };
     const TArray<FProperty>& Properties(const FString& Field);
     FString PropertyLabel(const FString& Field,int32 Id);
+    bool IsWeaponSkillProperty(const FString& Field,int32 Id);
     const TMap<int32,FCalculated>& Calculated();
     FString ConditionSummary(const TSharedPtr<FJsonObject>& Condition);
     FString DataRequirement(const TSharedPtr<FJsonObject>& Condition);

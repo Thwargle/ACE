@@ -48,6 +48,7 @@ void UACEMobileWidget::FitControls()
 {
     Layout=Settings?Settings->Controls:Layout;
     ACEMobile::FitLayout(Layout,ViewSize,ControlsTop);
+    FittedLayout=Layout;
 }
 bool UACEMobileWidget::WantsHUDPlugin(const FString& Id)const
 {

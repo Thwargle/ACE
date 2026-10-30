@@ -716,6 +716,21 @@ buffed melee/missile/property values, potential tinkered damage/defense/offense
 and combined ratings. Missing properties use the imported rule's zero semantics.
 Appraisal precedes decisions that require data not yet known.
 
+Weapon-skill rules retain VT's distinct integer properties: `EquipSkill`
+(`218103840`) comes from the weapon appraisal profile's `weapSkill`, while
+`WieldReqAttribute` (`159`) comes from item integer qualities. Verified against
+the supplied `utank2_decompiled/g6.cs` appraisal handler,
+`uTank2/LootPlugins/IntValueKey.cs`, `GameItemInfo.GetValueInt`, and Virindi's
+[Weapon Skill Ids reference](https://www.virindi.net/wiki/index.php/Weapon_Skill_Ids).
+The builder offers named IDs for Creature 31, Finesse 46, Heavy 44, Item 32,
+Life 33, Light 45, Mana Conversion 16, Missile 47, Summoning 54, Two-Handed 41,
+Void 43, and War 34, plus custom numeric IDs. These remain ordinary integer
+conditions; the picker does not substitute properties or infer an item skill
+from its name. Raw `WeaponSkill` (`48`) remains independently editable.
+`ACE.Plugins.WeaponSkillLoot` exercises the actual picker, saved profile reload,
+VT UTL conversion, native appraisal snapshots and shipped UCM loot decisions,
+including distinct attack/wield skills, unknown appraisal data and custom IDs.
+
 Regex matching uses ICU with .NET capture numbering and both named-capture
 spellings. It is case-sensitive unless the pattern specifies otherwise; VT's
 expression regex operator supplies its required case-insensitive flag. Patterns

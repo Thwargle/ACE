@@ -84,6 +84,10 @@ namespace
 		if (Name == TEXT("LockUI"))
 		{
 			Node->ImageFileId = bUiLocked ? DidLockUi : DidLockUiUnlocked;
+			// gmRadarUI owns these explicit states; the generic empty pressed
+			// state must not erase the lock while the pointer is held or dragged.
+			Node->bUseExplicitState = true;
+			Node->DefaultState = bUiLocked ? 0x10000063u : 0x10000064u;
 		}
 		for (const TSharedPtr<FACEUIElement>& Child : Node->Children)
 		{

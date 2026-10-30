@@ -71,6 +71,10 @@ public:
     int32 SelectedControl=INDEX_NONE,SelectedSpell=0,WheelPage=0;
 private:
     friend class FACEMobileTouchTest;
+    friend class FACEMobilePersistenceTest;
+    // Last fitted/committed layout, used to distinguish edits from temporary
+    // relocation or hidden overflow on a different screen or around HUD panels.
+    TArray<FACETouchControl> FittedLayout;
     struct FFinger {FName Action;int32 Control=INDEX_NONE;FVector2D Start=FVector2D::ZeroVector,Point=FVector2D::ZeroVector;bool Moved=false;};
     TMap<int32,FFinger> Fingers;
     FVector2D LookDelta=FVector2D::ZeroVector;

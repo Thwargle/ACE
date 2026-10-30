@@ -18,7 +18,7 @@ namespace ACEUpdates
     // Only the fixed publisher and versioned filenames are accepted. JSON cannot supply a command or URL.
     ACECLIENT_API bool ParseManifest(const FString& Json, bool bQuest, FACEUpdateRelease& Out, FString& Error, bool bLinux = false, bool bMobile = false);
     ACECLIENT_API bool VerifyFile(const FString& Path, const FACEUpdateRelease& Release);
-    ACECLIENT_API const TCHAR* InstallationNotice(bool bQuest);
+    ACECLIENT_API const TCHAR* InstallationNotice(bool bQuest, bool bMobile = false);
 }
 
 enum class EACEUpdateState : uint8 { Idle, Checking, Current, Available, Downloading, Verifying, Ready, InstallNotice, Installing, Error };

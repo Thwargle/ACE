@@ -505,6 +505,10 @@ private:
 	bool bCombatAutoTarget = true;
 	bool bCombatViewTarget = true;
 	bool bCombatPowerDrag = false;
+	float CombatPowerDragGrabOffset = 0.f;
+	bool bCombatAdvancedUI = false;
+	float JumpChargeDisplayFraction = 0.f;
+	void RefreshPowerbarOverlay();
 	bool bCombatPowerCharging = false;
 	bool bCombatAttackRequestPending = false;
 	bool bCombatAttackHeld = false;

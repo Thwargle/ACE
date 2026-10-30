@@ -83,7 +83,7 @@ bool ACEUpdates::ParseManifest(const FString& Json, bool bQuest, FACEUpdateRelea
     { Error = TEXT("This release does not offer in-game updates yet. Downloads are available on thwargle.com."); return false; }
     if (int32(bQuest)+int32(bLinux)+int32(bMobile)>1) return false;
     if (!(*Updates)->TryGetObjectField(bMobile ? TEXT("android") : bQuest ? TEXT("quest") : bLinux ? TEXT("linux") : TEXT("windows"), Artifact))
-    { if (bMobile) Error=TEXT("No Android phone release is published yet. Install the latest mobile preview package to update.");
+    { if (bMobile) Error=TEXT("No Android phone/tablet release is published yet. Install the latest mobile preview package to update.");
       else if (bLinux) Error = TEXT("No Linux release is listed yet. Downloads are available on thwargle.com."); return false; }
     FACEUpdateRelease Parsed; Parsed.Number = int32(Number);
     if (!Root->TryGetStringField(bMobile ? TEXT("androidVersion") : bQuest ? TEXT("questVersion") : bLinux ? TEXT("linuxVersion") : TEXT("windowsVersion"), Parsed.Version)
@@ -121,8 +121,10 @@ bool ACEUpdates::VerifyFile(const FString& Path, const FACEUpdateRelease& Releas
     return Valid && BytesToHex(Digest, Length).Equals(Release.Sha256, ESearchCase::IgnoreCase);
 }
 
-const TCHAR* ACEUpdates::InstallationNotice(bool bQuest)
+const TCHAR* ACEUpdates::InstallationNotice(bool bQuest, bool bMobile)
 {
+    if (bMobile)
+        return TEXT("AC:Unreal Mobile will close while the update installs. Confirm the Android installation prompt, wait for installation to finish, then reopen AC:Unreal Mobile from your apps. Your saved data is kept.");
     return bQuest
         ? TEXT("AC:VR will close while the update installs. This is expected. Confirm the headset prompt, wait for installation to finish, then reopen AC:VR from your library. Your saved data is kept.")
         : TEXT("The game will close while the update installs, then reopen automatically in the same desktop or VR mode. Your saved data is kept.");
@@ -314,7 +316,7 @@ void UACEUpdateSubsystem::VerifyDownload(const FString& Path, bool bCached)
             if (!bCached && !IFileManager::Get().Move(*Self->PayloadPath(), *Path, true, true))
             { Self->Fail(TEXT("Could not save the update. Check storage and try again.")); return; }
             Self->State = EACEUpdateState::Ready;
-            Self->Message = FString(TEXT("Update ready. ")) + ACEUpdates::InstallationNotice(PLATFORM_ANDROID);
+            Self->Message = FString(TEXT("Update ready. ")) + ACEUpdates::InstallationNotice(PLATFORM_ANDROID, UACEMobileSettings::IsEnabled());
         });
     });
 }
@@ -334,7 +336,7 @@ bool UACEUpdateSubsystem::AdvanceInstallNotice(double Now)
 {
     if (State != EACEUpdateState::InstallNotice) return false;
     const int32 Seconds = FMath::Max(0, FMath::CeilToInt(InstallAt - Now));
-    Message = FString::Printf(TEXT("Update starting in %d seconds.\n%s"), Seconds, ACEUpdates::InstallationNotice(PLATFORM_ANDROID));
+    Message = FString::Printf(TEXT("Update starting in %d seconds.\n%s"), Seconds, ACEUpdates::InstallationNotice(PLATFORM_ANDROID, UACEMobileSettings::IsEnabled()));
     return Now >= InstallAt;
 }
 
@@ -349,9 +351,13 @@ void UACEUpdateSubsystem::LaunchInstaller()
         static jmethodID Method = FJavaWrapper::FindMethod(Env, FJavaWrapper::GameActivityClassID, "AndroidThunkJava_ACEInstallUpdate", "(Ljava/lang/String;I)Ljava/lang/String;", false);
         const auto Path = FJavaHelper::ToJavaString(Env, PayloadPath());
         const FString Result = FJavaHelper::FStringFromLocalRef(Env, static_cast<jstring>(FJavaWrapper::CallObjectMethod(Env, FJavaWrapper::GameActivityThis, Method, *Path, Release.Number)));
-        if (Result == TEXT("started")) { State = EACEUpdateState::Installing; Message = FString(TEXT("Installing update. ")) + ACEUpdates::InstallationNotice(true); }
-        else if (Result == TEXT("permission")) Message = TEXT("Allow AC:VR to install updates in the headset settings, return here, then choose Install again.");
-        else Message = TEXT("The headset could not open the installer. Try again, or use the USB updater from thwargle.com.");
+        if (Result == TEXT("started")) { State = EACEUpdateState::Installing; Message = FString(TEXT("Installing update. ")) + ACEUpdates::InstallationNotice(true, UACEMobileSettings::IsEnabled()); }
+        else if (Result == TEXT("permission")) Message = UACEMobileSettings::IsEnabled()
+            ? TEXT("Allow AC:Unreal Mobile to install updates in Android settings, return to the app, then choose Install again.")
+            : TEXT("Allow AC:VR to install updates in the headset settings, return here, then choose Install again.");
+        else Message = UACEMobileSettings::IsEnabled()
+            ? TEXT("Android could not open the installer. Try again, or download the Android phone/tablet APK from thwargle.com.")
+            : TEXT("The headset could not open the installer. Try again, or use the USB updater from thwargle.com.");
         return;
     }
 #elif PLATFORM_LINUX
@@ -413,7 +419,9 @@ void UACEUpdateSubsystem::PollInstall()
     {
         static jmethodID Method = FJavaWrapper::FindMethod(Env, FJavaWrapper::GameActivityClassID, "AndroidThunkJava_ACEUpdateStatus", "()Ljava/lang/String;", false);
         const FString Result = FJavaHelper::FStringFromLocalRef(Env, static_cast<jstring>(FJavaWrapper::CallObjectMethod(Env, FJavaWrapper::GameActivityThis, Method)));
-        if (Result == TEXT("confirm")) Message = FString(TEXT("Confirm the update in the headset's installation window. ")) + ACEUpdates::InstallationNotice(true);
+        if (Result == TEXT("confirm")) Message = FString(UACEMobileSettings::IsEnabled()
+            ? TEXT("Confirm the update in Android's installation window. ")
+            : TEXT("Confirm the update in the headset's installation window. ")) + ACEUpdates::InstallationNotice(true, UACEMobileSettings::IsEnabled());
         else if (Result.StartsWith(TEXT("failed"))) { State = EACEUpdateState::Ready; Message = TEXT("Installation was cancelled or failed. Your current version is unchanged. You can try Install again."); }
     }
 #endif

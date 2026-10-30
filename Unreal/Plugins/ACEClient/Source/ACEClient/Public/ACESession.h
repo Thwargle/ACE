@@ -88,6 +88,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEUCMLootLatencyTest;
 	friend class FACEUCMLootNotificationTest;
 	friend class FACEPluginLootIconsTest;
+	friend class FACEWeaponSkillLootTest;
     friend class FACEPluginCompanionTest;
     friend class FACEThirdEyeTest;
     friend class FACEPluginPublicAPITest;

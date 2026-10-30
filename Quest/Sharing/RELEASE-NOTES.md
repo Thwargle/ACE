@@ -1,56 +1,55 @@
-# AC:Unreal / AC:VR release 143
+# AC:Unreal / AC:VR release 144
 
 Windows desktop, PC VR, native Linux x86_64, standalone Quest, and the Android
-phone/tablet preview share **2026.10.29.143**. Android version code: 143.
-Quest installer revision: 9. These notes cover all changes since v142.
+phone/tablet preview share **2026.10.30.144**. Android version code: 144.
+Quest installer revision: 9. These notes cover all changes since v143.
 
-## Combat movement
+## Retail interface fixes
 
-- Correct desktop and touch forward/backward movement during spellcasting,
-  power-up gestures, and missile aim/reload transitions. Movement now respects
-  the active retail animation sequence instead of predicting a full-speed run
-  underneath it.
-- Resume held movement correctly after combat control returns to the player,
-  including when movement was already held before the cast. Preserve separate
-  turning/sidestepping and existing melee, stance-change, and airborne rules.
+- Make the main chat expand/restore button reliably take priority over chat text,
+  including at scaled sizes, so clicking it does not start an unintended tell.
+- Keep vendor Add to List on the Items tab with the selected item intact.
+  Repeated clicks accumulate quantities without switching to the Buying tab.
+- Keep combat, use, examine, minimize, close, logout, and radar-lock icons visible
+  when the pointer drags off them or their authored rollover artwork is absent.
 
-## Chat and UCM
+## Spell hotbar and archery
 
-- Add a per-window **Plugin chat** filter in Options > Chat for local plugin
-  notices and UCM loot announcements. Preserve existing colors and closed-window
-  history, and migrate saved filter preferences.
-- Expose **Announce item ID matches** in UCM Configuration and Loot settings.
-  Disabling it clears pending match notices without affecting looting or the
-  separate pickup-announcement option.
+- Correct the equipped wand's innate spell icon, selection frame, and tooltip.
+  Refresh it when equipment changes and include it when cycling spell selections,
+  including empty favorite banks and fallback after unequipping.
+- Correct manual power/accuracy slider hit detection and dragging across UI scales.
+  Normal missile attacks honor the selected accuracy mark.
+- Show the floating charge meter in Advanced Combat UI and hide the normal combat
+  panel there. Advanced attacks use the held charge on release, as in retail.
 
-## Packs inside chests
+## Loot profile builder
 
-- Allow packs in an external container's pack list to be dragged back into
-  inventory. Clicking still opens a pack; right-clicking examines it.
-- Return the loot view to the parent chest after the server confirms removal,
-  while retaining the removed pack's contents.
-- Include nested packs in touch/VR loot menus with separate open and take
-  actions.
+- Add named weapon-skill IDs to the UCM and standalone Loot Profile editors,
+  including modern weapon and magic skills plus custom numeric IDs.
+- Distinguish a weapon's attack skill from its wield-requirement skill, preserving
+  VTank rule comparisons and imported profile behavior.
 
-## Route creation
+## Android phones and tablets
 
-- Accept route/profile names containing spaces, such as **Academy Loop**, and
-  include them in both the Route and Overview dropdowns.
-- Show creation errors beside the name field, with clear duplicate-name and
-  file-write explanations. Failed creation preserves the active route and
-  existing saved data.
-- Add end-to-end UI coverage for creation by button or Enter, automatic
-  selection, waypoint saves, both dropdowns, disk reloads, and failure handling.
+- Save control layouts across restarts, including positions, sizes, bindings,
+  hidden buttons, and added buttons.
+- Preserve preferred layouts when folding/unfolding or opening pinned panels;
+  temporary screen fitting no longer replaces saved positions or visibility.
+- Save the last valid dragged position if the app loses focus or backgrounds.
+- Allow related mobile preferences, including opacity, sensitivity, pinned chat,
+  and plugin visibility, to persist through the same settings path.
+- Use AC:Unreal Mobile update and installation messages tailored to phones and
+  tablets, including Android permission prompts and reopening after installation.
 
 ## Validation and packaging
 
-Focused tests cover retail DAT combat sequences, movement packets, chat routing,
-loot notifications, container interactions, touch/VR menus, and route persistence.
+Focused regressions cover retail DAT/Slate pointer interactions, spell selection,
+missile packet accuracy, loot-profile editing and reloads, update behavior,
+touch/VR menus, and mobile settings saved through the actual Android INI hierarchy.
 Build and package verification results accompany the release locally.
-Motion fixtures accept the configured retail DAT directory on Windows and Linux.
-Live-server and device testing remain distinct from automated coverage; this
-release has not been newly accepted on a physical phone or headset.
+Live-server and physical-device acceptance remain separate from automated tests.
 
-Packages do not include retail DATs, personal settings, server data, or generated
-MeshCache files. Android phones/tablets remain a preview and use a separate APK
-from Quest. Existing Android signing identities and installer revision are kept.
+Packages exclude retail DATs, personal settings, server data, and generated
+MeshCache files. Android phones/tablets remain a preview using a separate APK
+from Quest. Existing signing identities and installer revision are retained.

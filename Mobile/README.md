@@ -6,11 +6,18 @@ Compatibility and performance still require testing on physical devices. No
 Google Play publication is configured. From v142, the website offers a separate
 phone/tablet preview APK, and in-game updates use the Android artifact rather
 than the Quest package. USB setup with the helper below is still required for DATs.
+Update notices identify AC:Unreal Mobile and explain Android installation and
+permission prompts for phones and tablets. After installation, reopen the app
+from your apps; existing DAT files, accounts, and settings are kept.
 
 First hardware target: Samsung Galaxy Z Fold7. Layout tests include its landscape
 cover display (2520×1080) and unfolded display (2184×1968), with resize support
 and safe-area margins. Display dimensions: [Samsung specifications](https://news.samsung.com/ca/samsung-galaxy-z-fold7-raising-the-bar-for-smartphones).
 Folding/unfolding cancels active touches before controls move to the new layout.
+Control positions, sizes, bindings, and hidden/added buttons persist across app
+restarts. Folding or opening pinned panels can temporarily fit controls to the
+available space without replacing your preferred layout. Valid drag positions
+also save if the app goes into the background before you lift your finger.
 
 ## Install the downloaded preview
 

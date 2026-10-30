@@ -864,6 +864,19 @@ void UACEUIGameplayBinder::PlaceFloatyChatOverlays()
 
 bool UACEUIGameplayBinder::TryHandleChatNameClick(FVector2D Absolute)
 {
+	if (!Canvas) return false;
+	if (Manager)
+	{
+		const FVector2D Point = Canvas->ViewportToLayout(Canvas->GetCachedGeometry().AbsoluteToLocal(Absolute));
+		const auto Hit = Manager->HitTestCanvas(FMath::FloorToInt(Point.X), FMath::FloorToInt(Point.Y));
+		// The expand/unread controls overlap the log in retail. Slate delivers
+		// their click to the canvas, but the legacy sender fallback runs before
+		// DAT activation. Do not turn that control click into a tell underneath.
+		if (Hit && (Hit->Type == ACEUI::ElementType::Button || Hit->bBooleanButton
+			|| Hit->ElementName.EndsWith(TEXT("Button")) || Hit->ElementName.EndsWith(TEXT("Indicator"))
+			|| Hit->Type == ACEUI::ElementType::Scrollbar
+			|| UACEUIElementManager::IsFloatyDragHandle(Hit) || UACEUIElementManager::IsFloatyResizeHandle(Hit))) return false;
+	}
 	for (int32 i = ChatRowSenders.Num() - 1; i >= 0; --i)
 	{
 		const FChatRowSender& E = ChatRowSenders[i];

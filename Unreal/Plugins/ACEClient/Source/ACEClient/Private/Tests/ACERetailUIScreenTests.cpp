@@ -261,6 +261,54 @@ FORCENOINLINE void FACERetailAugmentationUIFixture::Check(FAutomationTestBase& T
     V = SavedVitals; Client->OnVitalsUpdated.Broadcast(V); Gameplay->RefreshAttributeOverlays();
 }
 
+static FORCENOINLINE void CheckButtonDragArtwork(FAutomationTestBase& Test, UACEUIElementManager* Layout)
+{
+    // Isolate the authored buttons so release/cancel never closes a real window
+    // or logs out the fixture. Input still traverses the actual capture manager.
+    auto* Input=NewObject<UACEUIElementManager>();Input->Initialize();
+    const FVector2D Size(Input->GetCanvasWidth(),Input->GetCanvasHeight());
+    const FVector2D Inside(24,24),Outside(150,150);
+    int32 Activations=0;
+    Input->OnElementActivated.AddLambda([&](TSharedPtr<FACEUIElement>){++Activations;});
+    for(const TCHAR* Name:{TEXT("PeaceModeButton"),TEXT("MeleeModeButton"),TEXT("MissileModeButton"),TEXT("MagicModeButton"),
+        TEXT("PanelButton_UseSelectedButton"),TEXT("PanelButton_ExamineSelectedButton"),TEXT("ClosePanelButton"),
+        TEXT("CloseChatWindowButton"),TEXT("LogoffButton"),TEXT("LockUI")})
+    {
+        const auto Source=Layout->FindElementByName(Name);
+        if(!Test.TestTrue(Name,Source.IsValid()))continue;
+        for(bool Locked:{false,true})
+        {
+            Input->ClearRoots();Activations=0;
+            auto Button=MakeShared<FACEUIElement>(*Source);
+            Button->Parent.Reset();Button->Children.Reset();Button->X=16;Button->Y=16;Button->Width=32;Button->Height=32;
+            Button->LayoutOffsetX=0;Button->LayoutOffsetY=0;Button->bVisible=true;Button->bActivatable=true;Button->bGhosted=false;
+            Input->AddRoot(Button);Input->SetUiLocked(Locked);
+            auto CheckArt=[&](const TCHAR* Stage)
+            {
+                const auto* State=Button->ResolvePaintState(Input->GetCaptureElement()==Button,Input->GetHoverElement()==Button,false);
+                Test.TestTrue(FString::Printf(TEXT("%s retains artwork %s (%s)"),Name,Stage,Locked?TEXT("locked"):TEXT("unlocked")),
+                    Button->bVisible && (State && State->bHasMedia ? State->ImageFileId!=0 : Button->ImageFileId!=0));
+            };
+            CheckArt(TEXT("before press"));
+            Input->NotifyMouseDown(Inside,Size,EKeys::LeftMouseButton);
+            Test.TestTrue(TEXT("Button receives capture"),Input->GetCaptureElement()==Button);CheckArt(TEXT("pressed"));
+            Input->NotifyMouseMove(Outside,Size);CheckArt(TEXT("dragged outside"));
+            Input->NotifyMouseMove(Inside,Size);CheckArt(TEXT("dragged back inside"));
+            Input->NotifyMouseUp(Outside,Size,EKeys::LeftMouseButton);CheckArt(TEXT("released outside"));
+            Test.TestEqual(TEXT("Releasing outside does not activate a button"),Activations,0);
+            Input->NotifyMouseDown(Inside,Size,EKeys::LeftMouseButton);CheckArt(TEXT("pressed again"));
+            Input->CancelPointerCapture();CheckArt(TEXT("capture cancelled"));
+            Input->NotifyMouseUp(Inside,Size,EKeys::LeftMouseButton);
+            Test.TestEqual(TEXT("Cancelled capture does not activate on release"),Activations,0);
+            Input->NotifyMouseDown(Inside,Size,EKeys::LeftMouseButton);
+            Input->NotifyMouseMove(Outside,Size);Input->NotifyMouseMove(Inside,Size);
+            Input->NotifyMouseUp(Inside,Size,EKeys::LeftMouseButton);CheckArt(TEXT("released inside"));
+            Test.TestEqual(TEXT("Returning inside activates exactly once on release"),Activations,1);
+        }
+    }
+    Input->OnElementActivated.Clear();Input->Shutdown();
+}
+
 struct FACEChatUIFixture
 {
     using FCapture = TFunctionRef<TArray<FColor>(const FString&,float,FVector2D)>;
@@ -283,10 +331,14 @@ struct FACEChatUIFixture
             }
             auto* Art=Canvas->ImageWidgets.FindRef(Element->InstanceId).Get();
             if(!Test.TestNotNull(TEXT("Chat control has a rendered hit surface"),Art))return;
-            const auto& G=Art->GetCachedGeometry();bool HitControl=false;
-            for(const auto& Hit:Grid.GetBubblePath(G.LocalToAbsolute(G.GetLocalSize()*.5),0,false))
-                HitControl |= Hit.Widget==Art->GetCachedWidget();
-            Test.TestTrue(Message,HitControl);
+            const auto& G=Art->GetCachedGeometry();
+            for(const FVector2D Fraction:{FVector2D(.05,.05),FVector2D(.95,.05),FVector2D(.5,.5),FVector2D(.05,.95),FVector2D(.95,.95)})
+            {
+                bool HitControl=false;
+                for(const auto& Hit:Grid.GetBubblePath(G.LocalToAbsolute(G.GetLocalSize()*Fraction),0,false))
+                    HitControl |= Hit.Widget==Art->GetCachedWidget();
+                Test.TestTrue(Message,HitControl);
+            }
         };
     {
         // Exercise real DAT resize grips, reflow and scroll routing in all five windows.
@@ -390,9 +442,11 @@ struct FACEChatUIFixture
         const int32 SavedHeight=Main->UserResizeH,SavedY=Main->UserDragY;
         const FText Draft=Gameplay->ChatEntry->GetText();
         Gameplay->ChatEntry->SetText(FText::FromString(TEXT("unsent chat draft")));
-        Manager->SetUiLocked(true);
-        for(float Scale:{1.f,1.5f})for(bool AtTop:{false,true})
+        Gameplay->ClearChatLog(0);
+        Gameplay->AppendChatLineToLog(0,LongChat,FLinearColor::White,TEXT("Expand sender fixture"));
+        for(bool Lock:{false,true})for(float Scale:{1.f,1.5f})for(bool AtTop:{false,true})
         {
+            Manager->SetUiLocked(Lock);
             CaptureScreen(TEXT("ChatExpandViewport"),Scale);
             Main->UserResizeH=200-Main->AuthoredHeight;
             UACEUIElementManager::ApplyFloatyResizeLayout(Main);
@@ -400,16 +454,26 @@ struct FACEChatUIFixture
             Main->RecomputeLayoutOffset();Manager->BringFloatyToFront(Main);
             const int32 OldY=Main->GetDrawY(),OldH=Main->Height,OldW=Main->Width;
             const auto Button=Manager->FindElementUnder(MainName,TEXT("MaximizeButton"));
+            Gameplay->GetChatLogWidget(0)->ScrollToStart();
             CaptureScreen(TEXT("ChatBeforeExpand"),Scale);
             const auto* ExpandState=Button->ResolvePaintState(false,false,false);
             Test.TestTrue(TEXT("Main chat uses retail expand artwork"),ExpandState && ExpandState->ImageFileId==0x06005E65);
             CheckControlHit(Button,TEXT("Expand icon wins Slate hit testing over chat text at both scales"),Scale);
+            const FVector2D CoveredSender=Canvas->GetCachedGeometry().LocalToAbsolute(
+                Canvas->LayoutToViewport(FVector2D(Button->GetScreenOrigin())+FVector2D(8,8)));
+            Button->bVisible=false;
+            Test.TestTrue(TEXT("Fixture has clickable sender text underneath the expand control"),Gameplay->TryHandleChatNameClick(CoveredSender));
+            Test.TestEqual(TEXT("Uncovered chat sender still starts a tell"),Gameplay->ChatEntry->GetText().ToString(),FString(TEXT("@tell Expand sender fixture, ")));
+            Button->bVisible=true;
+            Gameplay->ChatEntry->SetText(FText::FromString(TEXT("unsent chat draft")));
             auto ClickExpand=[&]()
             {
                 const FVector2D P=Canvas->LayoutToViewport(FVector2D(Button->GetScreenOrigin())+FVector2D(8,8));
                 Test.TestTrue(TEXT("DAT hit testing resolves the expand/restore control"),Manager->HitTestCanvas(Button->GetScreenOrigin().X+8,Button->GetScreenOrigin().Y+8)==Button);
-                Manager->NotifyMouseDown(P,FVector2D(ScreenSize)/Scale,EKeys::LeftMouseButton);
-                Manager->NotifyMouseUp(P,FVector2D(ScreenSize)/Scale,EKeys::LeftMouseButton);
+                const auto Geometry=Canvas->GetCachedGeometry();
+                const FVector2D Absolute=Geometry.LocalToAbsolute(P);
+                Canvas->NativeOnMouseButtonDown(Geometry,FPointerEvent(0,Absolute,Absolute,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
+                Canvas->NativeOnMouseButtonUp(Geometry,FPointerEvent(0,Absolute,Absolute,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
             };
             ClickExpand();CaptureScreen(TEXT("ChatExpanded"),Scale);
             Test.TestTrue(TEXT("Expanding keeps main chat visible while UI is locked"),Main->bVisible);
@@ -423,6 +487,7 @@ struct FACEChatUIFixture
             Test.TestEqual(TEXT("Restore returns to the previous position"),Main->GetDrawY(),OldY);
             Test.TestEqual(TEXT("Expand/restore preserves the unsent draft"),Gameplay->ChatEntry->GetText().ToString(),FString(TEXT("unsent chat draft")));
         }
+        Gameplay->ClearChatLog(0);Gameplay->AppendChatLineToLog(0,LongChat,FLinearColor::White,FString());
         Main->UserResizeH=SavedHeight;Main->UserDragY=SavedY;Main->RecomputeLayoutOffset();
         UACEUIElementManager::ApplyFloatyResizeLayout(Main);
         Gameplay->ChatEntry->SetText(Draft);CaptureScreen(TEXT("ChatResizeRestored"));
@@ -1997,6 +2062,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         Gameplay->HandleKeyboardNamedClick(TEXT("KeyboardCancelButton"));
     }
     ACEInputBindings::Reload();
+    CheckButtonDragArtwork(*this,Manager);
     if (auto Toolbar=Manager->FindElementByName(TEXT("PanelButton_SkillManagementButton")))
     {
         const auto* Down=Toolbar->ResolvePaintState(true,true,false);
@@ -2064,6 +2130,71 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 FACEBinaryWriter W;W.WriteUInt32(Session.PlayerGuid);W.WriteUInt32(1);W.WriteUInt32(Type);W.WriteUInt32(Error);
                 FACEBinaryReader R(W.GetData());Session.HandleGameEvent(R);Gameplay->TickCombatAutoAttack(0);
             };
+			{
+				TGuardValue<uint32> Options(Session.CharacterOptions1, Session.CharacterOptions1 & ~0x1001u);
+				Gameplay->CancelCombatAttack(); CombatEvent(ACEGameEvent::AttackDone);
+				Gameplay->ApplyCombatMode(int32(ACECombatMode::Missile));
+				Session.SetCurrentStance(ACEMotion::StanceBowCombat);
+				const auto CombatRoot = Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field"));
+				Manager->BringFloatyToFront(CombatRoot);
+				for (float Scale : {.75f, 1.f, 1.5f, 2.f})
+				{
+					CaptureScreen(FString::Printf(TEXT("MissileSlider_%g"), Scale), Scale);
+					const auto PowerSlider = Manager->FindElementByName(TEXT("PowerSlider"));
+					float ThumbWidth = 0.f;
+					for (const auto& Child : PowerSlider->Children)
+						if (Child && Child->ElementId == 1) ThumbWidth = Child->Width;
+					for (float Accuracy : {0.f, .5f, 1.f})
+					{
+						Gameplay->RequestedAttackPower = .25f; Gameplay->RefreshCombatPanelOverlays();
+						const auto& Geometry = Canvas->GetCachedGeometry();
+						auto Point = [&](float Fraction)
+						{
+							return Geometry.LocalToAbsolute(Canvas->LayoutToViewport(FVector2D(PowerSlider->GetScreenOrigin())
+								+ FVector2D(ThumbWidth*.5f + Fraction*(PowerSlider->Width-ThumbWidth), PowerSlider->Height*.5f)));
+						};
+						const auto From = Point(.25f), To = Point(Accuracy);
+						Canvas->NativeOnMouseButtonDown(Geometry,FPointerEvent(0,From,From,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
+						TestTrue(TEXT("Native pointer grabs the accuracy thumb"), Gameplay->bCombatPowerDrag);
+						Canvas->NativeOnMouseMove(Geometry,FPointerEvent(0,To,From,{EKeys::LeftMouseButton},EKeys::Invalid,0,FModifierKeysState()));
+						Canvas->NativeOnMouseButtonUp(Geometry,FPointerEvent(0,To,To,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
+						TestTrue(TEXT("Pointer drag retains exact requested accuracy at every UI scale"), FMath::IsNearlyEqual(Gameplay->RequestedAttackPower, Accuracy, .001f));
+						Session.CachedC2SPackets.Reset();
+						NativeClick(TEXT("MediumAttack"));
+						Gameplay->CombatPowerBuildStartTime = FPlatformTime::Seconds()-2.; Gameplay->TickCombatAutoAttack(0);
+						int32 Attacks = 0;
+						for (const auto& Packet : Session.CachedC2SPackets)
+						{
+							FACEBinaryReader R(Packet.Value.Payload); R.Skip(24);
+							if (R.ReadUInt32() != ACEGameAction::TargetedMissileAttack) continue;
+							++Attacks;
+							TestEqual(TEXT("Native bow attack targets the selected creature"), R.ReadUInt32(), uint32(Target.Guid));
+							TestEqual(TEXT("Native bow attack retains aim height"), R.ReadUInt32(), uint32(ACEAttackHeight::Medium));
+							TestTrue(TEXT("Native missile packet honors slider accuracy"), FMath::IsNearlyEqual(R.ReadFloat(), Accuracy, .01f));
+						}
+						TestEqual(TEXT("Clicking attack after a slider drag sends exactly one missile action"), Attacks, 1);
+						Gameplay->CancelCombatAttack(); CombatEvent(ACEGameEvent::AttackDone);
+					}
+				}
+				Session.CharacterOptions1 |= 0x1000u;
+				Gameplay->BeginCombatPowerCharge(ACEAttackHeight::Medium,true);
+				Gameplay->CombatPowerBuildStartTime=FPlatformTime::Seconds()-.4;
+				Gameplay->TickCombatAutoAttack(0);
+				CaptureScreen(TEXT("AdvancedMissileCharge"));
+				TestFalse(TEXT("Advanced combat hides the unused normal slider panel"), CombatRoot->bVisible);
+				TestEqual(TEXT("Advanced bow displays Accuracy on its floating charge meter"), Gameplay->JumpChargeLabel->GetText().ToString(), FString(TEXT("Accuracy")));
+				TestTrue(TEXT("Advanced meter displays held charge"), Manager->FindElementByName(TEXT("Powerbar"))->MeterFillFraction > .3f);
+				Gameplay->SetJumpChargeFraction(.6f);
+				TestEqual(TEXT("Jump temporarily owns the floating meter"), Gameplay->JumpChargeLabel->GetText().ToString(), FString(TEXT("Height")));
+				Gameplay->SetJumpChargeFraction(0);
+				TestEqual(TEXT("Finishing jump restores advanced attack display"), Gameplay->JumpChargeLabel->GetText().ToString(), FString(TEXT("Accuracy")));
+				Gameplay->CancelCombatAttack(); Gameplay->RefreshCombatPanelOverlays();
+				TestFalse(TEXT("Cancelling advanced attack hides its meter"), Manager->FindElementByName(TEXT("RootGameplay_PowerBar_Field"))->bVisible);
+				Session.CharacterOptions1 &= ~0x1000u;
+				Gameplay->RefreshCombatPanelOverlays();
+				TestTrue(TEXT("Normal combat restores slider panel"), CombatRoot->bVisible);
+				CaptureScreen(TEXT("MissileSliderRestored"));
+			}
             for(int32 Mode:{int32(ACECombatMode::Melee),int32(ACECombatMode::Missile)})
             {
                 Gameplay->CancelCombatAttack();CombatEvent(ACEGameEvent::AttackDone);
@@ -2578,7 +2709,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         CaptureScreen(TEXT("GameplayInnateSpell"));
         TestEqual(TEXT("Held caster supplies innate spell"),Gameplay->BuiltInSpellId,1);
         TestEqual(TEXT("Innate spell retains the caster use source"),Gameplay->BuiltInCasterGuid,Item.Guid);
-        TestTrue(TEXT("Innate spell paints its caster icon"),Gameplay->BuiltInSpellIconBorders.Num()==2
+        TestTrue(TEXT("Innate spell paints its caster icon"),Gameplay->BuiltInSpellIconBorders.Num()==3
             && Gameplay->BuiltInSpellIconBorders[1]->GetVisibility()!=ESlateVisibility::Collapsed);
         bool HasEquippedBadge=false;
         for (const auto& Pair:Gameplay->PaperDollShortcutIcons)
@@ -2590,6 +2721,19 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         Gameplay->SelectedCombatSpellSlot=0; Gameplay->SpellHotbarScrollOffset=0;
         Gameplay->RefreshSpellHotbarOverlays();
         CaptureScreen(TEXT("GameplayEmptyNumberedSpellBar"));
+		TestEqual(TEXT("Empty spell bank selects the equipped innate spell"), Gameplay->SelectedCombatSpellSlot, -1);
+		TestTrue(TEXT("Innate selection frame paints above the caster"),
+			Gameplay->BuiltInSpellIconBorders[2]->GetVisibility() != ESlateVisibility::Collapsed
+			&& Cast<UCanvasPanelSlot>(Gameplay->BuiltInSpellIconBorders[2]->Slot)->GetZOrder()
+			> Cast<UCanvasPanelSlot>(Gameplay->BuiltInSpellIconBorders[1]->Slot)->GetZOrder());
+		TestTrue(TEXT("Innate spell name includes the casting item"), Gameplay->SpellcastSpellNameLabel->GetText().ToString().Contains(Item.Name));
+		FString InnateTooltip;
+		const auto& InnateGeometry = Gameplay->BuiltInSpellIconBorders[0]->GetCachedGeometry();
+		TestTrue(TEXT("Innate slot exposes its retail tooltip through the canvas"), Gameplay->GetStatTooltipAt(
+			InnateGeometry.LocalToAbsolute(InnateGeometry.GetLocalSize()*.5), InnateTooltip));
+		TestTrue(TEXT("Innate tooltip includes item, spell and double-click instruction"),
+			InnateTooltip.Contains(Item.Name) && InnateTooltip.Contains(TEXT("Strength Other I"))
+			&& InnateTooltip.Contains(TEXT("Double-click to cast this spell")));
         for (int32 I=0; I<Gameplay->SpellBarSpellIds.Num(); ++I)
         {
             const int32 ExpectedDid=I<9 ? 0x060010FA+I : 0x06001A97;
@@ -2601,6 +2745,22 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 Gameplay->SpellBarSlotNumIcons[I]->GetVisibility()==ESlateVisibility::Collapsed);
         }
         Favorites={1,2,3}; Gameplay->RefreshSpellHotbarOverlays();
+		Gameplay->StepCombatSpellSelection(1, false, false);
+		TestEqual(TEXT("Next selection moves from innate to first favorite"), Gameplay->SelectedCombatSpellSlot, 0);
+		Gameplay->StepCombatSpellSelection(-1, false, false);
+		TestEqual(TEXT("Previous selection includes the innate slot"), Gameplay->SelectedCombatSpellSlot, -1);
+		Session.WorldObjects[Item.Guid].SpellDID = 2;
+		Gameplay->SyncSpellTabSelection();
+		TestEqual(TEXT("Changing a held wand spell updates selection before the next paint"), Gameplay->BuiltInSpellId, 2);
+		Session.WorldObjects[Item.Guid].WielderId = 0;
+		Session.WorldObjects[Item.Guid].CurrentWieldedLocation = 0;
+		Gameplay->RefreshSpellHotbarOverlays();
+		TestEqual(TEXT("Unequipping clears the innate caster"), Gameplay->BuiltInCasterGuid, 0);
+		TestEqual(TEXT("Unequipping falls back to the first favorite"), Gameplay->SelectedCombatSpellSlot, 0);
+		for (UBorder* Border : Gameplay->BuiltInSpellIconBorders)
+			TestTrue(TEXT("Unequipped innate layers are all hidden"), Border->GetVisibility() == ESlateVisibility::Collapsed);
+		Session.WorldObjects[Item.Guid] = Item;
+		Gameplay->RefreshSpellHotbarOverlays();
 		TestEqual(TEXT("Spell artwork reads its formula's power component"), Dat->GetSpellIconPowerLevel(1), 1u);
 		for (int32 I = 0; I < 3; ++I)
 		{
@@ -4691,9 +4851,19 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             }
             Session.CachedC2SPackets.Reset();NativeClick(TEXT("VendorItemBuy_Button"));
             TestTrue(TEXT("Custom pyreal stock Buy button sends a retail Buy action"),HasAction(ACEGameAction::Buy));
-            NativeClick(TEXT("VendorItemAdd_Button"));
-            TestTrue(TEXT("Custom pyreal stock Add to List button adds the selected item"),
-                Gameplay->VendorBuyCart.ContainsByPredicate([&](const auto& P){return P.Value==Stock.Guid&&P.Key>0;}));
+            Gameplay->SelectedStackAmount=1;Session.CachedC2SPackets.Reset();
+            for(int32 Count=1;Count<=10;++Count)
+            {
+                NativeClick(TEXT("VendorItemAdd_Button"));
+                CaptureScreen(TEXT("GameplayRepeatedVendorAdd"));
+                TestEqual(TEXT("Add to List keeps the retail Items page open"),Gameplay->ActiveVendorPage,0);
+                TestEqual(TEXT("Add to List keeps the item selected"),Gameplay->VendorSelectedGuid,Stock.Guid);
+                TestTrue(TEXT("Repeated Add to List accumulates one unit per click"),
+                    Gameplay->VendorBuyCart.ContainsByPredicate([&](const auto& P){return P.Value==Stock.Guid&&P.Key==Count;}));
+            }
+            TestFalse(TEXT("Staging a cart does not purchase stock"),HasAction(ACEGameAction::Buy));
+            NativeClick(TEXT("VendorBuyTab"));
+            TestEqual(TEXT("Buying tab still explicitly opens the staged cart"),Gameplay->ActiveVendorPage,1);
             Gameplay->VendorBuyCart.Reset();Gameplay->SetVendorPage(0);
             }();
             // Shrine of Knowledge (43370020) advertises each gem with a zero
@@ -4776,6 +4946,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("Vendor uses the singular stock name without a quantity prefix"),Gameplay->VendorItemNameLabel->GetText().ToString(),Note.Name);
             TestTrue(TEXT("Trade note purchase uses retail fixed 15-percent markup"),Gameplay->VendorItemCostLabel->GetText().ToString().Contains(TEXT("287,500p")));
             Gameplay->VendorBuyCart.Reset();Gameplay->AddSelectedVendorItemToBuyCart();
+            Gameplay->SetVendorPage(1);
             TestTrue(TEXT("Buy cart uses the same trade note price"),Gameplay->VendorBuyCostLabel->GetText().ToString().Contains(TEXT("287,500")));
             Gameplay->VendorSellCart={{1,Note.Guid}};Gameplay->SetVendorPage(2);
             TestTrue(TEXT("Trade note sells for its full face value"),Gameplay->VendorSellCostLabel->GetText().ToString().Contains(TEXT("250,000p")));

@@ -6,6 +6,16 @@ namespace ACEUCMLootPresentation
 namespace
 {
 #include "ACEUCMLootProperties.inl"
+// Virindi's Weapon Skill Ids reference. These are comparison values, not
+// property keys; custom servers can still enter an ID outside this list.
+const TArray<FProperty> WeaponSkills={
+    {31,TEXT("Creature Enchantment")},{46,TEXT("Finesse Weapons")},
+    {44,TEXT("Heavy Weapons")},{32,TEXT("Item Enchantment")},
+    {33,TEXT("Life Magic")},{45,TEXT("Light Weapons")},
+    {16,TEXT("Mana Conversion")},{47,TEXT("Missile Weapons")},
+    {54,TEXT("Summoning")},{41,TEXT("Two-Handed Combat")},
+    {43,TEXT("Void Magic")},{34,TEXT("War Magic")}
+};
 FString S(const TSharedPtr<FJsonObject>& O,const TCHAR* K){FString V;O->TryGetStringField(K,V);return V;}
 double N(const TSharedPtr<FJsonObject>& O,const TCHAR* K){double V=0;O->TryGetNumberField(K,V);return V;}
 FString Number(double V){return FString::Printf(TEXT("%.15g"),V);}
@@ -16,12 +26,17 @@ const TArray<FProperty>& Properties(const FString& Field)
     if(Field==TEXT("string"))return StringProperties;
     if(Field==TEXT("class"))return ClassProperties;
     if(Field==TEXT("skill"))return SkillProperties;
+    if(Field==TEXT("weapon_skill"))return WeaponSkills;
     return IntProperties;
 }
 FString PropertyLabel(const FString& Field,int32 Id)
 {
     for(const auto& P:Properties(Field))if(P.Id==Id)return FString::Printf(TEXT("%s (%d)"),P.Name,Id);
-    return FString::Printf(TEXT("Custom / unknown property (%d)"),Id);
+    return FString::Printf(TEXT("%s (%d)"),Field==TEXT("weapon_skill")?TEXT("Custom / other skill"):TEXT("Custom / unknown property"),Id);
+}
+bool IsWeaponSkillProperty(const FString& Field,int32 Id)
+{
+    return Field==TEXT("int")&&(Id==218103840||Id==159||Id==48);
 }
 const TMap<int32,FCalculated>& Calculated()
 {
@@ -71,7 +86,11 @@ FString ConditionSummary(const TSharedPtr<FJsonObject>& C)
     const FString Op=S(C,TEXT("op"));
     const FString Symbol=Op==TEXT("ge")?TEXT(">="):Op==TEXT("le")?TEXT("<="):Op==TEXT("eq")?TEXT("="):Op==TEXT("ne")?TEXT("!="):Op==TEXT("bits")?TEXT("has any flag in"):Op;
     bool Zero=false;C->TryGetBoolField(TEXT("missing_zero"),Zero);
-    return PropertyLabel(Field,Key)+TEXT(" ")+Symbol+TEXT(" ")+Number(N(C,TEXT("value")))
+    const double Value=N(C,TEXT("value"));
+    FString ValueLabel=Number(Value);
+    if(IsWeaponSkillProperty(Field,Key))for(const auto& Skill:WeaponSkills)
+        if(Value==Skill.Id){ValueLabel=PropertyLabel(TEXT("weapon_skill"),Skill.Id);break;}
+    return PropertyLabel(Field,Key)+TEXT(" ")+Symbol+TEXT(" ")+ValueLabel
         +(Zero?TEXT(" | Missing value = 0"):TEXT(" | Missing value does not match"));
 }
 FString DataRequirement(const TSharedPtr<FJsonObject>& C)

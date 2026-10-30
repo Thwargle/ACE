@@ -754,6 +754,23 @@ melee defense is 1.15 and +130% bow damage is 2.3. Keep counts explicitly choose
 display-name matching (Classic Keep #) or item-template matching. A condition
 draft must be accepted or cancelled before saving its containing rule.
 
+For weapon skills, open a rule's **Requirements**, choose **Weapon skill**, then
+select a skill by name and ID (for example, **Heavy Weapons (44)** or **Missile
+Weapons (47)**). This creates `EquipSkill = ID`, using the weapon's attack skill
+from appraisal. **Wield requirement skill** creates `WieldReqAttribute = ID`
+instead; it is the required skill, which may differ from the attack skill.
+Choose **Apply requirement**, then **Apply rule** to save to the active loot
+profile. Both the UCM editor and the separate Loot Profile Editor offer these
+controls. The picker includes all twelve IDs in Virindi's
+[Weapon Skill Ids reference](https://www.virindi.net/wiki/index.php/Weapon_Skill_Ids)
+and accepts custom IDs. Imported rules keep their original comparisons, numeric
+IDs, and missing-value policy.
+
+`WieldReqAttribute` can also describe a non-skill requirement. For skill-only
+wield rules, check `WieldReqType`: Skill = 1, Raw Skill = 2, or Training = 8.
+Add the relevant type as another integer requirement if needed. Use separate
+rules for alternatives: every requirement within one rule must match.
+
 **View / edit original Classic UTL copy** opens the source document separately
 from the active converted rules. The document editor exposes all 31 Classic
 requirement types, priority, actions and counts, custom expressions, RGB/tolerance

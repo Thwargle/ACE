@@ -4234,3 +4234,67 @@ short/narrow panel renders), `Companions`, `PublicAPI`, `AppraisalCommandContext
 and `ResourceMaintenance` passed. Tracking is checked against encoded loopback
 IdentifyObject packets; no QueryHealth target changes. Artifacts are in
 `TestOutput/DerethLens/`. Quest source synchronization is checked separately.
+
+## Chat controls, vendor staging and button drags: 2026-10-30
+
+- Main-chat expand/restore and unread controls take precedence over the legacy
+  sender-click fallback. Their DAT rectangles overlap selectable chat rows;
+  receiving the Slate hit alone did not prevent the canvas from starting a tell
+  before dispatching the button. Buttons, scrollbars and window handles now
+  retain input priority without disabling ordinary sender clicks.
+- Vendor Add to List keeps the Items page and selection, matching
+  `gmVendorUI::HandleButtonClicks` (0x100000C3) and
+  `VendorItemsUI::AddToBuyList`. Repeated clicks accumulate the selected quantity
+  without navigating away or submitting a purchase.
+- `UIElement_Button::UpdateState_` only changes to a state present in its DAT
+  description. Preserve the previous valid state when rollover artwork is
+  absent, preventing combat/use/examine, minimize, close and logout buttons
+  from going blank during a captured drag. Radar lock uses the explicit
+  0x10000063/0x10000064 states from `gmRadarUI::UpdateLockedStatus`.
+
+Validation: Development Editor build and `UIScreens`, `UIInteractions`,
+`ChatInputAndCommands`, `ACE.VR.RigAndMenus` and `ACE.Mobile.TouchAndMenus`
+passed. Rendered chat checks cover center/corner hit surfaces at 100%/150% UI
+scale, locked/unlocked windows at the top/bottom of the viewport, native canvas
+clicks with a clickable sender underneath, and preservation of unsent drafts.
+Authored-button tests exercise drag out/back, release outside, capture cancel
+and release inside; vendor tests perform ten consecutive native Add clicks.
+The trade-note price fixture now explicitly opens Buying to inspect that page.
+Evidence: `TestOutput/UIGestures-2026-10-30/` (four other suites in `report`, final
+screen suite in `final-report`). These are offline DAT/Slate/loopback tests;
+no live server transaction or new packaged release was performed.
+
+## Innate caster spell and manual attack accuracy: 2026-10-30
+
+- `gmSpellcastingUI::UpdateEndowmentIcon` and `IconData::RenderIcons` draw the
+  equipped caster's spell, its transparent drag icon, then 0x06004D09 selection
+  artwork. The selection frame now paints above the runtime icons. Inventory
+  structure/sale decorations do not obscure the innate spell. The tooltip uses
+  the item name, spell name and retail double-click instruction.
+- Resolve the equipped caster before synchronizing a spell bank or casting.
+  Empty banks select the innate spell, equipment changes refresh its identity,
+  and unequipping falls back to an available favorite. Next/previous/first/last
+  selection includes the innate slot as in `gmSpellcastingUI`'s selection notices.
+  Read the session's object view without copying the entire nearby inventory.
+- The normal power/accuracy thumb uses its authored width and preserves the
+  pointer's grab offset. Track clicks center the thumb, pointer coordinates are
+  converted consistently, and changing the requested mark does not overwrite
+  the charge already being displayed.
+- `gmCombatUI::RecvNotice_SetCombatMode` hides the normal combat panel when
+  Advanced Combat UI is enabled. That mode now shows the floating red
+  Power/Accuracy charge meter from `gmPowerbarUI::RecvNotice_BeginPowerbar`.
+  Jump retains the yellow Height meter. The existing retail packet rules remain:
+  normal attacks build to at least the selected mark; advanced attacks use the
+  held charge at release. A visible normal slider in advanced mode previously
+  suggested that quick clicks would use its mark when they did not.
+
+Validation: Development Editor build; `UIScreens`, `UIInteractions`, `PvPCombat`,
+`ACE.VR.RigAndMenus` and `ACE.Mobile.TouchAndMenus`. Native pointer drag and
+attack-button tests check exactly one missile packet with 0%, 50% and 100%
+accuracy at 75%, 100%, 150% and 200% Slate UI scale. Rendered checks cover innate
+selection layering, empty banks, spell changes, unequipping, tooltip text and
+advanced/jump meter transitions. PvPCombat separately checks normal/advanced
+melee and missile release/repeat packet values. Evidence is under
+`TestOutput/WandArchery-2026-10-30/`; final tooltip/selection validation is in
+`final-report`. Quest and mobile share the updated source. No live-server hit
+rate or user-specific wand was available for reproduction.

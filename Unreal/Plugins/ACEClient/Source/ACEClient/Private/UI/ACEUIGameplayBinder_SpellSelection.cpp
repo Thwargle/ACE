@@ -47,6 +47,29 @@ void UACEUIGameplayBinder::SyncSpellTabSelection()
 	if (!Client) return;
 	const auto Session = Client->GetSession();
 	if (!Session) return;
+	// gmSpellcastingUI::UpdateEndowmentIcon reads the held caster before deciding
+	// which spell is selected. Resolve it here so keyboard/cast actions cannot use
+	// the previous wand while waiting for the next hotbar paint.
+	BuiltInSpellId = 0;
+	BuiltInCasterGuid = 0;
+	const int32 PlayerGuid = Client->GetPlayerGuid();
+	if (PlayerGuid != 0)
+	{
+		for (const auto& Pair : Session->GetWorldObjects())
+		{
+			const FACEWorldObject& Obj = Pair.Value;
+			if (Obj.SpellDID == 0 || (Obj.ItemType & ACEItemType::Caster) == 0) continue;
+			const bool bHeldByUs = Obj.WielderId == PlayerGuid || Obj.ParentGuid == PlayerGuid;
+			const bool bHeldLoc = (Obj.CurrentWieldedLocation & ACEEquipMask::Held) != 0
+				|| (Obj.ParentGuid == PlayerGuid && (Obj.ValidLocations & ACEEquipMask::Held) != 0);
+			if (bHeldByUs && bHeldLoc)
+			{
+				BuiltInSpellId = Obj.SpellDID;
+				BuiltInCasterGuid = Obj.Guid;
+				break;
+			}
+		}
+	}
 	const int32 Tab = FMath::Clamp(Client->GetActiveSpellBar(), 0, 7);
 	const bool bChangedTab = SelectionSpellTab != Tab;
 	if (bChangedTab)
@@ -69,7 +92,7 @@ void UACEUIGameplayBinder::SyncSpellTabSelection()
 	const auto& Bar = Session->GetSpellBar(Tab);
 	auto& Saved = SpellTabSelections[Tab];
 	// Keep the same spell through edits/reordering while this tab was hidden.
-	if (SelectedCombatSpellSlot == Saved.Slot && Saved.SpellId)
+	if (SelectedCombatSpellSlot >= 0 && SelectedCombatSpellSlot == Saved.Slot && Saved.SpellId)
 	{
 		const int32 Found = Bar.Find(Saved.SpellId);
 		if (Found != INDEX_NONE && Found != SelectedCombatSpellSlot)
@@ -79,16 +102,17 @@ void UACEUIGameplayBinder::SyncSpellTabSelection()
 		}
 	}
 	int32 Clamped = FMath::Clamp(SelectedCombatSpellSlot, -1, FMath::Max(0, Bar.Num()-1));
+	if (Clamped < 0 && !BuiltInSpellId) Clamped = 0;
 	if (Clamped >= 0 && (!Bar.IsValidIndex(Clamped) || Bar[Clamped] == 0))
 	{
 		// PlayerModule can pad favorites to 56 entries. Empty storage is not
 		// a selectable spell (including after deleting the selected favorite).
 		Clamped = Bar.IndexOfByPredicate([](int32 Spell) { return Spell != 0; });
-		if (Clamped == INDEX_NONE) Clamped = 0;
+		if (Clamped == INDEX_NONE) Clamped = BuiltInSpellId ? -1 : 0;
 	}
 	if (Clamped != Saved.Slot) bRevealSelectedSpell = true;
 	SelectedCombatSpellSlot = Clamped;
-	const int32 Spell = Bar.IsValidIndex(Clamped) ? Bar[Clamped] : 0;
+	const int32 Spell = Clamped < 0 ? BuiltInSpellId : Bar.IsValidIndex(Clamped) ? Bar[Clamped] : 0;
 	const bool bChangedSelection = Saved.Slot != Clamped || Saved.SpellId != Spell;
 	Saved.Slot = Clamped;
 	Saved.SpellId = Spell;
@@ -135,6 +159,7 @@ void UACEUIGameplayBinder::StepCombatSpellSelection(int32 Direction, bool bFirst
 	SyncSpellTabSelection();
 	const auto Bar = Client->GetSpellBar(Client->GetActiveSpellBar());
 	TArray<int32, TInlineAllocator<64>> Spells;
+	if (BuiltInSpellId) Spells.Add(-1);
 	for (int32 I = 0; I < Bar.Num(); ++I) if (Bar[I] != 0) Spells.Add(I);
 	if (Spells.IsEmpty()) return;
 	const int32 Current = Spells.Find(SelectedCombatSpellSlot);

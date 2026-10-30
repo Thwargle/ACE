@@ -18,7 +18,7 @@ bool LootNarrow=false,ShowLootFiles=false,LootHasSource=false;
 
 TSharedRef<SWidget> LootTool(const FString& Caption,TFunction<void()> Action)
 {
-    return SNew(SACEPluginButton).ButtonStyle(&Style()).IsFocusable(false).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding))
+    return SNew(SACEPluginButton).Tag(FName(*(TEXT("UCMLootTool.")+Caption))).ButtonStyle(&Style()).IsFocusable(false).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding))
         .OnClicked_Lambda([Action](){Action();return FReply::Handled();})[SNew(SACEPluginText).Text(FText::FromString(Caption)).Font(FACEPluginStyle::NativeFont("Regular",14)).ColorAndOpacity(Ink)];
 }
 TSharedRef<SWidget> LootSelectRow(const FString& Caption,const FString& Detail,TAttribute<bool> Selected,TFunction<void()> Action)
@@ -193,7 +193,7 @@ void LootPanel()
 TSharedRef<SWidget> LootPropertyPicker(const FString& Field,int32 Current,TFunction<void(int32)> Changed)
 {
     auto Row=SNew(SVerticalBox);
-    Row->AddSlot().AutoHeight()[SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo)
+    Row->AddSlot().AutoHeight()[SNew(SACEPluginComboButton).Tag(FName(*(TEXT("UCMLootPicker.")+Field))).ComboButtonStyle(&FACEPluginStyle::Current()->Combo)
         .ButtonContent()[Text(ACEUCMLootPresentation::PropertyLabel(Field,Current),15)]
         .OnGetMenuContent_Lambda([Field,Changed]()->TSharedRef<SWidget>
         {
@@ -213,12 +213,12 @@ TSharedRef<SWidget> LootPropertyPicker(const FString& Field,int32 Current,TFunct
             };
             Populate(FString());
             return SNew(SBox).WidthOverride(310).MaxDesiredHeight(330)[SNew(SVerticalBox)
-                +SVerticalBox::Slot().AutoHeight()[SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).HintText(FText::FromString(TEXT("Search property name or ID"))).OnTextChanged_Lambda([Populate](const FText& T){Populate(T.ToString());})]
+                +SVerticalBox::Slot().AutoHeight()[SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).HintText(FText::FromString(Field==TEXT("weapon_skill")?TEXT("Search skill name or ID"):TEXT("Search property name or ID"))).OnTextChanged_Lambda([Populate](const FText& T){Populate(T.ToString());})]
                 +SVerticalBox::Slot().FillHeight(1)[SNew(SScrollBox)+SScrollBox::Slot()[List]]];
         })];
     Row->AddSlot().AutoHeight().Padding(0,4)[SNew(SHorizontalBox)
         +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[Text(TEXT("ID: "),14,Muted)]
-        +SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).MinValue(0).MaxValue(MAX_int32).Value(Current)
+        +SHorizontalBox::Slot().FillWidth(1)[SNew(SSpinBox<int32>).Tag(FName(*(TEXT("UCMLootID.")+Field))).Style(&FACEPluginStyle::Current()->Spin).MinValue(0).MaxValue(MAX_int32).Value(Current)
             .OnValueCommitted_Lambda([Changed](int32 V,ETextCommit::Type){Changed(V);})]];
     return Row;
 }
@@ -389,6 +389,14 @@ void LootConditions()
     Add(SNew(SBox).HeightOverride(150)[SNew(SScrollBox)+SScrollBox::Slot()[List]]);
     auto Tools=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
     Tools->AddSlot()[LootTool(TEXT("New"),[this](){if(!CanLeaveLootRequirement())return;ConditionDraft=MakeShared<FJsonObject>();ConditionDraft->SetStringField(TEXT("field"),TEXT("int"));ConditionDraft->SetStringField(TEXT("op"),TEXT("ge"));ConditionDraft->SetNumberField(TEXT("key"),19);ConditionIndex=INDEX_NONE;Rebuild();})];
+    for(const auto& SkillProperty:TArray<TPair<int32,FString>>{{218103840,TEXT("Weapon skill")},{159,TEXT("Wield requirement skill")}})
+        Tools->AddSlot()[LootTool(SkillProperty.Value,[this,Key=SkillProperty.Key]()
+        {
+            if(!CanLeaveLootRequirement())return;
+            ConditionDraft=MakeShared<FJsonObject>();ConditionDraft->SetStringField(TEXT("field"),TEXT("int"));
+            ConditionDraft->SetStringField(TEXT("op"),TEXT("eq"));ConditionDraft->SetNumberField(TEXT("key"),Key);
+            ConditionDraft->SetNumberField(TEXT("value"),44);ConditionIndex=INDEX_NONE;Rebuild();
+        })];
     Tools->AddSlot()[SNew(SBox).IsEnabled(Conditions.IsValidIndex(ConditionIndex))[LootTool(TEXT("Clone"),[this,Conditions](){if(!Conditions.IsValidIndex(ConditionIndex))return;if(!CanLeaveLootRequirement())return;ConditionDraft=ACEUCMLootPresentation::Clone(Conditions[ConditionIndex]->AsObject());ConditionIndex=INDEX_NONE;Rebuild();})]];
     Tools->AddSlot()[SNew(SBox).IsEnabled(Conditions.IsValidIndex(ConditionIndex))[LootTool(TEXT("Delete"),[this,Conditions]()mutable{if(!CanLeaveLootRequirement())return;ConditionDraft.Reset();Conditions.RemoveAt(ConditionIndex);LootDraft->SetArrayField(TEXT("conditions"),Conditions);ConditionIndex=INDEX_NONE;Rebuild();})]];
     for(int Direction:{-1,1})Tools->AddSlot()[SNew(SBox).IsEnabled(Conditions.IsValidIndex(ConditionIndex)&&Conditions.IsValidIndex(ConditionIndex+Direction))
@@ -413,6 +421,8 @@ void LootConditions()
     }
     Add(SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[Text(CurrentType,15)].MenuContent()[TypeMenu]);
     const FString Field=Str(ConditionDraft,TEXT("field"));
+    const int32 PropertyKey=int32(Num(ConditionDraft,TEXT("key")));
+    const bool WeaponSkill=ACEUCMLootPresentation::IsWeaponSkillProperty(Field,PropertyKey);
     if(Field==TEXT("legacy"))
     {
         const int Key=int(Num(ConditionDraft,TEXT("key")));const auto* Definition=Calculated.Find(Key);
@@ -437,6 +447,10 @@ void LootConditions()
     {
         Add(Text(TEXT("Property name / ID (custom server IDs are accepted)"),14,Muted));
         Add(LootPropertyPicker(Field,int(Num(ConditionDraft,TEXT("key"),19)),[this](int32 V){ConditionDraft->SetNumberField(TEXT("key"),V);Rebuild();}));
+        if(WeaponSkill)Add(Text(PropertyKey==159
+            ?TEXT("WieldReqAttribute is the requirement's skill ID when WieldReqType is Skill (1), Raw Skill (2), or Training (8). Use EquipSkill to match the weapon's attack skill instead.")
+            :PropertyKey==218103840?TEXT("EquipSkill is the weapon's attack skill from appraisal (VT). It can differ from the skill required to wield the item.")
+            :TEXT("WeaponSkill is the raw item property. For VT rules, use EquipSkill from the weapon appraisal profile."),13,Muted));
         if(Field==TEXT("float"))Add(Text(TEXT("Values are stored as decimals: a +15% defense bonus is 1.15; a +130% bow damage modifier is 2.3. Workmanship can be fractional."),13,Muted));
     }
     if(Field==TEXT("string")||Field==TEXT("spells"))
@@ -463,8 +477,17 @@ void LootConditions()
             Ops->AddSlot().AutoHeight()[MenuButton(Op.Value,[this,Op](){ConditionDraft->SetStringField(TEXT("op"),Op.Key);FSlateApplication::Get().DismissAllMenus();Rebuild();})];
         }
         Add(SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[Text(CurrentOp,15)].MenuContent()[Ops]);
-        Add(Text(TEXT("Value"),14,Muted));
-        Add(SNew(SSpinBox<double>).Style(&FACEPluginStyle::Current()->Spin).MaxFractionalDigits(12).MinValue(TOptional<double>()).MaxValue(TOptional<double>()).MinSliderValue(TOptional<double>()).MaxSliderValue(TOptional<double>()).Value(Num(ConditionDraft,TEXT("value"))).OnValueChanged_Lambda([this](double V){ConditionDraft->SetNumberField(TEXT("value"),V);}));
+        const double Value=Num(ConditionDraft,TEXT("value"));
+        if(WeaponSkill&&Value>=0&&Value<=MAX_int32&&Value==FMath::FloorToDouble(Value))
+        {
+            Add(Text(TEXT("Skill name / ID (custom server IDs are accepted)"),14,Muted));
+            Add(LootPropertyPicker(TEXT("weapon_skill"),int32(Value),[this](int32 V){ConditionDraft->SetNumberField(TEXT("value"),V);Rebuild();}));
+        }
+        else
+        {
+            Add(Text(TEXT("Value"),14,Muted));
+            Add(SNew(SSpinBox<double>).Style(&FACEPluginStyle::Current()->Spin).MaxFractionalDigits(12).MinValue(TOptional<double>()).MaxValue(TOptional<double>()).MinSliderValue(TOptional<double>()).MaxSliderValue(TOptional<double>()).Value(Value).OnValueChanged_Lambda([this](double V){ConditionDraft->SetNumberField(TEXT("value"),V);}));
+        }
         Add(Button(Bool(ConditionDraft,TEXT("missing_zero"))?TEXT("Missing value: use 0 (VT)"):TEXT("Missing value: does not match"),[this](){ConditionDraft->SetBoolField(TEXT("missing_zero"),!Bool(ConditionDraft,TEXT("missing_zero")));Rebuild();}));
     }
     Add(Button(TEXT("Apply requirement"),[this,Conditions]()mutable
