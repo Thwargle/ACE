@@ -154,6 +154,12 @@ Plugins are responsible for fitting their controls into this space.
 formatted `text`, `sender`, `color` (chat message type), `time`, and `serial`.
 Use these events to parse server-specific responses without hiding a chat window.
 
+Local `notice/show` output uses the **Plugin chat** category in Options > Chat.
+Players can independently enable it for each chat window. Notices retain their
+normal text color and enter bounded chat history, including while a window is
+closed. This category also covers UCM loot announcements. Server messages and
+echoes of `chat/send` retain their normal channel categories.
+
 The separate **`chat_filter` permission** allows display-only filtering. Return a
 `chat_filters` array to replace your plugin's active rules:
 

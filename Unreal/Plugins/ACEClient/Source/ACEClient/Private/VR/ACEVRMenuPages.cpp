@@ -155,13 +155,27 @@ void UACEVRMenu::BuildCharacter()
 }
 void UACEVRMenu::BuildLoot()
 {
-    const int32 Container=Client->GetOpenExternalContainerGuid();
-    if(!Container){Body->AddSlot().AutoHeight()[PageText(TEXT("Open a corpse or container to see its contents."))];return;}
+    const int32 Root=Client->GetOpenExternalContainerGuid();
+    if(!Root){Body->AddSlot().AutoHeight()[PageText(TEXT("Open a corpse or container to see its contents."))];return;}
+    TArray<int32> Packs;
+    if(const auto Session=Client->GetSession())Session->GetContainerPackGuids(Root,Packs);
+    const int32 Container=Packs.Contains(Binder->OpenLootSelectedPackGuid)?Binder->OpenLootSelectedPackGuid:Root;
+    Binder->OpenLootSelectedPackGuid=Container;
+    if(Container!=Root)Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Back to container"),[this,Root]()
+        {Binder->OpenLootSelectedPackGuid=Root;ClearItemSelection();bDirty=true;})];
+    auto Items=Client->GetPackItems(Container);
+    // Side-slot packs are deliberately omitted from the ordinary item grid.
+    // Expose them here too, so touch/VR can open or take an installed chest pack.
+    if(Container==Root)for(int32 Guid:Packs)
+    {FACEWorldObject PackItem;if(Client->GetWorldObject(Guid,PackItem))Items.Add(PackItem);}
     auto Grid=SNew(SUniformGridPanel).SlotPadding(FMargin(4));int32 I=0;
-    for(const auto& Item:Client->GetPackItems(Container)){Grid->AddSlot(I%6,I/6)[ItemButton(Item)];++I;}
+    for(const auto& Item:Items){Grid->AddSlot(I%6,I/6)[ItemButton(Item)];++I;}
     Body->AddSlot().AutoHeight()[Grid];
-    FACEWorldObject Item;const bool Valid=Client->GetWorldObject(Selected,Item) && Item.ContainerId==Container;
+    FACEWorldObject Item;const bool Valid=Client->GetWorldObject(Selected,Item)
+        && Items.ContainsByPredicate([this](const auto& Entry){return Entry.Guid==Selected;});
     if(Valid){Body->AddSlot().AutoHeight()[PageText(ACERetailObjectNames::Name(Item),28)];AddQuantity(Item.StackSize);}
+    if(Valid && Packs.Contains(Selected))Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Open selected pack"),[this]()
+        {Binder->OpenLootSelectedPackGuid=Selected;ClearItemSelection();bDirty=true;})];
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Take selected"),[this](){Binder->PickupInventoryAmount(Selected,Binder->GetSelectedItemAmount(Selected));bDirty=true;},Valid)];
 }
 void UACEVRMenu::BuildVendor()

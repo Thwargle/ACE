@@ -1193,6 +1193,20 @@ bool UACECharacterAppearanceComponent::IsMovementLockedByAction() const
 		&& (ACEAttackMotion::IsAction(ActionCommand) || (ActionCommand&0xFF000000u)==0x80000000u);
 }
 
+bool UACECharacterAppearanceComponent::HasPendingCombatForwardMotion() const
+{
+	// CMotionTable::GetObjectSequence removes cyclic animations, retaining
+	// unfinished links/actions. Human walk/run displacement comes from the
+	// position frames of that cycle, so it cannot run underneath a cast, draw,
+	// reload, swing or stance change. Sidestep/turn remain separate modifiers.
+	if (AnimMode != EACEAnimMode::ActionOneShot || bHoldActionFinal) return false;
+	const bool bPowerUp = (ActionCommand >= 0x1000006Fu && ActionCommand <= 0x10000078u)
+		|| (ActionCommand >= 0x1000012Bu && ActionCommand <= 0x10000134u);
+	return bPowerUp || ACEIsMagicCastCommand(ActionCommand) || ACEIsMissileSubstate(ActionCommand)
+		|| (bActionUsesStateTransition && ACEIsMissileSubstate(ActionFromCommand))
+		|| IsMovementLockedByAction();
+}
+
 void UACECharacterAppearanceComponent::SetLocomotionInput(float Forward, float Strafe, bool bRunning, float PlayRate, bool bInterpretedRate)
 {
 	if (AnimMode == EACEAnimMode::DoorTransition)

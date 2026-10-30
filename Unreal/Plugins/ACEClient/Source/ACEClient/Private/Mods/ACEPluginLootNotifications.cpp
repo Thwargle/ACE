@@ -47,7 +47,7 @@ void UACEPluginSubsystem::ShowLootNotification(const FString& Text)
     // Local output only: never send these messages to the server or fellowship.
     FString Line=Text.Left(900);Line.ReplaceInline(TEXT("\r"),TEXT(" "));Line.ReplaceInline(TEXT("\n"),TEXT(" "));
     if(auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>())
-        C->ReceiveChatMessage(TEXT("[UCM] ")+Line,FString(),ACEChatMessageType::System);
+        C->ReceiveChatMessage(TEXT("[UCM] ")+Line,FString(),ACEChatMessageType::System,ACEChatMessageType::Plugin);
 }
 
 void UACEPluginSubsystem::QueueLootMatch(int32 Guid)

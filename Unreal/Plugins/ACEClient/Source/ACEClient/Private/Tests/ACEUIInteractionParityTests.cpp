@@ -287,6 +287,29 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
         TestEqual(TEXT("Unfiltered window still receives assessment notices"),Binder->ChatDisplayLines[1].Num(),1);
         Binder->HandleChatMessage(TEXT("Equipment appraisal error"),TEXT(""),ACEChatMessageType::ChatError);
         TestEqual(TEXT("Assessment filter retains important error messages"),Binder->ChatDisplayLines[0].Num(),1);
+
+        const uint64 Plugin=ACERetailChat::PluginMask;
+        TestTrue(TEXT("New main windows include plugin notices"),(ACERetailChat::MainWindowDefault&Plugin)!=0);
+        TestEqual(TEXT("Gameplay toggles do not change plugin routing"),ACERetailChat::FilterGroups[0].Mask&Plugin,0ull);
+        TestTrue(TEXT("Legacy gameplay routes retain plugin messages"),(ACERetailChat::UpgradeLegacyPluginFilter(0xFBFFFFFFull)&Plugin)!=0);
+        TestEqual(TEXT("Legacy fellowship-only routes do not gain plugin messages"),ACERetailChat::UpgradeLegacyPluginFilter(1ull<<ACEChatMessageType::Fellowship)&Plugin,0ull);
+        Binder->MainChatTypeFilter=MAX_uint64&~Plugin;
+        Binder->FloatyChatFilters[0]=MAX_uint64;
+        Binder->FloatyChatFilters[1]=MAX_uint64&~Plugin;
+        Binder->SaveFloatyChatSettings();
+        Binder->MainChatTypeFilter=MAX_uint64;Binder->FloatyChatFilters[1]=MAX_uint64;
+        Binder->LoadFloatyChatSettings();
+        TestEqual(TEXT("Main plugin-chat opt-out survives reload"),Binder->MainChatTypeFilter&Plugin,0ull);
+        TestEqual(TEXT("Auxiliary plugin-chat opt-out survives reload"),Binder->FloatyChatFilters[1]&Plugin,0ull);
+        for(int32 W=0;W<5;++W)Binder->ChatDisplayLines[W].Reset();
+        Binder->HandleChatMessage(TEXT("[UCM] Ring matches rule"),TEXT(""),ACEChatMessageType::System,ACEChatMessageType::Plugin);
+        Binder->HandleChatMessage(TEXT("[Companion] Local notice"),TEXT(""),ACEChatMessageType::Broadcast,ACEChatMessageType::Plugin);
+        TestEqual(TEXT("Plugin category hides both UCM and companion notices"),Binder->ChatDisplayLines[0].Num(),0);
+        TestEqual(TEXT("Other window still receives both plugin notices"),Binder->ChatDisplayLines[1].Num(),2);
+        TestEqual(TEXT("Each window independently filters plugins"),Binder->ChatDisplayLines[2].Num(),0);
+        Binder->HandleChatMessage(TEXT("Ordinary system message"),TEXT(""),ACEChatMessageType::System);
+        Binder->HandleChatMessage(TEXT("Server broadcast"),TEXT(""),ACEChatMessageType::Broadcast);
+        TestEqual(TEXT("Plugin opt-out retains ordinary gameplay messages"),Binder->ChatDisplayLines[0].Num(),2);
     }
 
     // Closing a chat window changes visibility, never its matching history.

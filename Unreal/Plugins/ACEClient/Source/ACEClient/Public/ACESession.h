@@ -709,6 +709,7 @@ public:
 
 private:
     friend class FACEUCMProfileStorageTest;
+    friend class FACEUCMRouteSaveEndToEndTest;
 	void AdoptPlayerPhysicsTimestamps(const FACEWorldObject& Object);
 	struct FReceivedFragment
 	{

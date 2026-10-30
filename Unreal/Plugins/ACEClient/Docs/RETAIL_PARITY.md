@@ -8,6 +8,35 @@ button exists, its opcode has a constant, or a focused regression test passes.
 This is the working acceptance record, most recently reviewed on 2026-10-13. The client
 is **not yet a feature-complete retail replacement**.
 
+## Removing packs from chests: 2026-10-29
+
+Retail `gmExternalContainerUI::PostInit` uses `UIElement_ItemList` for both the
+external item grid and its container list. `ItemList_BeginDrag` handles either
+list; `ListenToElementMessage` opens a nested pack on click and examines it on
+right-click, without interpreting repeated container-list clicks as pickup.
+`gmExternalContainerUI::RecvNotice_ServerSaysMoveItem` (`004CBB30`) returns to
+the root when the server moves the open nested pack out of the chest.
+
+Our external pack icons handled opening only; mouse-down never armed their
+inventory drag. They now use the existing authoritative PutItemInContainer
+path, including side-slot insertion, while ordinary clicks still browse the
+pack. Right-click examines it. After confirmed removal the external view returns
+to the chest, with the pack's own contents retained. Touch/VR loot also exposes
+side-slot packs, with separate open and take actions; previously those packs
+were omitted by the ordinary-item query.
+
+Validation: Windows Development Editor build passed. UIScreens, InventoryOrder,
+ClosedContainerLifetime, VR.RigAndMenus and Mobile.TouchAndMenus passed. The
+rendered input fixtures cover repeated clicks, examination, drag cancellation,
+occupied/empty destination pack slots at 1x/1.5x DPI with a desktop offset,
+server-confirmed removal, and retained nested contents. The broader UI suite's
+old hardcoded chat-filter group count was replaced with the current catalog
+size so it still checks the intended windows after the new chat filters.
+Evidence: `TestOutput/ChestPackRemoval/` (builds) and
+`TestOutput/CombatChatParity/ChestPackRemoval{,-final}/` (automation). This is
+checked against local retail source and encoded client/server event fixtures,
+not a live-server retail recording.
+
 ## Retired skill records and DAT stat definitions: 2026-10-26
 
 The reported skill page mixes modern Light Weapons with iconless Axe, Dagger,
@@ -156,6 +185,38 @@ nor resolution of the live hitch is established. Evidence and traces are under
 subcategories on a live recurrence before attributing that report to a specific
 particle operation. Material lifetime/terrain regression results remain valid
 independently of these aggregate measurements.
+
+## Local combat movement and plugin chat: 2026-10-29
+
+Retail `CMotionTable::GetObjectSequence` removes cyclic animation tails while
+retaining unfinished links/actions; `CSequence` applies their position frames
+before reaching the next walk/run cycle. `add_motion` supplies cycle physics,
+while `combine_motion` supplies independent sidestep/turn modifiers. The local
+Unreal controller previously predicted full forward/backward locomotion during
+casting gestures and scarab windups, even though those links were still playing.
+
+Desktop/mobile forward prediction now waits for the active combat link. This
+also covers missile aim/reload entries and their return to Ready. Raw forward
+intent still reaches the server immediately; sidestep/turn remain independent.
+A forward command reapplied during server-control handoff releases the eventual
+held cast tail even if the key was already down. Existing melee/stance-change
+translation locks and airborne movement rules remain in effect.
+
+The Editor build and nine suites passed: WalkingStep, RunSpeed, PvPCombat,
+ArcheryMotion, AttackHeightMotion, UIInteractions, ChatInputAndCommands,
+PublicAPI and LootNotifications. Added coverage runs actual DAT magic/bow/
+crossbow/atlatl/thrown sequences with walk/run and forward/backward input at
+30/144 Hz, checks movement resumes, and replays raw movement packets when casts
+arrive before or after held input. These are local DAT/controller/protocol
+tests; a live-server reproduction has not been recorded. Evidence is under
+`TestOutput/CombatChatParity/`.
+
+Plugin local notices now use a separate chat routing category, retain history,
+and preserve their existing colors. Saved routes migrate once from the previous
+System/Broadcast categories. Tests cover per-window opt-out persistence, normal
+server messages, and Lua notices reaching the routed HUD. UCM exposes its existing
+item-match switch on Configuration as well as Loot, independently of confirmed
+pickup announcements, with regression coverage for discarding queued matches.
 
 ## UCM custom-profile memory and hunt history: 2026-10-25
 

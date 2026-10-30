@@ -212,6 +212,18 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
     H->Stop(P->Id);H->Start(P->Id);TestEqual(TEXT("Automation state restored"),P->SavedState->GetNumberField(TEXT("kills")),12.);
     H->ApplyPublicOutput(*P,UI,Error);
     auto Request=[&](const TCHAR* Text){P->NextService=0;return H->ApplyPublicOutput(*P,ParseAPI(Text),Error);};
+    {
+        auto* Chat=NewObject<UACEUIGameplayBinder>(GI);Chat->Client=C;
+        Chat->Canvas=NewObject<UACEUICanvasWidget>(GI);Chat->Canvas->WidgetTree=NewObject<UWidgetTree>(Chat->Canvas);
+        Chat->ChatLog=NewObject<UScrollBox>(Chat->Canvas);Chat->MainChatTypeFilter=~uint64(0);Chat->GlobalChatTypeFilter=~uint64(0);
+        C->OnRoutedChatMessage.AddDynamic(Chat,&UACEUIGameplayBinder::HandleChatMessage);
+        const int32 Before=C->ChatHistory.Num();
+        TestTrue(TEXT("Local plugin notice accepted"),Request(TEXT(R"({"requests":[{"id":"notice","service":"notice","operation":"show","text":"Plugin routing regression"}]})")));
+        TestEqual(TEXT("Plugin notice reaches routed desktop/mobile/VR chat"),Chat->ChatLog->GetChildrenCount(),1);
+        TestEqual(TEXT("Plugin notice is retained for chat rebind"),C->ChatHistory.Num(),Before+1);
+        if(C->ChatHistory.Num()>Before)TestEqual(TEXT("Plugin notice retains its routing category"),C->ChatHistory.Last().FilterType,ACEChatMessageType::Plugin);
+        C->OnRoutedChatMessage.RemoveDynamic(Chat,&UACEUIGameplayBinder::HandleChatMessage);
+    }
     TestTrue(TEXT("Save service accepted"),Request(TEXT(R"({"requests":[{"id":"save","service":"profiles","operation":"save","group":"Routes","name":"Loop","data":{"route":[{"cell":2103705613,"x":34,"y":104,"z":12}]}}]})")));
     TestTrue(TEXT("Profile write confirmed"),P->PluginEvents.Last()->AsObject()->GetBoolField(TEXT("ok")));
     Request(TEXT(R"({"requests":[{"id":"read","service":"profiles","operation":"read","group":"Routes","name":"Loop"}]})"));

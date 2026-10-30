@@ -38,14 +38,14 @@
 
 namespace
 {
-const FLinearColor Gold(.78f,.60f,.27f),Ink(.018f,.025f,.037f),TextColor(.96f,.93f,.85f);
+const FLinearColor Gold(.78f,.60f,.27f),MobilePanelInk(.018f,.025f,.037f),TextColor(.96f,.93f,.85f);
 constexpr int32 WheelCount=8;
 TSharedRef<STextBlock> Text(const FString& Value,int32 Size=22)
 {return SNew(STextBlock).Text(FText::FromString(Value)).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size)).ColorAndOpacity(TextColor).AutoWrapText(true);}
 TSharedRef<SWidget> Button(const FString& Label,TFunction<void()> Action,bool Enabled=true,int32 Font=22)
 {
     static const FButtonStyle Style=FButtonStyle()
-        .SetNormal(FSlateRoundedBoxBrush(Ink,8,Gold,2))
+        .SetNormal(FSlateRoundedBoxBrush(MobilePanelInk,8,Gold,2))
         .SetHovered(FSlateRoundedBoxBrush(FLinearColor(.12f,.09f,.04f),8,Gold,2))
         .SetPressed(FSlateRoundedBoxBrush(FLinearColor(.08f,.18f,.18f),8,TextColor,2));
     return SNew(SBox).MinDesiredHeight(56)[SNew(SButton).Tag(FName(*Label)).ButtonStyle(&Style).IsEnabled(Enabled)
@@ -535,7 +535,7 @@ void UACEMobileWidget::BuildPanel()
     }
     PanelHost->SetContent(SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(0,0,0,.85f)).Padding(6)
         [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[SNew(SBox).WidthOverride(948).HeightOverride(528)
-            [SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(Ink).Padding(6)[Content]]]]);
+            [SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(MobilePanelInk).Padding(6)[Content]]]]);
     PanelHost->SetVisibility(EVisibility::Visible);
 }
 

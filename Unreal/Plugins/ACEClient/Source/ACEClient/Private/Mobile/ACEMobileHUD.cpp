@@ -20,12 +20,12 @@
 namespace
 {
 constexpr float PanelTop=100;
-const FLinearColor Ink(.018f,.029f,.043f,.9f),Edge(.45f,.56f,.60f,.65f);
+const FLinearColor MobileHUDInk(.018f,.029f,.043f,.9f),MobileHUDEdge(.45f,.56f,.60f,.65f);
 TSharedRef<SWidget> HUDButton(const FString& Label,FName Tag,TFunction<void()> Action)
 {
-    static const FButtonStyle Style=FButtonStyle().SetNormal(FSlateRoundedBoxBrush(Ink,8,Edge,1))
-        .SetHovered(FSlateRoundedBoxBrush(FLinearColor(.04f,.17f,.20f),8,Edge,1))
-        .SetPressed(FSlateRoundedBoxBrush(FLinearColor(.04f,.24f,.25f),8,Edge,1));
+    static const FButtonStyle Style=FButtonStyle().SetNormal(FSlateRoundedBoxBrush(MobileHUDInk,8,MobileHUDEdge,1))
+        .SetHovered(FSlateRoundedBoxBrush(FLinearColor(.04f,.17f,.20f),8,MobileHUDEdge,1))
+        .SetPressed(FSlateRoundedBoxBrush(FLinearColor(.04f,.24f,.25f),8,MobileHUDEdge,1));
     return SNew(SBox).HeightOverride(36)[SNew(SButton).Tag(Tag).ButtonStyle(&Style).IsFocusable(false)
         .TouchMethod(EButtonTouchMethod::PreciseTap).ContentPadding(6).OnClicked_Lambda([Action](){Action();return FReply::Handled();})
         [SNew(STextBlock).Text(FText::FromString(Label)).ColorAndOpacity(FLinearColor::White).Font(FCoreStyle::GetDefaultFontStyle("Bold",14)).OverflowPolicy(ETextOverflowPolicy::Ellipsis)]];
@@ -129,7 +129,7 @@ void UACEMobileWidget::RefreshHUDPanels()
     auto Add=[&](float Width,TSharedRef<SWidget> Content)
     {
         Panels->AddSlot().Padding(0,0,8,0)[SNew(SBox).WidthOverride(Width).HeightOverride(PanelHeight-12)
-            [SNew(SHUDPanel)[SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(Ink).Padding(4)[Content]]]];
+            [SNew(SHUDPanel)[SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(MobileHUDInk).Padding(4)[Content]]]];
     };
     if(Settings->bPinnedChat)Add(320,MakePinnedChat());
     for(const FString& Id:Ids)

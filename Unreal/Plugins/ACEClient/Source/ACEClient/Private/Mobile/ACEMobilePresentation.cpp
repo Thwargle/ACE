@@ -22,7 +22,7 @@
 
 namespace
 {
-const FLinearColor Ink(.018f,.029f,.043f),White(.95f,.96f,.96f),Muted(.65f,.74f,.79f),Accent(.26f,.83f,.76f),Edge(.45f,.56f,.60f,.65f);
+const FLinearColor MobileControlInk(.018f,.029f,.043f),White(.95f,.96f,.96f),Muted(.65f,.74f,.79f),Accent(.26f,.83f,.76f),MobileControlEdge(.45f,.56f,.60f,.65f);
 uint32 ModeIcon(int32 Mode)
 {return Mode==2?0x06004CEE:Mode==4?0x06004CF0:Mode==8?0x06004CF2:0x06004CEC;}
 // End-of-retail classic_gameplay / RootGameplay_FloatyVitals_Field:
@@ -102,7 +102,7 @@ void UACEMobileWidget::RefreshPresentation()
 TSharedRef<SWidget> UACEMobileWidget::MenuTile(FName Page,TFunction<void()> Click)
 {
     static const FButtonStyle Style=FButtonStyle()
-        .SetNormal(FSlateRoundedBoxBrush(Ink,12,Edge,1))
+        .SetNormal(FSlateRoundedBoxBrush(MobileControlInk,12,MobileControlEdge,1))
         .SetHovered(FSlateRoundedBoxBrush(FLinearColor(.035f,.10f,.13f),12,Accent,1))
         .SetPressed(FSlateRoundedBoxBrush(FLinearColor(.06f,.20f,.22f),12,Accent,2));
     TSharedPtr<FSlateBrush> Brush=MakeShared<FSlateBrush>();Brush->ImageSize=FVector2D(32,32);
@@ -123,7 +123,7 @@ int32 UACEMobileWidget::Paint(const FGeometry& G,FSlateWindowElementList& Out,in
     if(!Client || Client->GetSessionState()!=EACESessionState::InWorld || !Settings)return Layer;
     const float Scale=G.GetLocalSize().Y/ViewSize.Y;
     auto Geo=[&](FVector2D P,FVector2D S){return G.ToPaintGeometry(FVector2f(S*Scale),FSlateLayoutTransform(FVector2f(P*Scale)));};
-    auto Round=[&](FVector2D P,FVector2D S,FLinearColor Fill,float Radius,FLinearColor Border=Edge,float Thickness=1.f)
+    auto Round=[&](FVector2D P,FVector2D S,FLinearColor Fill,float Radius,FLinearColor Border=MobileControlEdge,float Thickness=1.f)
     {FSlateRoundedBoxBrush Brush(Fill,Radius*Scale,Border,Thickness*Scale);FSlateDrawElement::MakeBox(Out,Layer,Geo(P,S),&Brush,ESlateDrawEffect::None,Fill);};
     auto ImageInBox=[&](FVector2D P,FVector2D Size,UTexture2D* Texture,float Alpha=1.f)
     {
@@ -153,7 +153,7 @@ int32 UACEMobileWidget::Paint(const FGeometry& G,FSlateWindowElementList& Out,in
     auto Lines=[&](TArray<FVector2D> Points,FLinearColor Color,float Width=2.f)
     {for(auto& P:Points)P*=Scale;FSlateDrawElement::MakeLines(Out,Layer+2,G.ToPaintGeometry(),Points,ESlateDrawEffect::None,Color,true,Width*Scale);};
     auto Key=[&](FVector2D P,FVector2D S,const FString& Label,bool Active=false)
-    {Round(P,S,Active?FLinearColor(.04f,.19f,.20f,.95f):FLinearColor(.018f,.029f,.043f,.92f),12,Active?Accent:Edge);Text(P+FVector2D(6,0),S-FVector2D(12,0),Label);};
+    {Round(P,S,Active?FLinearColor(.04f,.19f,.20f,.95f):FLinearColor(.018f,.029f,.043f,.92f),12,Active?Accent:MobileControlEdge);Text(P+FVector2D(6,0),S-FVector2D(12,0),Label);};
     auto Visual=[&](FName Name,FVector2D P,FVector2D Size)
     {
         if(const auto* V=ActionVisuals.Find(Name))
@@ -205,7 +205,7 @@ int32 UACEMobileWidget::Paint(const FGeometry& G,FSlateWindowElementList& Out,in
         for(int32 I=0;I<4;++I)
         {
             const FVector2D P(ViewSize.X-432+108*I,12);const auto Content=ACEMobile::ButtonContent({100,64});
-            Round(P,{100,64},FLinearColor(.018f,.029f,.043f,.85f),Content.Radius,Edge,Content.Border);
+            Round(P,{100,64},FLinearColor(.018f,.029f,.043f,.85f),Content.Radius,MobileControlEdge,Content.Border);
             if(Header[I]=="Plugins")for(int32 X=0;X<2;++X)for(int32 Y=0;Y<2;++Y)Round(P+FVector2D(37+15*X,7+15*Y),{11,11},FLinearColor(.15f,.42f,.42f),3,Accent);
             else if(Header[I]=="Menu")for(int32 Y=0;Y<3;++Y)Lines({P+FVector2D(36,9+10*Y),P+FVector2D(64,9+10*Y)},White,2);
             else Visual(Header[I],P+FVector2D(Content.Icon.Left,Content.Icon.Top),Content.Icon.GetSize());
@@ -218,11 +218,11 @@ int32 UACEMobileWidget::Paint(const FGeometry& G,FSlateWindowElementList& Out,in
         for(int32 I=0;I<8;++I)Key({ViewSize.X/2-320+I*80,84},{76,54},FString::FromInt(I+1),Client->GetActiveSpellBar()==I);
         const int32 Count=FMath::Clamp(WheelSpells.Num()-WheelPage*8,0,8);
         const FVector2D Center(ViewSize.X/2,FMath::Max(300.,ViewSize.Y*.5));
-        Round(Center-FVector2D(157,157),{314,314},FLinearColor(.025f,.055f,.075f,.7f),157,Edge);
+        Round(Center-FVector2D(157,157),{314,314},FLinearColor(.025f,.055f,.075f,.7f),157,MobileControlEdge);
         for(int32 I=0;I<Count;++I)
         {
             const float Angle=2*PI*I/FMath::Max(1,Count);const FVector2D P=Center+FVector2D(FMath::Sin(Angle),-FMath::Cos(Angle))*118-FVector2D(32,32);
-            const int32 Index=WheelPage*8+I;Round(P,{64,64},Ink,32,WheelSpells[Index]==SelectedSpell?Accent:Edge,2);
+            const int32 Index=WheelPage*8+I;Round(P,{64,64},MobileControlInk,32,WheelSpells[Index]==SelectedSpell?Accent:MobileControlEdge,2);
             if(WheelIcons.IsValidIndex(Index))Image(P+FVector2D(10,10),44,WheelIcons[Index]);
         }
         Text(Center-FVector2D(80,28),{160,28},Count?TEXT("Select spell"):TEXT("Empty tab"),18);
@@ -235,7 +235,7 @@ int32 UACEMobileWidget::Paint(const FGeometry& G,FSlateWindowElementList& Out,in
         const auto& C=Layout[I];if(!C.bVisible)continue;
         const FVector2D Center=C.Position*ViewSize,P=Center-FVector2D(C.Size/2,C.Size/2);
         const bool Held=Algo::AnyOf(Fingers,[I](const auto& F){return F.Value.Control==I;});
-        const FLinearColor Border=bEditing && I==SelectedControl?White:Held?Accent:Edge;
+        const FLinearColor Border=bEditing && I==SelectedControl?White:Held?Accent:MobileControlEdge;
         const FLinearColor Fill=Held?FLinearColor(.04f,.17f,.20f,.95f):FLinearColor(.018f,.029f,.043f,Settings->ControlOpacity);
         if(C.Id=="Turn")
         {

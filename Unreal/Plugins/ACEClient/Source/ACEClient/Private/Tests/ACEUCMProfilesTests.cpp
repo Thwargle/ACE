@@ -20,12 +20,19 @@
 #include "Widgets/Input/SSlider.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Input/SComboButton.h"
+#include "Widgets/SWindow.h"
+#include "Widgets/SVirtualWindow.h"
+#include "Framework/Application/SlateApplication.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMProfileStorageTest, "ACE.Plugins.LinkedProfiles",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEUCMProfileStorageTest::RunTest(const FString&)
 {
     using namespace ACEUCMProfiles;
+    TestTrue(TEXT("Profile names support spaces"),SafeName(TEXT("Academy Loop")));
+    for(const FString Name:{TEXT("../Escape"),TEXT("sub/route"),TEXT("sub\\route"),TEXT(""),TEXT(" Leading"),TEXT("Trailing "),TEXT("CON"),TEXT("nul"),TEXT("COM1"),TEXT("LPT9")})
+        TestFalse(*FString::Printf(TEXT("Unsafe profile filename rejected: %s"),*Name),SafeName(Name));
     const FString Root = FPaths::ProjectSavedDir()/TEXT("Automation/UCMProfiles")/FGuid::NewGuid().ToString(EGuidFormats::Digits);
     IFileManager::Get().MakeDirectory(*(Root/TEXT("Profiles/ucm")), true);
     ON_SCOPE_EXIT { IFileManager::Get().DeleteDirectory(*Root, false, true); };
@@ -283,6 +290,141 @@ bool FACEUCMProfilePanelTest::RunTest(const FString&)
             FFileHelper::SaveArrayToFile(PNG,*(Folder/FString::Printf(TEXT("%s-%d.png"),Page,Width)));Target->ReleaseResource();
         }
     }
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMRouteSaveEndToEndTest, "ACE.Plugins.RouteSaveEndToEnd",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACEUCMRouteSaveEndToEndTest::RunTest(const FString&)
+{
+    if(!FApp::CanEverRender()){AddError(TEXT("Route UI verification requires rendering"));return false;}
+    auto* GI=NewObject<UGameInstance>();GI->Init();ON_SCOPE_EXIT{GI->Shutdown();};
+    auto* Host=GI->GetSubsystem<UACEPluginSubsystem>();
+    const FString Root=FPaths::ProjectSavedDir()/TEXT("Automation/RouteSave")/FGuid::NewGuid().ToString(EGuidFormats::Digits);
+    Host->StorageRoot=Root;Host->Settings=MakeShared<FJsonObject>();
+    if(!TestTrue(TEXT("Initialize clean route storage"),Host->InitializeUCMSelection()))return false;
+    auto Plugin=Host->Find(TEXT("ucm"));auto Session=GI->GetSubsystem<UACEClientSubsystem>()->GetSession();
+    Session->State=EACESessionState::InWorld;
+    auto& Slate=FSlateApplication::Get();const auto OldFocus=Slate.GetUserFocusedWidget(0);
+    auto Window=SNew(SVirtualWindow).Size(FVector2D(900,1000));Window->SetIsFocusable(true);Slate.RegisterVirtualWindow(Window);
+    ON_SCOPE_EXIT{Slate.DismissAllMenus();Slate.UnregisterVirtualWindow(Window);if(OldFocus)Slate.SetUserFocus(0,OldFocus);};
+    FWidgetRenderer Renderer;TSharedPtr<SWidget> Panel;
+    TFunction<TSharedPtr<SWidget>(const TSharedRef<SWidget>&,FName,bool)> Find;
+    Find=[&](const TSharedRef<SWidget>& W,FName Name,bool Type)->TSharedPtr<SWidget>
+    {
+        if((Type?W->GetType():W->GetTag())==Name)return W;
+        auto* Children=W->GetChildren();for(int32 I=0;I<Children->Num();++I)
+            if(auto Found=Find(Children->GetChildAt(I),Name,Type))return Found;
+        return nullptr;
+    };
+    auto PaintWindow=[&](const TSharedRef<SWindow>& W,const FVector2D& Size)
+    {
+        auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,false);
+        for(int32 I=0;I<3;++I){++GFrameCounter;Renderer.DrawWindow(Target,W->GetHittestGrid(),W,1.f,Size,.016f);FlushRenderingCommands();}
+        Target->ReleaseResource();
+    };
+    auto Paint=[&](){PaintWindow(Window,FVector2D(900,1000));};
+    auto Page=[&](const TCHAR* Name){Slate.DismissAllMenus();Panel=Host->MakeUCMPanel(Name);Window->SetContent(Panel.ToSharedRef());Paint();};
+    auto Click=[&](const TSharedPtr<SWidget>& Widget)
+    {
+        if(!TestTrue(TEXT("Route control exists and is enabled"),Widget && Widget->IsEnabled()))return false;
+        const auto& G=Widget->GetCachedGeometry();const auto P=G.LocalToAbsolute(G.GetLocalSize()*.5);
+        const auto Owner=Slate.FindWidgetWindow(Widget.ToSharedRef());
+        if(!TestTrue(TEXT("Route control belongs to a window"),Owner.IsValid()))return false;
+        const auto Path=Slate.LocateWindowUnderMouse(P,{Owner.ToSharedRef()},false,0);
+        if(!TestTrue(*FString::Printf(TEXT("Rendered route control %s has a hit-test path at %s"),*Widget->GetTag().ToString(),*P.ToString()),Path.IsValid()))return false;
+        Slate.RoutePointerMoveEvent(Path,FPointerEvent(0,P,P,{},EKeys::Invalid,0,FModifierKeysState()),false);
+        Slate.RoutePointerDownEvent(Path,FPointerEvent(0,P,P,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
+        Slate.RoutePointerUpEvent(Path,FPointerEvent(0,P,P,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
+        Paint();return true;
+    };
+    auto Button=[&](const TCHAR* Caption){return Click(Find(Panel.ToSharedRef(),FName(*(FString(TEXT("UCMChoice."))+Caption)),false));};
+    auto Key=[&](FKey K){Slate.ProcessKeyDownEvent(FKeyEvent(K,FModifierKeysState(),0,false,0,0));Slate.ProcessKeyUpEvent(FKeyEvent(K,FModifierKeysState(),0,false,0,0));};
+    auto Create=[&](const FString& Name,bool Enter,bool Success=true)
+    {
+        const FString Previous=Host->UCMSectionName(TEXT("Routes"));
+        if(!Button(TEXT("+ New route")))return false;
+        auto Input=Find(Panel.ToSharedRef(),TEXT("UCMNewProfileName"),false);
+        if(!TestTrue(TEXT("New route name can receive typing"),Input.IsValid()))return false;
+        Slate.SetUserFocus(0,Input);
+        // A failed attempt keeps the draft, just as the live editor does.
+        Slate.ProcessKeyDownEvent(FKeyEvent(EKeys::A,FModifierKeysState(false,false,true,false,false,false,false,false,false),0,false,0,0));
+        Slate.ProcessKeyUpEvent(FKeyEvent(EKeys::A,FModifierKeysState(false,false,true,false,false,false,false,false,false),0,false,0,0));
+        for(TCHAR C:Name)Slate.ProcessKeyCharEvent(FCharacterEvent(C,FModifierKeysState(),0,false));
+        TestEqual(TEXT("Typed name reaches the route field"),StaticCastSharedPtr<SEditableTextBox>(Input)->GetText().ToString(),Name);
+        if(Enter){Key(EKeys::Enter);Paint();}else if(!Button(TEXT("Create and select route")))return false;
+        if(!Success)
+        {
+            TestEqual(TEXT("Failed creation preserves the active route"),Host->UCMSectionName(TEXT("Routes")),Previous);
+            const auto Error=Find(Panel.ToSharedRef(),TEXT("UCMProfileCreateError"),false);
+            TestTrue(TEXT("Creation error is shown beside the name field"),Error.IsValid());
+            if(Error)TestEqual(TEXT("Inline message explains creation failure"),StaticCastSharedPtr<STextBlock>(Error)->GetText().ToString(),Host->Notice);
+            return Error.IsValid();
+        }
+        TestEqual(TEXT("Create selects the saved route"),Host->UCMSectionName(TEXT("Routes")),Name);
+        TestTrue(TEXT("Create reports saved file"),Host->Notice.Contains(TEXT("Created and selected Routes: ")+Name));
+        return Host->UCMSectionName(TEXT("Routes"))==Name;
+    };
+    auto ReadRoute=[&](const FString& Name)
+    {
+        FString Text;TSharedPtr<FJsonObject> Data;
+        FFileHelper::LoadFileToString(Text,*(Root/TEXT("Profiles/Routes")/(Name+TEXT(".json"))));
+        FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text),Data);return Data;
+    };
+    auto Choose=[&](const FString& Name)
+    {
+        auto Choice=Find(Panel.ToSharedRef(),TEXT("UCMProfile.Routes"),false);
+        if(!TestTrue(TEXT("Route dropdown is present"),Choice.IsValid()))return false;
+        auto Combo=StaticCastSharedPtr<SComboButton>(Choice);
+        auto Open=Find(Choice.ToSharedRef(),TEXT("SButton"),true);
+        if(!Click(Open))return false;
+        if(!TestTrue(TEXT("Route dropdown opens"),Combo->IsOpen()))return false;
+        auto MenuWindow=Combo->GetMenuWindow();
+        if(!TestTrue(TEXT("Route dropdown has a visible popup"),MenuWindow.IsValid()))return false;
+        PaintWindow(MenuWindow.ToSharedRef(),MenuWindow->GetClientSizeInScreen());
+        auto Entry=Find(MenuWindow.ToSharedRef(),FName(*(TEXT("UCMMenu.")+Name)),false);
+        if(!TestTrue(TEXT("Saved route appears in the actual dropdown"),Entry.IsValid()))return false;
+        if(!Click(Entry))return false;
+        TestEqual(TEXT("Dropdown activates saved route"),Host->UCMSectionName(TEXT("Routes")),Name);return true;
+    };
+    Page(TEXT("Route"));
+    // Exercise ordinary UI typing, not SetText/SaveProfile shortcuts. Both click
+    // and Enter must save names users naturally enter and populate every chooser.
+    for(const FString Name:{TEXT("Academy_Loop"),TEXT("Academy Loop")})
+    {
+        if(!Create(Name,Name.Contains(TEXT(" "))))return false;
+        auto Disk=ReadRoute(Name);if(!TestTrue(TEXT("Empty route exists before recording"),Disk.IsValid()))return false;
+        TestEqual(TEXT("New route starts empty"),Disk->GetArrayField(TEXT("route")).Num(),0);
+        for(int32 I=0;I<3;++I)
+        {
+            FACEPosition Pos;Pos.CellId=0x7D640001;Pos.Location=FVector(10+I,20+I,3);Session->SetLocalPosition(Pos);
+            if(!Button(TEXT("+ Add waypoint at my position")))return false;
+        }
+        Disk=ReadRoute(Name);if(!TestTrue(TEXT("Recorded route is valid on disk"),Disk.IsValid()))return false;
+        TestEqual(TEXT("Every recorded point saved"),Disk->GetArrayField(TEXT("route")).Num(),3);
+        TestEqual(TEXT("Recorded coordinates saved"),Disk->GetArrayField(TEXT("route"))[2]->AsObject()->GetNumberField(TEXT("x")),12.);
+        for(const TCHAR* Surface:{TEXT("Route"),TEXT("Overview")})
+        {Page(Surface);if(!Choose(TEXT("Default"))||!Choose(Name))return false;TestEqual(TEXT("Dropdown reloads all saved points"),Plugin->Profile->GetArrayField(TEXT("route")).Num(),3);}
+        // Discard runtime profile data and reload the persisted selection, then
+        // rebuild the panels: this catches memory-only entries and stale menus.
+        Plugin->Profile.Reset();Plugin->ProfileLinks.Reset();Plugin->ProfileBaseline.Reset();
+        if(!TestTrue(TEXT("Saved selection reloads from disk"),Host->InitializeUCMSelection()))return false;
+        TestEqual(TEXT("Reload retains selected route"),Host->UCMSectionName(TEXT("Routes")),Name);
+        for(const TCHAR* Surface:{TEXT("Overview"),TEXT("Route")}){Page(Surface);if(!Choose(Name))return false;}
+    }
+    Page(TEXT("Route"));
+    if(!Create(TEXT("Academy Loop"),false,false))return false;
+    TestTrue(TEXT("Duplicate explains how to use the existing route"),Host->Notice.Contains(TEXT("already exists")));
+    TestEqual(TEXT("Duplicate leaves recorded route intact"),ReadRoute(TEXT("Academy Loop"))->GetArrayField(TEXT("route")).Num(),3);
+    if(!Create(TEXT("../Escape"),true,false))return false;
+    TestFalse(TEXT("Invalid filename never enters the chooser"),Host->UCMSectionProfiles(TEXT("Routes")).Contains(TEXT("../Escape")));
+    // A directory occupying the requested file makes an actual disk write fail,
+    // without altering permissions or touching the player's saved profiles.
+    IFileManager::Get().MakeDirectory(*(Root/TEXT("Profiles/Routes/Blocked.json")),true);
+    if(!Create(TEXT("Blocked"),false,false))return false;
+    TestTrue(TEXT("Write failure identifies the destination"),Host->Notice.Contains(TEXT("Blocked.json")));
+    TestFalse(TEXT("Failed write is absent from dropdowns"),Host->UCMSectionProfiles(TEXT("Routes")).Contains(TEXT("Blocked")));
+    if(!Button(TEXT("Cancel")))return false;
+    if(!Choose(TEXT("Academy_Loop"))||!Choose(TEXT("Academy Loop")))return false;
     return true;
 }
 #endif

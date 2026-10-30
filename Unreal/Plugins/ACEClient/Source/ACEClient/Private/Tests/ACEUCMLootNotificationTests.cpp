@@ -39,7 +39,10 @@ bool FACEUCMLootNotificationTest::RunTest(const FString&)
     FACEAppraisalInfo Info;Info.ObjectGuid=Ring.Guid;Info.bSuccess=true;Info.IntProperties.Add(105,8);Info.IntProperties.Add(170,1);
     Host->ObserveAppraisal(Info);Host->TickLootNotifications();
     if(TestEqual(TEXT("Assessment prints one match while UCM is stopped"),Client->ChatHistory.Num(),1))
+    {
         TestTrue(TEXT("Message includes item, first rule and action"),Client->ChatHistory.Last().Text.Contains(TEXT("Ring matches rule \"Fine rings\" (salvage)")));
+        TestEqual(TEXT("Item ID matches use the plugin chat filter"),Client->ChatHistory.Last().FilterType,ACEChatMessageType::Plugin);
+    }
     const auto Serial=Host->LootMatchSerial;
     for(int32 I=0;I<20;++I)Host->TickLootNotifications();
     TestEqual(TEXT("Idle frames do not rebuild a snapshot or rerun rules"),Host->LootMatchSerial,Serial);
@@ -50,8 +53,10 @@ bool FACEUCMLootNotificationTest::RunTest(const FString&)
     Ring.Guid=702;Session.WorldObjects.Add(Ring.Guid,Ring);Info.ObjectGuid=Ring.Guid;
     Host->ObserveAppraisal(Info);Host->TickLootNotifications();
     TestEqual(TEXT("Successfully assessing an unselected item also reports its rule"),Client->ChatHistory.Num(),3);
+    Host->QueueLootMatch(Ring.Guid);
     P->Profile->SetBoolField(TEXT("loot_notify_match"),false);Host->TickLootNotifications();
     TestFalse(TEXT("Disabling notifications releases their VM"),Host->LootMatchVM.IsValid());
+    TestTrue(TEXT("Disabling notifications discards already queued matches"),Host->LootMatchQueue.IsEmpty());
     Host->ObserveAppraisal(Info);Host->TickLootNotifications();
     TestEqual(TEXT("Disabled selected/assessed notifications stay silent"),Client->ChatHistory.Num(),3);
     P->Profile=Parse(TEXT(R"({"loot_rules":[{"label":"Ignore rings","action":"skip","name":"Ring"},{"label":"Later keep","action":"keep"}]})"));
@@ -95,8 +100,10 @@ bool FACEUCMLootNotificationTest::RunTest(const FString&)
         {
             TestTrue(TEXT("Receipt includes quantity and matched rule"),I->GetStringField(TEXT("loot_notification")).Contains(TEXT("2 x Ring (rule \"Jewelry\", keep)")));
             auto Notice=MakeShared<FJsonObject>();Notice->SetStringField(TEXT("loot_notification"),I->GetStringField(TEXT("loot_notification")));
-            P->Profile=ProfileData;const int32 Before=Client->ChatHistory.Num();Host->Execute(*P,Notice);
+            P->Profile=ProfileData;P->Profile->SetBoolField(TEXT("loot_notify_match"),false);
+            const int32 Before=Client->ChatHistory.Num();Host->Execute(*P,Notice);
             TestEqual(TEXT("Policy receipt is printed in local chat"),Client->ChatHistory.Num(),Before+1);
+            TestEqual(TEXT("Pickup receipts also use the plugin chat filter"),Client->ChatHistory.Last().FilterType,ACEChatMessageType::Plugin);
             P->Profile->SetBoolField(TEXT("loot_notify_pickup"),false);Host->Execute(*P,Notice);
             TestEqual(TEXT("Native dispatcher also honors pickup toggle"),Client->ChatHistory.Num(),Before+1);
         }

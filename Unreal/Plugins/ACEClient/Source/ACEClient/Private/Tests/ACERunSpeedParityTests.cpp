@@ -212,6 +212,30 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
    TestTrue(TEXT("Pending cast does not repeatedly send a release"),Session->CachedC2SPackets.IsEmpty());
    Session->bUseBusy=false;
   }
+  // Forward input is still reported immediately even though the unfinished
+  // cast blocks forward prediction. Include a cast arriving after held input.
+  for(int32 Rate:{30,144}) for(bool Late:{false,true})
+  {
+   App->ClearActionMotion();App->ResetWalkingMotion();
+   PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;
+   Session->SetLocalPosition(Pose);Pawn->SetActorLocationAndRotation(StartFeet+FVector(0,0,88),Pose.ToUnrealQuat());
+   FACEObjectMotionState Cast;Cast.CurrentStyle=ACEMotion::StanceMagic;Cast.ActionCommand=0x40000034;
+   if(Late){Key(EKeys::W,true);PC->PlayerTick(1.f/Rate);}
+   ++Session->ServerControlSeq;PC->HandleMotionUpdate(Self.Guid,Cast);
+   if(!Late)Key(EKeys::W,true);
+   Session->CachedC2SPackets.Reset();const FVector Before=Pawn->GetActorLocation();
+   PC->PlayerTick(1.f/Rate);
+   if(TestEqual(TEXT("Casting forward handoff sends one movement packet"),Session->CachedC2SPackets.Num(),1))
+   {
+    FACEBinaryReader Wire(Session->CachedC2SPackets.CreateConstIterator()->Value.Payload);Wire.Skip(24);
+    TestEqual(TEXT("Casting handoff uses MoveToState"),Wire.ReadUInt32(),ACEGameAction::MoveToState);
+    TestTrue(TEXT("Raw forward intent is preserved on the wire"),(Wire.ReadUInt32()&ACERawMotionFlags::ForwardCommand)!=0);
+   }
+   for(int32 I=0;I<4;++I)PC->PlayerTick(1.f/Rate);
+   TestTrue(TEXT("Raw forward input never predicts full running during the cast"),FVector::Dist2D(Before,Pawn->GetActorLocation())<.01);
+   TestFalse(TEXT("Reapplied held forward does not latch the cast's cyclic tail"),App->bHoldActionFinalAfterFinish);
+   Key(EKeys::W,false);PC->PlayerTick(1.f/Rate);App->ClearActionMotion();
+  }
   // Strafe alone must not discard locally controlled emotes. Reclaiming
   // movement control must also preserve unfinished authored actions.
   PC->bServerControlledMotion=false;App->SetHeldActionMotion(0x43000145u,ACEMotion::StanceNonCombat);

@@ -58,7 +58,7 @@ namespace ACEUCMPanelPrivate
     {const bool Selected=Caption.EndsWith(TEXT(" •"))||Caption.EndsWith(TEXT(" *"));
      return ChoiceButton(Selected?Caption.LeftChop(2):Caption,[Selected](){return Selected;},MoveTemp(Action));}
     TSharedRef<SWidget> MenuButton(const FString& Caption,TFunction<void()> Action)
-    {return SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&FACEPluginStyle::Current()->MenuItem).IsFocusable(false)
+    {return SNew(SACEPluginButton).Tag(FName(*(TEXT("UCMMenu.")+Caption))).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&FACEPluginStyle::Current()->MenuItem).IsFocusable(false)
 
         .OnClicked_Lambda([Action](){Action();return FReply::Handled();})[Text(Caption,15)];}
     TSharedRef<SWidget> LiveButton(TFunction<FString()> Caption,TFunction<void()> Action)
@@ -160,20 +160,22 @@ namespace ACEUCMPanelPrivate
         TSharedRef<SWidget> Tile(TSharedRef<SWidget> W)
         {return SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->SectionFrame).Padding(8)[W];}
         TMap<FString,FString> SectionNewNames;
-        FString CreatingSection,DeletingSection,DeletingName,MonsterSearch,MonsterFilter;
+        FString CreatingSection,CreationError,DeletingSection,DeletingName,MonsterSearch,MonsterFilter;
         int32 RoutePage=0;
         static constexpr int32 RoutePageSize=8;
         void ResetProfileEditors(){LootDraft.Reset();ConditionDraft.Reset();StateIndex=0;ExpandedMonster=INDEX_NONE;RoutePage=0;}
         void CreateSection(const FString& Section)
         {
             if(!CanLeaveLootRule())return;
+            CreationError.Empty();
             if(Host->NewUCMSection(Section,SectionNewNames.FindRef(Section).TrimStartAndEnd()))
             {ResetProfileEditors();CreatingSection.Empty();SectionNewNames.Remove(Section);BodyScroll->ScrollToStart();}
+            else CreationError=Host->Notice;
             Rebuild();
         }
         TSharedRef<SWidget> ProfileChoice(const FString& Section)
         {
-            return SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo)
+            return SNew(SACEPluginComboButton).Tag(FName(*(TEXT("UCMProfile.")+Section))).ComboButtonStyle(&FACEPluginStyle::Current()->Combo)
                 .ButtonContent()[SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",16)).ColorAndOpacity(Accent)
                     .OverflowPolicy(ETextOverflowPolicy::Ellipsis).ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([this,Section](){return FText::FromString(Host->UCMSectionName(Section));})))
                     .Text_Lambda([this,Section](){const FString Name=Host->UCMSectionName(Section);
@@ -195,7 +197,7 @@ namespace ACEUCMPanelPrivate
             Row->AddSlot().FillWidth(1)[ProfileChoice(Section)];
             if(Manage)
             {
-                Row->AddSlot().AutoWidth().Padding(6,0)[Button(Section==TEXT("Routes")?TEXT("+ New route"):TEXT("+ New"),[this,Section](){if(!CanLeaveLootRule())return;CreatingSection=Section;DeletingSection.Empty();Rebuild();})];
+                Row->AddSlot().AutoWidth().Padding(6,0)[Button(Section==TEXT("Routes")?TEXT("+ New route"):TEXT("+ New"),[this,Section](){if(!CanLeaveLootRule())return;CreatingSection=Section;CreationError.Empty();DeletingSection.Empty();Rebuild();})];
                 const FString Name=Host->UCMSectionName(Section);
                 Row->AddSlot().AutoWidth()[SNew(SBox).IsEnabled(!Name.IsEmpty()&&!Name.Equals(TEXT("Default"),ESearchCase::IgnoreCase))
                     [Button(TEXT("Delete"),[this,Section,Name](){if(!CanLeaveLootRule())return;DeletingSection=Section;DeletingName=Name;CreatingSection.Empty();Rebuild();})]];
@@ -204,10 +206,12 @@ namespace ACEUCMPanelPrivate
             if(Manage&&CreatingSection==Section)
             {
                 Add(SNew(SEditableTextBox).Tag(TEXT("UCMNewProfileName")).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16))
-                    .Text(FText::FromString(SectionNewNames.FindRef(Section))).HintText(FText::FromString(Section==TEXT("Routes")?TEXT("Route name, e.g. Academy_Loop"):TEXT("New profile name")))
+                    .Text(FText::FromString(SectionNewNames.FindRef(Section))).HintText(FText::FromString(Section==TEXT("Routes")?TEXT("Route name, e.g. Academy Loop"):TEXT("New profile name")))
                     .OnTextChanged_Lambda([this,Section](const FText& Value){SectionNewNames.Add(Section,Value.ToString());})
                     .OnTextCommitted_Lambda([this,Section](const FText&,ETextCommit::Type How){if(How==ETextCommit::OnEnter)CreateSection(Section);}));
-                Add(Text(Section==TEXT("Routes")?TEXT("Creates and selects an empty route file immediately. Use letters, numbers, _ or - (up to 64 characters). Your previous route is kept."):TEXT("Creates and selects a profile with default settings."),14,Muted));
+                Add(Text(Section==TEXT("Routes")?TEXT("Creates and selects an empty route file immediately. Use letters, numbers, spaces, _ or - (up to 64 characters). Your previous route is kept."):TEXT("Creates and selects a profile with default settings."),14,Muted));
+                if(!CreationError.IsEmpty())Add(SNew(SACEPluginText).Tag(TEXT("UCMProfileCreateError"))
+                    .Text(FText::FromString(CreationError)).Font(FACEPluginStyle::NativeFont("Regular",14)).ColorAndOpacity(Accent).AutoWrapText(true));
                 auto Actions=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6,6));
                 Actions->AddSlot()[Button(Section==TEXT("Routes")?TEXT("Create and select route"):TEXT("Create profile"),[this,Section](){CreateSection(Section);})];
                 Actions->AddSlot()[Button(TEXT("Cancel"),[this](){CreatingSection.Empty();Rebuild();})];Add(Actions);
@@ -252,6 +256,8 @@ namespace ACEUCMPanelPrivate
             Add(Toggle(TEXT("nav_priority"),TEXT("Prioritize navigation"),TEXT("Prefer route navigation over combat. Recovery, buffs and prioritized looting still take precedence.")));
             Add(Toggle(TEXT("idle_peace"),TEXT("Peace mode when idle"),TEXT("Enter peace mode when no nearby monsters need attention.")));
             Add(Toggle(TEXT("suspend_world_rendering"),TEXT("Suspend 3D view while UCM runs"),TEXT("Desktop only. Keeps UCM, networking and the interface active.")));
+            Heading(TEXT("Chat notifications"),TEXT("Choose which loot-rule results UCM announces in local chat. These settings also apply while UCM is stopped."));
+            LootNotificationSettings();
         }
         TSharedRef<SWidget> Header()
         {

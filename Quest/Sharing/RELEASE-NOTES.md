@@ -1,61 +1,56 @@
-# AC:Unreal / AC:VR release 142
+# AC:Unreal / AC:VR release 143
 
-Windows desktop, PC VR, native Linux x86_64, standalone Quest, and the new
-Android phone/tablet preview share **2026.10.28.142**. Android version code: 142.
-Quest installer revision: 9. These notes cover all changes since v141.
+Windows desktop, PC VR, native Linux x86_64, standalone Quest, and the Android
+phone/tablet preview share **2026.10.29.143**. Android version code: 143.
+Quest installer revision: 9. These notes cover all changes since v142.
 
-## Android phone and tablet preview
+## Combat movement
 
-- Add a separate optional Android ARM64 client with touch-friendly login,
-  character creation, inventory, spellbook, vendors, trade, loot, and inspection.
-- Add a responsive movement D-pad, separate left/right turning keys, swipe-look,
-  pinch zoom, simultaneous movement/jump input, and a jump-charge meter.
-- Move, resize, rebind, mirror, and hide touch controls with saved layouts and
-  reserved space that prevents overlap with menus and HUD panels.
-- Add a caster spell wheel, selected-spell display, retail peace/combat and
-  ability icons, and retail-textured vitals. Preserve icon proportions as buttons
-  resize; retry missing inventory artwork without rebuilding the inventory.
-- Include bundled plugins, a quick-access plugin rail, persistent plugin HUD
-  panels, and a choice of full-screen or pinned chat.
-- Correct Vulkan device-profile selection and refresh Android's inbound network
-  mapping more often to address the observed early disconnects. Size the mobile
-  texture pool from physical RAM instead of using the previous fixed budget.
-- Keep phone updates separate from Quest updates. The APK requires Android 10+,
-  ARM64, Vulkan/ASTC support, and separately supplied retail DAT files. Initial
-  setup uses USB debugging and the repository's Mobile installation helper.
+- Correct desktop and touch forward/backward movement during spellcasting,
+  power-up gestures, and missile aim/reload transitions. Movement now respects
+  the active retail animation sequence instead of predicting a full-speed run
+  underneath it.
+- Resume held movement correctly after combat control returns to the player,
+  including when movement was already held before the cast. Preserve separate
+  turning/sidestepping and existing melee, stance-change, and airborne rules.
 
-## Chat, fellowship, and UCM
+## Chat and UCM
 
-- Select and copy part of a chat message by dragging, or double-click a word.
-  Paste into the chat input; whole-message/window copying remains available.
-- Preserve matching chat history while a chat window is closed, honoring each
-  window's filters and bounded scrollback.
-- Show all server-supplied fellowship members, with scrolling beyond nine rows.
-- Add optional local UCM messages when looted items match a rule, and when a
-  selected/assessed item matches a rule. Separate Loot settings control these
-  notices; they are not sent to other players or server chat.
+- Add a per-window **Plugin chat** filter in Options > Chat for local plugin
+  notices and UCM loot announcements. Preserve existing colors and closed-window
+  history, and migrate saved filter preferences.
+- Expose **Announce item ID matches** in UCM Configuration and Loot settings.
+  Disabling it clears pending match notices without affecting looting or the
+  separate pickup-announcement option.
 
-## Inventory and interface fixes
+## Packs inside chests
 
-- Clear the spent equipped stack when the last arrow, dart, or thrown missile is
-  consumed, allowing ammunition replacement without relogging. Reconcile ACE's
-  separate ownership and world-deletion messages while preserving normal unequip.
-- Make Dereth Foundry creation and other administrative commands use ACE's
-  required wire prefix. Server permissions and command confirmations still apply.
-- Enable Abandon for selected journal contracts, including available and
-  completed entries. Keep the entry until the server confirms its removal.
-- Flip the vendor category dropdown arrow when the list opens and closes,
-  using the retail DAT artwork.
+- Allow packs in an external container's pack list to be dragged back into
+  inventory. Clicking still opens a pack; right-clicking examines it.
+- Return the loot view to the parent chest after the server confirms removal,
+  while retaining the removed pack's contents.
+- Include nested packs in touch/VR loot menus with separate open and take
+  actions.
 
-## Validation and preview limits
+## Route creation
 
-The release uses automated protocol, UI, plugin, mobile-layout, and updater
-regressions, platform builds, signature checks, and archive checksum validation.
-The Android preview has been played on a Galaxy Z Fold7, including a connection
-check beyond the previous disconnect interval. The latest HUD and texture-pool
-changes have not yet been tested on that phone. Other phones/tablets, sustained
-thermal/memory behavior, fold transitions, live Frostcull ammunition handling,
-and physical Quest/PC VR acceptance still require hardware/server testing.
+- Accept route/profile names containing spaces, such as **Academy Loop**, and
+  include them in both the Route and Overview dropdowns.
+- Show creation errors beside the name field, with clear duplicate-name and
+  file-write explanations. Failed creation preserves the active route and
+  existing saved data.
+- Add end-to-end UI coverage for creation by button or Enter, automatic
+  selection, waypoint saves, both dropdowns, disk reloads, and failure handling.
 
-Packages do not contain personal settings, accounts, server databases, or retail
-DAT files. The phone build is a sideloaded testing preview, not a Play Store app.
+## Validation and packaging
+
+Focused tests cover retail DAT combat sequences, movement packets, chat routing,
+loot notifications, container interactions, touch/VR menus, and route persistence.
+Build and package verification results accompany the release locally.
+Motion fixtures accept the configured retail DAT directory on Windows and Linux.
+Live-server and device testing remain distinct from automated coverage; this
+release has not been newly accepted on a physical phone or headset.
+
+Packages do not include retail DATs, personal settings, server data, or generated
+MeshCache files. Android phones/tablets remain a preview and use a separate APK
+from Quest. Existing Android signing identities and installer revision are kept.

@@ -3116,6 +3116,46 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
                 if(SpecHeading && TrainedHeading)TestTrue(TEXT("Specialized section precedes trained section"),SpecHeading->GetCachedGeometry().GetAbsolutePosition().Y<TrainedHeading->GetCachedGeometry().GetAbsolutePosition().Y);
                 NativeSession.PlayerVitals=SavedVitals;
 
+                // Native loot serves both VR and touch: chest side-slot packs
+                // must be selectable, browsable and removable just like items.
+                {
+                    FACEWorldObject Chest;Chest.Guid=99370;Chest.ItemType=ACEItemType::Container;Chest.ContainersCapacity=2;Chest.ItemsCapacity=24;
+                    FACEWorldObject Bag=Chest;Bag.Guid=99371;Bag.ContainerId=Chest.Guid;Bag.IconId=0x06004CF7;
+                    FACEWorldObject Contents=Item;Contents.Guid=99372;Contents.ContainerId=Bag.Guid;
+                    const int32 PreviousContainer=NativeSession.OpenExternalContainerGuid;
+                    for(const auto& Object:{Chest,Bag,Contents})NativeSession.UpsertWorldObject(Object);
+                    NativeSession.ContainerContents.Add(Chest.Guid,{{Bag.Guid,1}});
+                    NativeSession.ContainerContents.Add(Bag.Guid,{{Contents.Guid,0}});
+                    NativeSession.OpenExternalContainerGuid=Chest.Guid;
+                    PC->DatGameplayBinder->OpenLootSelectedPackGuid=Chest.Guid;
+                    Menu->bInspectionOpen=false;Menu->OpenPage("Loot");PaintMenu();
+                    ClickMenu(false,"Item_99371");
+                    TestEqual(TEXT("Native loot selects a pack in a chest"),Menu->Selected,Bag.Guid);
+                    ClickMenu(false,"Open selected pack");
+                    TestTrue(TEXT("Native loot opens the chest pack's contents"),FindVRMenuControl(Menu->TakeWidget(),"Item_99372").IsValid());
+                    ClickMenu(false,"Back to container");ClickMenu(false,"Item_99371");
+                    NativeSession.CachedC2SPackets.Reset();ClickMenu(false,"Take selected");
+                    const auto Bytes=ActionPayload(ACEGameAction::PutItemInContainer);
+                    if(Bytes.Num()>=12)
+                    {
+                        FACEBinaryReader Reader(Bytes);
+                        TestEqual(TEXT("Native take moves the entire chest pack"),Reader.ReadUInt32(),uint32(Bag.Guid));
+                        TestEqual(TEXT("Native take puts a chest pack in the player's side slots"),Reader.ReadUInt32(),uint32(NativeSession.PlayerGuid));
+                    }
+                    TestEqual(TEXT("Native take awaits server confirmation"),NativeSession.WorldObjects[Bag.Guid].ContainerId,Chest.Guid);
+                    PC->DatGameplayBinder->OpenLootSelectedPackGuid=Bag.Guid;
+                    FACEBinaryWriter Ack;Ack.WriteUInt32(Bag.Guid);Ack.WriteUInt32(NativeSession.PlayerGuid);Ack.WriteInt32(0);Ack.WriteInt32(1);
+                    FACEBinaryReader Reader(Ack.GetData());NativeSession.HandleInventoryPutObjInContainer(Reader);
+                    Menu->bDirty=true;PaintMenu();
+                    TestEqual(TEXT("Native loot returns to root after pack removal"),PC->DatGameplayBinder->OpenLootSelectedPackGuid,Chest.Guid);
+                    TestFalse(TEXT("Native chest no longer lists the removed pack"),FindVRMenuControl(Menu->TakeWidget(),"Item_99371").IsValid());
+                    TestEqual(TEXT("Native pack removal keeps nested contents"),NativeSession.WorldObjects[Contents.Guid].ContainerId,Bag.Guid);
+                    NativeSession.OpenExternalContainerGuid=PreviousContainer;
+                    PC->DatGameplayBinder->OpenLootSelectedPackGuid=0;
+                    for(int32 Guid:{Chest.Guid,Bag.Guid,Contents.Guid})NativeSession.WorldObjects.Remove(Guid);
+                    NativeSession.ContainerContents.Remove(Chest.Guid);NativeSession.ContainerContents.Remove(Bag.Guid);
+                    if(auto* Owned=NativeSession.ContainerContents.Find(NativeSession.PlayerGuid))Owned->RemoveAll([&](const auto& Entry){return Entry.ItemGuid==Bag.Guid;});
+                }
                 Menu->OpenPage("Inventory");Menu->SelectItem(Item.Guid);
                 NativeSession.SocketC2S->Close();NativeSockets->DestroySocket(NativeSession.SocketC2S);NativeSession.SocketC2S=nullptr;
             }

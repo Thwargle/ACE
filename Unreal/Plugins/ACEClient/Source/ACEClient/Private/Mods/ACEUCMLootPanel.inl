@@ -334,11 +334,15 @@ void LootDetails()
         }));
 
 }
+void LootNotificationSettings()
+{
+    Add(Toggle(TEXT("loot_notify_pickup"),TEXT("Announce looted rule matches"),TEXT("Print the item, amount and matching rule in local chat after UCM confirms the pickup."),true));
+    Add(Toggle(TEXT("loot_notify_match"),TEXT("Announce item ID matches"),TEXT("Print matching loot rules when an item is selected or successfully assessed, even while UCM is stopped. Turn off to silence these messages without changing looting or pickup announcements."),true));
+}
 void LootSettings()
 {
     Add(Toggle(TEXT("looting"),TEXT("Loot corpses"),TEXT("Uses normal corpse permissions and inventory transfers.")));
-    Add(Toggle(TEXT("loot_notify_pickup"),TEXT("Announce looted rule matches"),TEXT("Print the item, amount and matching rule in local chat after UCM confirms the pickup."),true));
-    Add(Toggle(TEXT("loot_notify_match"),TEXT("Announce selected or assessed matches"),TEXT("Test selected and successfully assessed items against this loot profile, even while UCM is stopped. Uses only known properties; never requests an assessment."),true));
+    LootNotificationSettings();
     const FString Original=Str(P(),TEXT("utl_source"));
     if(!Original.IsEmpty())Add(Button(TEXT("View / edit original Classic UTL copy"),[this,Original](){PreviewLegacy(Original);if(LegacyDocument){LegacyName=TEXT("Loot_edited");LegacyRule.Reset();Page=TEXT("Legacy loot");Rebuild();}}));
     Slider(TEXT("loot_range"),TEXT("Corpse search range"),1,60,15,Accent,TEXT(" m"));

@@ -353,7 +353,7 @@ bool UACEPluginSubsystem::ApplyPluginServices(FACEClientPlugin& P,const TSharedP
                 // Display-only notification. Never use the server chat path or
                 // the host's shared Notice string for plugin-owned messages.
                 auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
-                C->OnChatMessage.Broadcast(TEXT("[")+P.Name.Left(80)+TEXT("] ")+Text,TEXT(""),ACEChatMessageType::Broadcast);
+                C->ReceiveChatMessage(TEXT("[")+P.Name.Left(80)+TEXT("] ")+Text,TEXT(""),ACEChatMessageType::Broadcast,ACEChatMessageType::Plugin);
                 Ok=true;
             }
             else Failure=TEXT("A local notice requires one line, 1-500 characters");

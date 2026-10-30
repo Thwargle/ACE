@@ -4813,9 +4813,39 @@ bool UACEUIGameplayBinder::TryBeginInventoryDrag(FVector2D CanvasLocalPos)
 		}
 	}
 
-	// Loot panel items → drag into inventory (double-click picks up).
+	// Retail's external container list supports the same drag as its item list.
+	// Keep the root icon as navigation; installed packs can be opened or removed.
 	if (OpenLootContainerGuid != 0)
 	{
+		for (int32 i = 1; i < ExtPackSlots.Num() && i < ExtPackGuids.Num(); ++i)
+		{
+			UBorder* Border = ExtPackSlots[i];
+			if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed
+				|| !Canvas->IsWidgetExposedAt(Border, Absolute)) continue;
+			FACEWorldObject Pack;
+			const int32 Guid = ExtPackGuids[i];
+			if (!Guid || !Client || !Client->GetWorldObject(Guid, Pack)) return false;
+			InvDragGuid = Guid;
+			InvDragIconDid = Pack.IconId;
+			InvDragSourcePack = OpenLootContainerGuid;
+			InvDragSourceSlot = i - 1 + ExtPackScrollOffset;
+			InvDragPackSlotIndex = INDEX_NONE;
+			InvDragStartLocal = CanvasLocalPos;
+			bInvDragPending = true;
+			bInvDragActive = false;
+			// Container-list clicks open the pack, including repeated clicks. They
+			// must not take the item-list double-click pickup path on release.
+			bInvDoubleClickPending = false;
+			SelectInventoryGuid(Guid);
+			if (!PendingUseWithSourceGuid && !(PlayerController && PlayerController->GetObjectCursorTargeting()))
+			{
+				OpenLootSelectedPackGuid = Guid;
+				ExtItemScrollOffset = 0;
+				RefreshExternalContainerOverlays();
+			}
+			return true;
+		}
+		// Ordinary loot items also support double-click pickup.
 		for (int32 i = 0; i < ExtItemSlots.Num() && i < ExtItemGuids.Num(); ++i)
 		{
 			UBorder* Border = ExtItemSlots[i];
@@ -6131,11 +6161,17 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 		}
 		if (Canvas->IsWidgetExposedAt(Border, Absolute))
 		{
-			if (!bRightClick && ExtPackGuids[i] != 0)
+			const int32 Guid = ExtPackGuids[i];
+			if (Guid != 0)
 			{
-				OpenLootSelectedPackGuid = ExtPackGuids[i];
-				ExtItemScrollOffset = 0;
-				RefreshExternalContainerOverlays();
+				SelectInventoryGuid(Guid);
+				if (bRightClick && Client) Client->SendIdentifyObject(Guid);
+				else if (!bRightClick)
+				{
+					OpenLootSelectedPackGuid = Guid;
+					ExtItemScrollOffset = 0;
+					RefreshExternalContainerOverlays();
+				}
 			}
 			return true;
 		}
@@ -15253,6 +15289,17 @@ void UACEUIGameplayBinder::RefreshExternalContainerOverlays()
 		return;
 	}
 	LastLootOverlayHash = LootHash;
+	TArray<int32> PackGuids;
+	if (const auto Session = Client->GetSession()) Session->GetContainerPackGuids(OpenLootContainerGuid, PackGuids);
+	// gmExternalContainerUI returns to the root when the server confirms that
+	// the pack being viewed has left this container. Do not show its stale contents.
+	if (OpenLootSelectedPackGuid != 0 && OpenLootSelectedPackGuid != OpenLootContainerGuid
+		&& !PackGuids.Contains(OpenLootSelectedPackGuid))
+	{
+		OpenLootSelectedPackGuid = OpenLootContainerGuid;
+		ExtItemScrollOffset = 0;
+		LastLootOverlayHash = HashLootOverlayState();
+	}
 	bLootOverlaysCollapsed = false;
 	SyncEnvPanelMode();
 	constexpr int32 OverlayZ = 120000;
@@ -15282,8 +15329,6 @@ void UACEUIGameplayBinder::RefreshExternalContainerOverlays()
 	TSharedPtr<FACEUIElement> PackList = Manager->FindElementUnder(TEXT("ExternalContainer"), TEXT("ContainerList"));
 	TSharedPtr<FACEUIElement> RootIconEl = Manager->FindElementUnder(TEXT("ExternalContainer"), TEXT("Container"));
 	TArray<FACEWorldObject> Nested;
-	TArray<int32> PackGuids;
-	if (const auto Session = Client->GetSession()) Session->GetContainerPackGuids(OpenLootContainerGuid, PackGuids);
 	for (int32 Guid : PackGuids)
 	{
 		FACEWorldObject Pack;

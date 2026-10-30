@@ -131,6 +131,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEItemToolsTest;
     friend class FACEAutoCraftTest;
     friend class FACEUCMProfileStorageTest;
+    friend class FACEUCMRouteSaveEndToEndTest;
     friend class FACEUCMLootLatencyTest;
     friend class FACEUCMLootNotificationTest;
     friend class FACEPluginLootIconsTest;

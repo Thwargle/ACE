@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "Misc/ScopeExit.h"
 #include "Dat/ACEDatDatabase.h"
 #include "Dat/ACEDatMotionPlayer.h"
@@ -16,7 +17,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEArcheryMotionTest,"ACE.RetailParity.Archery
 bool FACEArcheryMotionTest::RunTest(const FString&)
 {
  FACEDatDatabase Portal;
- if(!TestTrue(TEXT("Retail DAT opens"),Portal.Open(TEXT("C:/Turbine/Asheron's Call/client_portal.dat"))))return false;
+ if(!TestTrue(TEXT("Retail DAT opens"),Portal.Open(ACETestDatDirectory()/TEXT("client_portal.dat"))))return false;
  FACEDatMotionPlayer Player(&Portal);
  if(!TestTrue(TEXT("Retail human motion table loads"),Player.SetMotionTable(0x09000001)))return false;
  constexpr uint32 Bow=0x8000003fu, Crossbow=0x80000041u, Reload=0x40000016u;
@@ -38,7 +39,7 @@ bool FACEArcheryMotionTest::RunTest(const FString&)
  auto* GI=NewObject<UGameInstance>(GEngine);World->SetGameInstance(GI);
  Context.OwningGameInstance=GI;Context.SetCurrentWorld(World);GI->OnWorldChanged(nullptr,World);GI->Init();
  ON_SCOPE_EXIT{GI->Shutdown();GEngine->DestroyWorldContext(World);World->DestroyWorld(false);};
- if(!TestTrue(TEXT("World DAT loads"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+ if(!TestTrue(TEXT("World DAT loads"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(ACETestDatDirectory())))return false;
  FACEWorldObject Obj;Obj.Guid=12345;Obj.SetupId=0x02000001;Obj.MotionTableId=0x09000001;Obj.bIsPlayer=true;
  auto* Actor=World->SpawnActor<AACEWorldEntityActor>();Actor->InitializeFromObject(Obj,100,false);
  auto* App=Actor->Appearance.Get();

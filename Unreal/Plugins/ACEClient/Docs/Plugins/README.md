@@ -288,6 +288,11 @@ cannot be deleted. Activity toggles remain independent of the selected files.
 On **Route**, choose **+ New route**, enter a file name, then **Create and select
 route** (or press Enter). This immediately creates the empty JSON file and makes
 it current. The editor shows its name, saved point count and auto-save status.
+Names can contain spaces, such as `Academy Loop`, along with letters, numbers,
+underscores and hyphens (up to 64 characters). Saved routes appear in the Route
+tab and Overview's Routes dropdown, including after reloading the client.
+Creation errors appear beside the name field; a duplicate name or failed write
+leaves the active route and existing file unchanged.
 Use **Add waypoint at my position**, walk to the next turn, and repeat. The point
 list is paged; adding a point opens its page. **Special steps** holds portal/use,
 jump, pause and recall actions; **Route behavior** holds loop, door and follow
@@ -638,15 +643,19 @@ Skip or an already satisfied quantity cap. Unmatched items remain on the corpse.
 Use **Edit**, **Enable/Disable**, **Up/Down** and **Remove** on rule cards. Changing
 rules stops UCM; press Start to use the new set consistently.
 
-The Loot tab has two local chat notification switches, both on by default:
+Configuration > Chat notifications and the Loot tab share two local chat
+notification switches, both on by default:
 **Announce looted rule matches** reports the item, quantity and matching rule
-after UCM confirms the item reached your inventory. **Announce selected or
-assessed matches** reports the first matching rule and its Keep, Skip, Salvage,
+after UCM confirms the item reached your inventory. **Announce item ID matches**
+reports the first matching rule and its Keep, Skip, Salvage,
 Sell or Read action when you select an item or receive a successful assessment.
 The latter also works while UCM is stopped, provided the plugin is enabled.
 Unknown properties wait for a normal assessment; notifications never request
 additional assessments. Repeated assessments of the same item/rule are suppressed;
-reselecting an item tests it again. These messages are not sent to the server.
+reselecting an item tests it again. Turning off item ID matches discards pending
+match notifications without disabling looting or pickup announcements. These
+messages are not sent to the server. Options > Chat > **Plugin chat** controls
+which chat windows display UCM announcements and other local plugin notices.
 
 For example, a Keep rule for Copper, workmanship 7–10, collects suitable copper
 items for later salvaging. A Skip rule for an exact item name above it protects

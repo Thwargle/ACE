@@ -433,11 +433,21 @@ void UACEUIGameplayBinder::LoadFloatyChatSettings()
 	{
 		GlobalChatTypeFilter = FCString::Strtoui64(*Value, nullptr, 10);
 	}
+	int32 FilterVersion = 0;
+	GConfig->GetInt(Section,TEXT("ChatFilterVersion"),FilterVersion,GGameUserSettingsIni);
+	if (FilterVersion < 1)
+	{
+		MainChatTypeFilter = ACERetailChat::UpgradeLegacyPluginFilter(MainChatTypeFilter);
+		GlobalChatTypeFilter = ACERetailChat::UpgradeLegacyPluginFilter(GlobalChatTypeFilter);
+		for (auto& Mask : FloatyChatFilters) Mask = ACERetailChat::UpgradeLegacyPluginFilter(Mask);
+		SaveFloatyChatSettings();
+	}
 }
 
 void UACEUIGameplayBinder::SaveFloatyChatSettings()
 {
 	const TCHAR* Section = TEXT("ACEClient.DatHUD");
+	GConfig->SetInt(Section,TEXT("ChatFilterVersion"),1,GGameUserSettingsIni);
 	GConfig->SetFloat(Section,TEXT("ChatInactiveOpacity"),ChatInactiveOpacity,GGameUserSettingsIni);
 	GConfig->SetFloat(Section,TEXT("ChatActiveOpacity"),ChatActiveOpacity,GGameUserSettingsIni);
 	for (int32 W = 0; W < NumFloatyChats; ++W)

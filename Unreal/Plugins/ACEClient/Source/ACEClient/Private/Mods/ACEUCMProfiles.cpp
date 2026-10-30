@@ -59,8 +59,14 @@ const TArray<FString>& Sections()
 }
 bool SafeName(const FString& Name)
 {
-    if (Name.IsEmpty() || Name.Len() > 64) return false;
-    for (TCHAR C : Name) if (!(FChar::IsAlnum(C) || C == '_' || C == '-')) return false;
+    if (Name.IsEmpty() || Name.Len() > 64 || Name != Name.TrimStartAndEnd()) return false;
+    for (TCHAR C : Name) if (!(FChar::IsAlnum(C) || C == ' ' || C == '_' || C == '-')) return false;
+    // These names are devices on Windows even with a .json extension. Use the
+    // same portable filename rules when creating, listing and loading profiles.
+    const FString Upper=Name.ToUpper();
+    if (Upper==TEXT("CON") || Upper==TEXT("PRN") || Upper==TEXT("AUX") || Upper==TEXT("NUL")) return false;
+    if (Upper.Len()==4 && (Upper.StartsWith(TEXT("COM")) || Upper.StartsWith(TEXT("LPT")))
+        && Upper[3]>='1' && Upper[3]<='9') return false;
     return true;
 }
 FString SectionFor(const FString& Key)
@@ -225,11 +231,14 @@ bool Select(const FString& Root, const FString& Section, const FString& Name, TS
 bool SaveSectionAs(const FString& Root, const FString& Section, const FString& Name,
     const TSharedPtr<FJsonObject>& Profile, FString& Error)
 {
-    if (!SafeName(Name) || !Sections().Contains(Section)) { Error = TEXT("Use a name of letters, numbers, _ or - (maximum 64)."); return false; }
+    if (!SafeName(Name) || !Sections().Contains(Section)) { Error = TEXT("Use up to 64 letters, numbers, spaces, _ or -. Avoid reserved filenames such as CON."); return false; }
+    const FString File=Path(Root, Section, Name);
+    if (IFileManager::Get().FileExists(*File))
+    { Error = TEXT("That profile already exists. Select it from the dropdown to edit it, or choose a different name."); return false; }
     auto Part = Extract(Profile, Section);
     if (Section == TEXT("Loot")) { Part->SetStringField(TEXT("loot_profile"), Name); Part->RemoveField(TEXT("loot_modified")); }
-    if (!Write(Path(Root, Section, Name), Part, true))
-    { Error = TEXT("Profile already exists or could not be created. Choose a new name; edits save to the active profile."); return false; }
+    if (!Write(File, Part, true))
+    { Error = TEXT("Could not create ") + File + TEXT(". Check that the folder is writable and has free disk space."); return false; }
     return true;
 }
 bool EnsureDefaults(const FString& Root, const TSharedPtr<FJsonObject>& Defaults, FString& Error)

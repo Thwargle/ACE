@@ -33,7 +33,15 @@ namespace ACERetailChat
         }
     }
     // gmChatOptionsUI::InitOptions / AddCheckboxBitfield64Option.
-    inline constexpr uint64 MainWindowDefault = 0xFBFFFFFFull;
+    inline constexpr uint64 PluginMask = 1ull << ACEChatMessageType::Plugin;
+    inline constexpr uint64 MainWindowDefault = 0xFBFFFFFFull | PluginMask;
+    // Before plugins had their own category they used System/Broadcast.
+    // Upgrade saved routes once, retaining each window's previous choice.
+    inline uint64 UpgradeLegacyPluginFilter(uint64 Mask)
+    {
+        return (Mask & ((1ull << ACEChatMessageType::System) | (1ull << ACEChatMessageType::Broadcast)))
+            ? Mask | PluginMask : Mask & ~PluginMask;
+    }
     inline constexpr uint64 FloatyDefaults[] = {4124ull, 265216ull, 0x80000ull, 2013265920ull};
     struct FFilterGroup { const TCHAR* Label; uint64 Mask; };
     inline constexpr FFilterGroup FilterGroups[] = {
@@ -46,7 +54,8 @@ namespace ACERetailChat
         {TEXT("Trade"),0x10000000ull}, {TEXT("LFG"),0x20000000ull},
         {TEXT("Roleplay"),0x40000000ull}, {TEXT("Society"),0x100000000ull},
         {TEXT("Errors"),0x4000000ull},
-        {TEXT("Assessment notices"),1ull << ACEChatMessageType::Appraisal}
+        {TEXT("Assessment notices"),1ull << ACEChatMessageType::Appraisal},
+        {TEXT("Plugin chat"),PluginMask}
     };
     struct FChannel { uint32 Id; const TCHAR* Name; const TCHAR* Alias; };
     inline constexpr FChannel Channels[] = {

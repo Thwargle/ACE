@@ -13,6 +13,7 @@
 #include "ACESession.h"
 #include "Protocol/ACECharacterTitleNames.inl"
 #include "ACEInventoryRules.h"
+#include "ACERetailChat.h"
 #include "ACEInputBindings.h"
 #include "RetailCustomKeymap.inl"
 #include "GameFramework/PlayerInput.h"
@@ -1590,7 +1591,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         for (int32 W=1;W<=4;++W)
             TestEqual(TEXT("Auxiliary window background applies saved opacity"),Manager->FindElementByName(
                 FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"),W))->ImageOpacity,.3f);
-        constexpr int32 MainGeneral=1000+7, WindowTwoGeneral=1000+2*13+7;
+        constexpr int32 MainGeneral=1000+7, WindowTwoGeneral=1000+2*UE_ARRAY_COUNT(ACERetailChat::FilterGroups)+7;
         Gameplay->ToggleCharacterOption(MainGeneral);
         Gameplay->ToggleCharacterOption(WindowTwoGeneral);
         Gameplay->LoadFloatyChatSettings();
@@ -1598,7 +1599,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Auxiliary routing survives reload"),(Gameplay->FloatyChatFilters[1]&(1ull<<27))!=0);
         Gameplay->OptionsScrollOffset=1000; Gameplay->RefreshOptionsOverlays();
         CaptureScreen(TEXT("GameplayChatWindowFourOptions"));
-        TestTrue(TEXT("Routing list can reach the fourth auxiliary window"),Gameplay->OptionRowOptions.Contains(1000+4*13+7));
+        TestTrue(TEXT("Routing list can reach the fourth auxiliary window"),Gameplay->OptionRowOptions.Contains(1000+4*UE_ARRAY_COUNT(ACERetailChat::FilterGroups)+7));
         Gameplay->HandleOptionsNamedClick(TEXT("ResetButton"));
         TestEqual(TEXT("Reset restores inactive opacity"),Gameplay->ChatInactiveOpacity,.5f);
         TestEqual(TEXT("Reset restores active opacity"),Gameplay->ChatActiveOpacity,1.f);
@@ -3659,6 +3660,65 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                     TestEqual(TEXT("Chest wheel shares the scrollbar range"),Gameplay->ExtItemScrollOffset,FMath::Max(0,Maximum-4));
                 }
             }
+            // External ContainerList is draggable in retail, independently of
+            // clicking it to browse the installed pack. Exercise captured input.
+            TFunction<void()> CheckChestPackRemoval=[&]()
+            {
+                FACEWorldObject PackedItem;PackedItem.Guid=62300;PackedItem.ContainerId=NestedPack.Guid;
+                PackedItem.ItemType=ACEItemType::Misc;PackedItem.IconId=0x06004CF7;
+                Session.UpsertWorldObject(PackedItem);
+                Session.ContainerContents.Add(NestedPack.Guid,{{PackedItem.Guid,0}});
+                auto ClickPack=[&](FKey Button)
+                {
+                    const auto& Geo=Canvas->GetCachedGeometry();
+                    const auto& Slot=Gameplay->ExtPackSlots[1]->GetCachedGeometry();
+                    const auto P=Slot.LocalToAbsolute(Slot.GetLocalSize()*.5);
+                    Canvas->NativeOnMouseButtonDown(Geo,FPointerEvent(0,P,P,{Button},Button,0,FModifierKeysState()));
+                    if(Button==EKeys::LeftMouseButton)TestEqual(TEXT("Chest pack click reaches the draggable container list"),Gameplay->InvDragGuid,NestedPack.Guid);
+                    Canvas->NativeOnMouseButtonUp(Geo,FPointerEvent(0,P,P,{},Button,0,FModifierKeysState()));
+                };
+                for(float Scale:{1.f,1.5f})
+                {
+                    Gameplay->OpenLootSelectedPackGuid=Chest.Guid;Gameplay->ExtItemScrollOffset=0;
+                    Gameplay->RefreshExternalContainerOverlays();
+                    CaptureScreen(TEXT("GameplayChestPackRemoval"),Scale,FVector2D(43,27));
+                    Session.CachedC2SPackets.Reset();ClickPack(EKeys::LeftMouseButton);ClickPack(EKeys::LeftMouseButton);
+                    TestEqual(TEXT("Repeated chest-pack clicks open its contents"),Gameplay->OpenLootSelectedPackGuid,NestedPack.Guid);
+                    TestEqual(TEXT("Chest-pack clicks select the pack"),Client->GetSelectedObject().Guid,NestedPack.Guid);
+                    TestFalse(TEXT("Repeated chest-pack clicks do not pick up the pack"),HasAction(ACEGameAction::PutItemInContainer));
+                    TestTrue(TEXT("Opening a chest pack displays its contents"),Gameplay->ExtItemGuids.Contains(PackedItem.Guid));
+                    Session.CachedC2SPackets.Reset();ClickPack(EKeys::RightMouseButton);
+                    LastWire(ACEGameAction::IdentifyObject,{uint32(NestedPack.Guid)});
+                    const auto& PackGeometry=Gameplay->ExtPackSlots[1]->GetCachedGeometry();
+                    const auto PackCenter=PackGeometry.LocalToAbsolute(PackGeometry.GetLocalSize()*.5);
+                    TestTrue(TEXT("Chest pack arms a drag"),Gameplay->TryBeginInventoryDrag(Canvas->GetCachedGeometry().AbsoluteToLocal(PackCenter)));
+                    Gameplay->CancelInventoryDrag();
+                    TestEqual(TEXT("Cancel leaves the pack in the chest"),Session.WorldObjects[NestedPack.Guid].ContainerId,Chest.Guid);
+                    CaptureScreen(TEXT("GameplayChestPackDrag"),Scale,FVector2D(43,27));
+                    int32 Destination=1;
+                    if(Scale>1.f)for(int32 I=1;I<Gameplay->PackSlotGuids.Num();++I)
+                        if(!Gameplay->PackSlotGuids[I]){Destination=I;break;}
+                    Session.PendingInventoryTransfers.Reset();
+                    DragInventoryWidget(Gameplay->ExtPackSlots[1],Gameplay->PackSlots[Destination],NestedPack.Guid,Destination-1);
+                    TestEqual(TEXT("Pack removal waits for the server"),Session.WorldObjects[NestedPack.Guid].ContainerId,Chest.Guid);
+                    Gameplay->RefreshExternalContainerOverlays();
+                    TestEqual(TEXT("Unconfirmed removal keeps the open chest pack"),Gameplay->OpenLootSelectedPackGuid,NestedPack.Guid);
+                    AcknowledgeReorder(NestedPack.Guid,Destination-1,true);
+                    Gameplay->RefreshExternalContainerOverlays();
+                    TestEqual(TEXT("Confirmed removal returns the chest to its root"),Gameplay->OpenLootSelectedPackGuid,Chest.Guid);
+                    TestFalse(TEXT("Removed pack disappears from chest slots"),Gameplay->ExtPackGuids.Contains(NestedPack.Guid));
+                    TestTrue(TEXT("Removed pack appears in owned pack slots"),Gameplay->PackSlotGuids.Contains(NestedPack.Guid));
+                    TestEqual(TEXT("Moving a pack preserves its item's container"),Session.WorldObjects[PackedItem.Guid].ContainerId,NestedPack.Guid);
+                    TestTrue(TEXT("Moving a pack preserves its contents list"),Session.ContainerContents[NestedPack.Guid].ContainsByPredicate(
+                        [&](const auto& Entry){return Entry.ItemGuid==PackedItem.Guid;}));
+                    // Restore via an authoritative move back into the chest for
+                    // the second scale/destination; never mutate optimistically.
+                    FACEBinaryWriter Ack;Ack.WriteUInt32(NestedPack.Guid);Ack.WriteUInt32(Chest.Guid);Ack.WriteInt32(0);Ack.WriteInt32(1);
+                    FACEBinaryReader Reader(Ack.GetData());Session.HandleInventoryPutObjInContainer(Reader);
+                    Gameplay->RefreshInventoryOverlays();Gameplay->RefreshExternalContainerOverlays();
+                }
+            };
+            CheckChestPackRemoval();
             Gameplay->HideExternalContainer(false);
             TestTrue(TEXT("Closing loot hides its pack background"),
                 Gameplay->ExtPackSlotBgs.IsEmpty() || Gameplay->ExtPackSlotBgs[0]->GetVisibility()==ESlateVisibility::Collapsed);

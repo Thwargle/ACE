@@ -199,6 +199,8 @@ namespace ACEChatMessageType
 	 * messages share the retail LogTextType 26 notice destination.
 	 */
 	constexpr int32 TransientInfo = 0x30;
+	// Local plugin output uses this routing category while retaining its text color.
+	constexpr int32 Plugin = 0x31;
 	inline bool IsTransientNotice(int32 Type)
 	{
 		return Type == ChatError || Type == TransientInfo;

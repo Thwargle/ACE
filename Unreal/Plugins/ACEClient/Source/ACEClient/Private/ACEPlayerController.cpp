@@ -1671,8 +1671,12 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			// Retail StopObjectCompletely and ordinary key-up both return through
 			// the motion table. Stop/chat suppress input, not the unfinished step.
 			App->SetTurnInput(bVR || bJumpAirborne ? 0.f : ReportedTurn*((bMouseFacing||bRunning)?1.5f:1.f));
-			if (!bJumpAirborne && !FMath::IsNearlyZero(F) && FMath::Sign(F) != FMath::Sign(ForwardSent))
+			if (!bJumpAirborne && !FMath::IsNearlyZero(F)
+				&& (FMath::Sign(F) != FMath::Sign(ForwardSent) || bForceMovementResend))
+			{
 				App->InterruptCastWithMovement();
+				App->FinishMissileMotion();
+			}
 			App->UpdateCellLighting((bHavePredictedPose ? PredictedPose : Client->GetPlayerPosition()).CellId);
 			if (bJumpAirborne)
 			{
@@ -1717,6 +1721,10 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			bWalkingTransitionThisFrame = App->HasWalkingTransition();
 			WalkingRootDelta = App->AdvanceWalkingMotion(DeltaTime, WalkingCycleSeconds);
 			bWalkingTransitionPending = App->HasWalkingTransition();
+			// Report the requested raw movement to the server, but don't predict
+			// a full-speed walk/run cycle while the combat sequence still owns
+			// the forward channel. This also covers mobile's movement controls.
+			if (!bVR && App->HasPendingCombatForwardMotion()) WalkingCycleSeconds = 0.f;
 		}
 	}
 

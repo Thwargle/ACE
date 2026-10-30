@@ -182,6 +182,33 @@ bool FACEWalkingStepTest::RunTest(const FString&)
  TestTrue(TEXT("Movement resumes when the swing finishes"),PC->ForwardAxis>0);
  Reset();App->PreferredStyle=ACEMotion::StanceSwordCombat;App->SetPreferredStyle(ACEMotion::StanceNonCombat);
  TestTrue(TEXT("Returning to peace plays the stance linkage and pauses movement"),App->IsMovementLockedByAction());
+ // Actual DAT links, not a timer based on spell duration, own forward travel.
+ // Exercise both directions and walk/run through magic and missile sequences.
+ struct FCombatCase {uint32 Command,Style;};
+ for(const auto& C : {FCombatCase{0x40000034,ACEMotion::StanceMagic},
+   {0x1000006F,ACEMotion::StanceMagic},{0x1000012B,ACEMotion::StanceMagic},
+   {0x40000016,ACEMotion::StanceBowCombat},{0x40000022,ACEMotion::StanceBowCombat},
+   {0x40000016,ACEMotion::StanceCrossbow},{0x40000022,ACEMotion::StanceAtlatl},
+   {0x40000022,ACEMotion::StanceThrownWeapon}})
+ for(float Dt : {1.f/30,1.f/144}) for(bool Run : {false,true}) for(bool Back : {false,true})
+ {
+  Reset();App->PreferredStyle=C.Style;
+  App->PlayActionMotion(C.Command,1,C.Style);
+  Key(EKeys::LeftShift,!Run);Key(Back?EKeys::X:EKeys::W,true);
+  TestTrue(TEXT("Combat entry owns the forward motion channel"),App->HasPendingCombatForwardMotion());
+  int32 Frames=0;
+  while(App->HasPendingCombatForwardMotion()&&Frames++<6/Dt)
+  {
+   const FVector Before=Pawn->GetActorLocation();Tick(Dt);
+   TestTrue(*FString::Printf(TEXT("Motion %08X style %08X cannot run through an unfinished link"),C.Command,C.Style),
+    FVector::Dist2D(Before,Pawn->GetActorLocation())<.01);
+  }
+  TestTrue(TEXT("Combat sequence finishes without requiring key release"),Frames>1&&Frames<6/Dt);
+  const FVector Before=Pawn->GetActorLocation();
+  for(int32 I=0;I<1/Dt;++I)Tick(Dt);
+  TestTrue(TEXT("Held movement resumes after the combat link completes"),FVector::Dist2D(Before,Pawn->GetActorLocation())>10);
+ }
+ Reset();App->PreferredStyle=ACEMotion::StanceNonCombat;
  Reset();
  auto* Boom=NewObject<UACEOrbitCameraBoom>(Pawn);Boom->SetupAttachment(Capsule);Boom->RegisterComponent();
  Boom->SetRelativeRotation(FRotator(0,90,0));
