@@ -136,6 +136,8 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEUCMLootNotificationTest;
     friend class FACEPluginLootIconsTest;
     friend class FACEWeaponSkillLootTest;
+    friend class FACEUCMLootBuilderTest;
+    friend class FACEUCMWeaponSelectionTest;
     friend class FACEUCMProfilePanelTest;
     friend class FACEUCMSharedMetaTest;
     friend class ACEUCMPanelPrivate::FACEUCMImportUITest;

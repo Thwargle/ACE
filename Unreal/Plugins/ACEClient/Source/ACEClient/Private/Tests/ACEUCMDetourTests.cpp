@@ -61,7 +61,9 @@ bool FACEUCMDetourTest::RunTest(const FString&)
             FACEWorldObject Creature;ACECreatureFixtures::Apply(Creature,Index);Creature.Position=Player;
             const int32 Height=ACEPluginCombat::AttackHeight(*Dat,Creature,Player);
             AddInfo(FString::Printf(TEXT("%s auto height %d"),Model.Name,Height));
-            const int32 Expected[]={ACEAttackHeight::Low,ACEAttackHeight::Medium,ACEAttackHeight::High};
+            const int32 Expected[]={ACEAttackHeight::Low,ACEAttackHeight::Medium,ACEAttackHeight::High,
+                ACEAttackHeight::Low,ACEAttackHeight::Low,ACEAttackHeight::Low,ACEAttackHeight::Medium};
+            static_assert(UE_ARRAY_COUNT(Expected)==UE_ARRAY_COUNT(ACECreatureFixtures::Models));
             TestEqual(*(FString(Model.Name)+TEXT(" selects correct attack quadrant")),Height,Expected[Index++]);
             Creature.Position.Location.Z+=3;
             TestEqual(TEXT("Elevated targets use high attack regardless of species"),ACEPluginCombat::AttackHeight(*Dat,Creature,Player),int32(ACEAttackHeight::High));
@@ -76,7 +78,7 @@ bool FACEUCMElementSelectionTest::RunTest(const FString&)
 {
     auto Json=[](const TCHAR* Text){TSharedPtr<FJsonObject> O;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text),O);return O;};
     FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
-    auto S=Json(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"spells":[],"skills":{"44":{"training":3,"current":300}},"targets":[{"id":50,"name":"Rat","identified":true,"distance":1,"attack_height":3,"line_of_sight":true,"resists":{"8":0.5,"16":2}}],"inventory":[{"id":90,"name":"Flaming sword","type":1,"weapon_skill":44,"identified":true,"can_wield":true,"equipped":true,"equipped_slot":1048576,"damage_type":8,"damage":30},{"id":91,"name":"Cold sword","type":1,"weapon_skill":44,"identified":true,"can_wield":true,"damage_type":16,"damage":30}]})"));
+    auto S=Json(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"spells":[],"skills":{"44":{"training":3,"current":300}},"targets":[{"id":50,"name":"Rat","identified":true,"distance":1,"attack_height":3,"line_of_sight":true,"resists":{"16":0.5,"8":2}}],"inventory":[{"id":90,"name":"Flaming sword","type":1,"weapon_skill":44,"identified":true,"can_wield":true,"equipped":true,"equipped_slot":1048576,"damage_type":16,"damage":30},{"id":91,"name":"Cold sword","type":1,"weapon_skill":44,"identified":true,"can_wield":true,"damage_type":8,"damage":30}]})"));
     auto P=Json(TEXT(R"({"buffing":false,"recovery":false,"looting":false,"combat":"auto"})"));
     auto Step=[&](){FACEPluginVM VM;TestTrue(TEXT("Combat policy loads"),VM.Load(Source,Error));TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
     TestEqual(TEXT("Cold vulnerability wins over equipped fire sword"),Step()->GetNumberField(TEXT("item")),91.);
@@ -84,12 +86,12 @@ bool FACEUCMElementSelectionTest::RunTest(const FString&)
     Items[1]->AsObject()->SetNumberField(TEXT("equipped_slot"),ACEEquipMask::MeleeWeapon);
     auto Attack=Step();TestEqual(TEXT("Chosen elemental sword uses automatic full power by default"),Attack->GetNumberField(TEXT("power")),1.);
     TestEqual(TEXT("Rat is attacked low on the wire"),Attack->GetNumberField(TEXT("height")),double(ACEAttackHeight::Low));
-    auto Target=S->GetArrayField(TEXT("targets"))[0]->AsObject();Target->SetObjectField(TEXT("resists"),Json(TEXT(R"({"8":2,"16":0.5})")));
+    auto Target=S->GetArrayField(TEXT("targets"))[0]->AsObject();Target->SetObjectField(TEXT("resists"),Json(TEXT(R"({"16":2,"8":0.5})")));
     TestEqual(TEXT("Different target resistances switch back to fire sword"),Step()->GetNumberField(TEXT("item")),90.);
     Target->SetArrayField(TEXT("preferred_elements"),ACEPluginCombat::PreferredElements(TEXT("Snow Tusker")));
     Target->SetObjectField(TEXT("resists"),Json(TEXT("{}")));
     TestEqual(TEXT("Stock server without resistance fields uses VT Snow Tusker fire preference"),Step()->GetNumberField(TEXT("item")),90.);
-    Target->SetObjectField(TEXT("resists"),Json(TEXT(R"({"8":0.5,"16":2})")));
+    Target->SetObjectField(TEXT("resists"),Json(TEXT(R"({"16":0.5,"8":2})")));
     TestEqual(TEXT("Custom server resistance data takes precedence over stock catalog"),Step()->GetStringField(TEXT("action")),FString(TEXT("attack")));
     TestTrue(TEXT("Unknown monsters have no invented elemental preferences"),ACEPluginCombat::PreferredElements(TEXT("Unregistered Custom Monster")).IsEmpty());
     Target->SetObjectField(TEXT("resists"),Json(TEXT(R"({"1":0.5,"2":2})")));
@@ -107,14 +109,14 @@ bool FACEUCMMonsterDamageTest::RunTest(const FString&)
 {
     auto Json=[](const TCHAR* Text){TSharedPtr<FJsonObject> O;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text),O);return O;};
     FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
-    auto Snapshot=[&](){return Json(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"action_serial":0,"action_error":0,"combat_mode":8,"components_required":false,"spells":[],"targets":[{"id":500,"name":"Rat","identified":true,"distance":1,"resists":{"8":0.5,"16":2}}],"inventory":[]})"));};
-    auto Profile=[&](){return Json(TEXT(R"({"buffing":false,"recovery":false,"looting":false,"combat":"auto","damage_type":16,"monsters":[{"name":"Rat","damage_type":8}]})"));};
+    auto Snapshot=[&](){return Json(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"action_serial":0,"action_error":0,"combat_mode":8,"components_required":false,"spells":[],"targets":[{"id":500,"name":"Rat","identified":true,"distance":1,"resists":{"16":0.5,"8":2}}],"inventory":[]})"));};
+    auto Profile=[&](){return Json(TEXT(R"({"buffing":false,"recovery":false,"looting":false,"combat":"auto","damage_type":8,"monsters":[{"name":"Rat","damage_type":16}]})"));};
     auto Step=[&](auto S,auto P){FACEPluginVM VM;TestTrue(TEXT("Monster policy loads"),VM.Load(Source,Error));TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
     auto Items=[&](auto S,const TCHAR* Value){S->SetArrayField(TEXT("inventory"),Json(Value)->GetArrayField(TEXT("items")));};
     for(bool Explicit:{false,true})
     {
         auto S=Snapshot(),P=Profile();
-        Items(S,TEXT(R"({"items":[{"id":90,"name":"Cold sword","type":1,"damage_type":16,"damage":100,"equipped":true,"equipped_slot":1048576,"identified":true,"can_wield":true},{"id":91,"name":"Fire sword","type":1,"damage_type":8,"damage":20,"identified":true,"can_wield":true}]})"));
+        Items(S,TEXT(R"({"items":[{"id":90,"name":"Cold sword","type":1,"damage_type":8,"damage":100,"equipped":true,"equipped_slot":1048576,"identified":true,"can_wield":true},{"id":91,"name":"Fire sword","type":1,"damage_type":16,"damage":20,"identified":true,"can_wield":true}]})"));
         if(Explicit)P->GetArrayField(TEXT("monsters"))[0]->AsObject()->SetNumberField(TEXT("weapon"),90);
         else P->SetNumberField(TEXT("melee_weapon"),90);
         TestEqual(TEXT("Monster fire overrides incompatible weapon preference and resistance"),Step(S,P)->GetNumberField(TEXT("item")),91.);
@@ -137,7 +139,7 @@ bool FACEUCMMonsterDamageTest::RunTest(const FString&)
     for(int32 AmmoType:{1,2,4})
     {
         auto S=Snapshot(),P=Profile();P->SetStringField(TEXT("combat"),TEXT("missile"));
-        Items(S,TEXT(R"({"items":[{"id":90,"name":"Launcher","type":256,"damage_type":2,"damage_mod":2,"identified":true,"can_wield":true,"equipped":true},{"id":91,"name":"Cold ammo","type":256,"slots":8388608,"damage_type":16,"damage":100,"identified":true,"can_wield":true,"equipped":true},{"id":92,"name":"Fire ammo","type":256,"slots":8388608,"damage_type":8,"damage":20,"identified":true,"can_wield":true}]})"));
+        Items(S,TEXT(R"({"items":[{"id":90,"name":"Launcher","type":256,"damage_type":2,"damage_mod":2,"identified":true,"can_wield":true,"equipped":true},{"id":91,"name":"Cold ammo","type":256,"slots":8388608,"damage_type":8,"damage":100,"identified":true,"can_wield":true,"equipped":true},{"id":92,"name":"Fire ammo","type":256,"slots":8388608,"damage_type":16,"damage":20,"identified":true,"can_wield":true}]})"));
         for(auto V:S->GetArrayField(TEXT("inventory")))V->AsObject()->SetNumberField(TEXT("ammo_type"),AmmoType);
         TestEqual(TEXT("All launcher families switch to monster-requested ammunition"),Step(S,P)->GetNumberField(TEXT("item")),92.);
         S->GetArrayField(TEXT("inventory"))[2]->AsObject()->SetBoolField(TEXT("equipped"),true);

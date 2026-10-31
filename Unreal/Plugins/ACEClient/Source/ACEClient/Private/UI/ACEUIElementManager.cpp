@@ -226,7 +226,7 @@ namespace
 	 */
 	struct FRetailReflow
 	{
-		static void Reflow(const TSharedPtr<FACEUIElement>& El, int32 OPw, int32 OPh, int32 CPw, int32 CPh)
+		static void Reflow(const TSharedPtr<FACEUIElement>& El, int32 OPw, int32 OPh, int32 CPw, int32 CPh, bool bForce=false)
 		{
 			if (!El.IsValid())
 			{
@@ -291,8 +291,8 @@ namespace
 			// edges keep authored size, so binder/user-resize mutations survive reflow.
 			const int32 NewW = FMath::Clamp(NewR - NewL, El->MinWidth, FMath::Max(El->MinWidth, El->MaxWidth));
 			const int32 NewH = FMath::Clamp(NewB - NewT, El->MinHeight, FMath::Max(El->MinHeight, El->MaxHeight));
-			const bool bChangedW = NewW != El->LastReflowW;
-			const bool bChangedH = NewH != El->LastReflowH;
+			const bool bChangedW = bForce || NewW != El->LastReflowW;
+			const bool bChangedH = bForce || NewH != El->LastReflowH;
 			if (bChangedW)
 			{
 				El->Width = NewW;
@@ -308,7 +308,7 @@ namespace
 			{
 				for (const TSharedPtr<FACEUIElement>& Child : El->Children)
 				{
-					Reflow(Child, W, H, El->Width, El->Height);
+					Reflow(Child, W, H, El->Width, El->Height, bForce);
 				}
 			}
 		}
@@ -773,7 +773,53 @@ void UACEUIElementManager::ApplyFloatyResizeLayout(const TSharedPtr<FACEUIElemen
 		Floaty->Width=FMath::Clamp(Floaty->AuthoredWidth+Floaty->UserResizeW,Floaty->MinWidth,Floaty->MaxWidth);
 		Floaty->Height=FMath::Clamp(Floaty->GetLayoutHeight(),Floaty->MinHeight,Floaty->MaxHeight);
 		for (const auto& Child : Floaty->Children)
-			FRetailReflow::Reflow(Child,Floaty->AuthoredWidth,Floaty->AuthoredHeight,Floaty->Width,Floaty->Height);
+			FRetailReflow::Reflow(Child,Floaty->AuthoredWidth,Floaty->AuthoredHeight,Floaty->Width,Floaty->Height,IsChatFloaty(Floaty));
+		if(IsChatFloaty(Floaty))
+		{
+			// Rebuild from authored anchors before adding font space. This remains
+			// reversible across font changes, resizing, expansion and viewport changes.
+			TSharedPtr<FACEUIElement> Entry;
+			for(const auto& Child:Floaty->Children)
+				if(Child->ElementName==TEXT("ChatEntryField")||Child->ElementName==TEXT("ChatPanelTextEntryField"))Entry=Child;
+			if(Entry)
+			{
+				const int32 OldH=Entry->Height;
+				int32 Extra=FMath::Max(0,Floaty->ChatEntryLineHeight+6-OldH);
+				for(const auto& Child:Floaty->Children)if(Child->ElementName==TEXT("ChatLogField"))Extra=FMath::Min(Extra,FMath::Max(0,Child->Height-16));
+				Entry->Height+=Extra;Entry->EdgeAnchorY-=Extra;Entry->RecomputeLayoutOffset();
+				for(const auto& Child:Entry->Children)FRetailReflow::Reflow(Child,Entry->Width,OldH,Entry->Width,Entry->Height,true);
+				const float Scale=FMath::Max(1.f,Floaty->ChatEntryLineHeight/12.f);
+				int32 LeftExtra=0,RightExtra=0;
+				for(const auto& Child:Entry->Children)
+				{
+					if(Child->ElementName!=TEXT("ChatTarget")&&Child->ElementName!=TEXT("SendButton"))continue;
+					const int32 OldW=Child->Width;
+					Child->Width=FMath::RoundToInt(OldW*Scale);
+					if(Child->ElementName==TEXT("ChatTarget"))LeftExtra=Child->Width-OldW;
+					else {RightExtra=Child->Width-OldW;Child->EdgeAnchorX-=RightExtra;Child->RecomputeLayoutOffset();}
+					for(const auto& Label:Child->Children)FRetailReflow::Reflow(Label,OldW,Child->Height,Child->Width,Child->Height,true);
+				}
+				for(const auto& Child:Entry->Children)if(Child->ElementName==TEXT("ChatPanelTextEntry"))
+				{
+					const int32 OldW=Child->Width;
+					Child->Width=FMath::Max(16,OldW-LeftExtra-RightExtra);Child->EdgeAnchorX+=LeftExtra;Child->RecomputeLayoutOffset();
+					for(const auto& Cap:Child->Children)FRetailReflow::Reflow(Cap,OldW,Child->Height,Child->Width,Child->Height,true);
+				}
+				// These authored row controls and end caps have fixed 17/18px
+				// maximum heights. They must grow with the font, not clamp back.
+				TFunction<void(const TSharedPtr<FACEUIElement>&)> FitRow=[&](const auto& Node)
+				{
+					Node->Height=Entry->Height;
+					for(const auto& Part:Node->Children)FitRow(Part);
+				};
+				for(const auto& Child:Entry->Children)FitRow(Child);
+				for(const auto& Child:Floaty->Children)if(Child->ElementName==TEXT("ChatLogField")||Child->ElementName==TEXT("ChatLogScrollbar"))
+				{
+					const int32 LogH=Child->Height;Child->Height-=Extra;
+					for(const auto& Part:Child->Children)FRetailReflow::Reflow(Part,Child->Width,LogH,Child->Width,Child->Height,true);
+				}
+			}
+		}
 		return;
 	}
 	const int32 NewH = Floaty->GetLayoutHeight();
@@ -1283,9 +1329,9 @@ void UACEUIElementManager::SaveFloatyLayout() const
 			}
 			const FString Key = Child->ElementName;
 			GConfig->SetInt(Section, *(Key + TEXT("_DragX")), Child->UserDragX, GGameUserSettingsIni);
-			GConfig->SetInt(Section, *(Key + TEXT("_DragY")), Child->UserDragY, GGameUserSettingsIni);
+			GConfig->SetInt(Section, *(Key + TEXT("_DragY")), Child->GetPersistentDragY(), GGameUserSettingsIni);
 			// Fixed-size indicators must not persist a leftover resize height.
-			const int32 ResizeH = IsFixedSizeFloaty(Key) ? 0 : Child->UserResizeH;
+			const int32 ResizeH = IsFixedSizeFloaty(Key) ? 0 : Child->GetPersistentResizeH();
 			GConfig->SetInt(Section, *(Key + TEXT("_ResizeH")), ResizeH, GGameUserSettingsIni);
 			GConfig->SetInt(Section, *(Key + TEXT("_ResizeW")), Child->UserResizeW, GGameUserSettingsIni);
 		}
@@ -1338,6 +1384,7 @@ void UACEUIElementManager::LoadFloatyLayout()
 			}
 			Child->UserDragX = DragX;
 			Child->UserDragY = DragY;
+			Child->ChatPeekRestore.Reset();
 			Child->UserResizeH = ResizeH;
 			Child->UserResizeW = 0;
 			GConfig->GetInt(Section, *(Key + TEXT("_ResizeW")), Child->UserResizeW, GGameUserSettingsIni);
@@ -1363,8 +1410,12 @@ FString UACEUIElementManager::ExportScreenLayout() const
 	FString Text = TEXT("# AC:Unreal / AC:VR UI geometry in logical canvas pixels.\n");
 	for (const auto& Window : ACERetailUILayout::Windows)
 		if (const auto Node = FindElementByName(Window.Element))
+		{
+			const int32 Y = Node->GetDrawY() + Node->GetPersistentDragY() - Node->UserDragY;
+			const int32 H = Node->ChatPeekRestore.IsSet() ? Node->AuthoredHeight + Node->GetPersistentResizeH() : Node->Height;
 			Text += FString::Printf(TEXT("<%s> X:%d Y: %d W: %d H: %d\n"), Window.Tag,
-				Node->GetDrawX(), Node->GetDrawY(), Node->Width, Node->Height);
+				Node->GetDrawX(), Y, Node->Width, H);
+		}
 	return Text;
 }
 
@@ -1387,6 +1438,7 @@ bool UACEUIElementManager::ImportScreenLayout(const FString& Text, FString& Erro
 			if (Rect.Tag != Window.Tag) continue;
 			const auto Node = FindElementByName(Window.Element);
 			if (!Node) break;
+			Node->ChatPeekRestore.Reset();
 			const int32 W = FMath::Clamp(Rect.W, Node->MinWidth, FMath::Max(Node->MinWidth, Constrain?FMath::Min(Node->MaxWidth, Size.X):Node->MaxWidth));
 			const int32 H = IsFixedSizeFloaty(Node->ElementName) ? Node->Height
 				: FMath::Clamp(Rect.H, Node->MinHeight, FMath::Max(Node->MinHeight, Constrain?FMath::Min(Node->MaxHeight, Size.Y):Node->MaxHeight));

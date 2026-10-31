@@ -1,5 +1,37 @@
 local function band(a,b) return math.floor(a or 0)&math.floor(b or 0) end
 local function literal_pattern(text,pattern) return regextest(text,pattern) end
+local function text_match(text,c)
+ local pattern=c.pattern or '';local mode=c.match_mode or 'regex'
+ if mode=='regex' then return literal_pattern(text,c.ignore_case and ('(?i:'..pattern..')') or pattern) end
+ if c.ignore_case~=false then text=string.lower(text);pattern=string.lower(pattern) end
+ if mode=='exact' then return text==pattern end
+ if mode=='prefix' then return text:sub(1,#pattern)==pattern end
+ if mode=='any' or mode=='all' then
+  local found=false;local start=1
+  while start<=#pattern do
+   local finish=pattern:findplain('|',start) or #pattern+1
+   local first,last=start,finish-1;start=finish+1
+   while first<=last and pattern:byte(first)<=32 do first=first+1 end
+   while last>=first and pattern:byte(last)<=32 do last=last-1 end
+   local term=pattern:sub(first,last)
+   if term~='' then
+    local match=text:findplain(term)~=nil;found=true
+    if mode=='any' and match then return true end
+    if mode=='all' and not match then return false end
+   end
+  end
+  return mode=='all' and found
+ end
+ return text:findplain(pattern)~=nil
+end
+local function hsv(rgb)
+ local r,g,b=(rgb>>16)&255,(rgb>>8)&255,rgb&255
+ local hi,lo=math.max(r,g,b),math.min(r,g,b);local d=hi-lo;local h=0
+ if d>0 then
+  if hi==r then h=60*((g-b)/d%6) elseif hi==g then h=60*((b-r)/d+2) else h=60*((r-g)/d+4) end
+ end
+ return h,hi==0 and 0 or d/hi,hi/255
+end
 -- Classic profile calculations use the item's innate cantrips, not the player's
 -- temporary buffs. The identifiers below are the retail spell/quality mapping.
 local innate_bonus={
@@ -22,6 +54,18 @@ local function condition_match(c,item,s,scan)
   if t==6 then return false end -- Original Classic rule is retired and always fails.
   if t==7 then return item.object_class==a[1] end
   if t==17 then local palette=(item.palettes or {})[math.floor(a[1])+1];return palette~=nil and band(palette,0xffffff)==band(math.floor(a[2]),0xffffff) end
+  if t==14 or t==15 or t==16 then
+   local h,sat,v=hsv((a[1]<<16)|(a[2]<<8)|a[3]);local allowed={}
+   if t==15 then for _,slot in ipairs(c.slots or {}) do allowed[slot+1]=true end end
+   for index,rgb in ipairs(item.palette_colors or {}) do
+    if t==14 or (t==16 and index==a[6]+1) or (t==15 and allowed[index]) then
+     local h2,s2,v2=hsv(rgb)
+     -- Classic compares absolute hue, without wrapping 0/360, and Euclidean S/V distance.
+     if math.abs(h2-h)<=a[4] and (s2-sat)^2+(v2-v)^2<=a[5]^2 then return true end
+    end
+   end
+   return false
+  end
   if t==1001 then return (s.main_pack_slots or 0)>=a[1] end
   if t==1002 then return (s.level or 0)>=a[1] end
   if t==1003 then return (s.level or 0)<=a[1] end
@@ -68,9 +112,11 @@ local function condition_match(c,item,s,scan)
   return count>=(c.value or 1)
  end
  local props=item[c.field..'_properties'] or {};local value=props[tostring(math.floor(c.key))]
+ if c.field=='string' and c.key==1 then value=value or item.name or '' end
  if value==nil and not item.identified then return nil end
- if c.field=='string' then return literal_pattern(value or '',c.pattern or '') end
+ if c.field=='string' then return text_match(value or '',c) end
  if value==nil then if c.missing_zero then value=0 else return false end end
+ if c.op=='in' then for _,v in ipairs(c.values or {}) do if value==v then return true end end;return false end
  local n=c.value or 0
  return (c.op=='ge' and value>=n) or (c.op=='le' and value<=n) or (c.op=='eq' and value==n) or (c.op=='ne' and value~=n) or (c.op=='bits' and (math.floor(value)&math.floor(n))~=0)
 end
@@ -78,16 +124,20 @@ end
 
 local function rule_match(rule,item,s,scan)
  if rule.enabled==false then return false end
- local wanted=string.lower(rule.name or '')
+ local wanted=rule.name or ''
  if wanted~='' then
   local name=string.lower(item.name or '');local mode=rule.name_mode or 'prefix'
+  if mode=='any' or mode=='all' or mode=='regex' then
+   if not text_match(item.name or '',{pattern=wanted,match_mode=mode,ignore_case=true}) then return false end
+  end
+  wanted=string.lower(wanted)
   if mode=='exact' and name~=wanted then return false end
   if mode=='prefix' and name:sub(1,#wanted)~=wanted then return false end
   if mode=='contains' and not name:contains(wanted) then return false end
  end
  if (rule.material or 0)~=0 and item.material~=rule.material then return false end
  if (rule.type or 0)~=0 and band(item.type,rule.type)==0 then return false end
- local missing=scan.missing or false
+ local missing=false
  for _,field in ipairs({'value','workmanship','burden','rating'}) do
   local lo,hi=rule['min_'..field] or 0,rule['max_'..field] or 0
   if lo>0 or hi>0 then
@@ -97,20 +147,26 @@ local function rule_match(rule,item,s,scan)
   end
  end
  local conditions=rule.conditions or {}
- -- Conditions are ANDed. Reject on inexpensive public/numeric properties before
- -- scanning spell names, regardless of the editor's display order.
+ local any=rule.conditions_mode=='any';local unknown=scan.unknown or false;local matched=scan.matched or false
+ -- Evaluate cheap properties first. OR can resolve true despite an unknown
+ -- alternative; AND can resolve false. Preserve that state across work-budget yields.
  for phase=scan.phase or 1,2 do
  for index=scan.condition or 1,#conditions do
   local c=conditions[index];local expensive=c.field=='spells' or c.field=='string'
   if expensive==(phase==2) then
-  if not workavailable() then scan.phase=phase;scan.condition=index;scan.missing=missing;return 'pending' end
+  if not workavailable() then scan.phase=phase;scan.condition=index;scan.unknown=unknown;scan.matched=matched;return 'pending' end
   local match=condition_match(conditions[index],item,s,scan)
-  if match=='pending' then scan.phase=phase;scan.condition=index;scan.missing=missing;return 'pending'
-  elseif match==false then return false elseif match==nil then missing=true end
+  if match=='pending' then scan.phase=phase;scan.condition=index;scan.unknown=unknown;scan.matched=matched;return 'pending'
+  elseif match==false and not any then return false
+  elseif match==true and any then matched=true;break
+  elseif match==nil then unknown=true end
   end
  end
  scan.condition=nil
+ if matched then break end
  end
+ if any and #conditions>0 and not matched and not unknown then return false end
+ missing=missing or (unknown and not (any and matched))
  if missing then if item.identified then return false else return nil end end
  return true
 end

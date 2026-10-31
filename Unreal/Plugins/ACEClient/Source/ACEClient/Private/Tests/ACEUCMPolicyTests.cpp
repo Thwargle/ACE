@@ -668,14 +668,14 @@ bool FACEUCMPolicyTest::RunTest(const FString&)
         P->SetBoolField(TEXT("buffing"),false);auto I=Check(VM,S,P);TestEqual(TEXT("Disabling buffs cancels queued request"),I->GetStringField(TEXT("action")),FString(TEXT("buff_request_done")));
     }
     {
-        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetStringField(TEXT("combat"),TEXT("missile"));P->SetNumberField(TEXT("damage_type"),8);
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetStringField(TEXT("combat"),TEXT("missile"));P->SetNumberField(TEXT("damage_type"),16);
         Array(S,TEXT("targets"),TEXT(R"({"values":[{"id":500,"name":"Monster","distance":20,"identified":true}]})"));
         Array(S,TEXT("inventory"),TEXT(R"({"values":[{"id":50,"wcid":50,"name":"Bow","type":256,"identified":true,"can_wield":true,"equipped":true,"ammo_type":1,"damage_type":2,"damage_mod":2},{"id":51,"wcid":51,"name":"Fire arrows","type":256,"slots":8388608,"ammo_type":1,"identified":false,"count":50}]})"));
         TestEqual(TEXT("Unappraised compatible ammo is inspected before declaring loadout unavailable"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("identify")));
-        auto Ammo=S->GetArrayField(TEXT("inventory"))[1]->AsObject();Ammo->SetBoolField(TEXT("identified"),true);Ammo->SetBoolField(TEXT("can_wield"),true);Ammo->SetNumberField(TEXT("damage"),30);Ammo->SetNumberField(TEXT("damage_type"),8);
+        auto Ammo=S->GetArrayField(TEXT("inventory"))[1]->AsObject();Ammo->SetBoolField(TEXT("identified"),true);Ammo->SetBoolField(TEXT("can_wield"),true);Ammo->SetNumberField(TEXT("damage"),30);Ammo->SetNumberField(TEXT("damage_type"),16);
         auto I=Check(VM,S,P);TestEqual(TEXT("A piercing bow can select a requested elemental arrow loadout"),I->GetStringField(TEXT("action")),FString(TEXT("equip")));TestEqual(TEXT("Equips requested fire ammunition"),I->GetNumberField(TEXT("item")),51.);
         Ammo->SetBoolField(TEXT("equipped"),true);TestEqual(TEXT("Correct loadout attacks after ammo confirmation"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
-        Ammo->SetNumberField(TEXT("damage_type"),16);TestEqual(TEXT("Missing requested ammunition does not fire the previous loadout"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
+        Ammo->SetNumberField(TEXT("damage_type"),8);TestEqual(TEXT("Missing requested ammunition does not fire the previous loadout"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
     }
     {
         FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();

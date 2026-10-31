@@ -1,5 +1,6 @@
 #include "ACEVTProfile.h"
 #include "ACEVTRegex.h"
+#include "ACEUCMLootPresentation.h"
 #include "ACEClientChatCommands.h"
 #include "String/LexFromString.h"
 
@@ -14,10 +15,9 @@ V Obj(const J& O){return MakeShared<FJsonValueObject>(O);}
 V Str(const FString& S){return MakeShared<FJsonValueString>(S);}
 bool VTProperty(double Key,bool Float)
 {
-    if(Key<=0||FMath::FloorToDouble(Key)!=Key)return false;
-    if(Key<10000)return Float||Key!=20;
-    if(Float)return TArray<int64>{167772160,167772161,167772162,167772163,167772164,167772165,167772166,167772169,167772171,167772172,167772173,167772174}.Contains(int64(Key));
-    return TArray<int64>{218103808,218103809,218103810,218103811,218103812,218103813,218103814,218103815,218103816,218103818,218103819,218103821,218103822,218103823,218103824,218103825,218103826,218103834,218103835,218103838,218103839,218103840,218103841,218103842,218103849,218103850}.Contains(int64(Key));
+    // All server keys and Decal aliases remain addressable. Like Classic, a
+    // missing numeric property compares as zero; custom server keys are valid.
+    return Key>0&&Key<=MAX_int32&&FMath::FloorToDouble(Key)==Key;
 }
 struct Reader
 {
@@ -316,15 +316,31 @@ J Convert(const J& D,TArray<FString>& Issues)
                 }
                 else if(Type==1)
                 {
-                    Supported=B.Num()==2&&Num(1,Key)&&Key>0&&Key<10000&&FMath::FloorToDouble(Key)==Key&&IsSupportedPattern(B[0]);
+                    Supported=B.Num()==2&&Num(1,Key)&&VTProperty(Key,false)&&IsSupportedPattern(B[0]);
                     C->SetStringField(TEXT("field"),TEXT("string"));C->SetNumberField(TEXT("key"),Key);C->SetStringField(TEXT("pattern"),B.Num()?B[0]:TEXT(""));
                 }
                 else if(Type==0||Type==8||Type==9)
                 {
                     Supported=(Type==0&&B.Num()==1&&IsSupportedPattern(B[0]))||(Type==8&&B.Num()==1&&Num(0,Value)&&Value>=0)||(Type==9&&B.Num()==3&&Num(2,Value)&&Value>=0&&IsSupportedPattern(B[0])&&IsSupportedPattern(B[1]));
-                    C->SetStringField(TEXT("field"),TEXT("spells"));C->SetNumberField(TEXT("value"),Type==0?1:Value);
+                    // Classic SpellMatch succeeds inside the matching-spell loop,
+                    // even when its saved Count is zero; SpellCount can match zero.
+                    C->SetStringField(TEXT("field"),TEXT("spells"));C->SetNumberField(TEXT("value"),Type==0?1:Type==9?FMath::Max(1.,Value):Value);
                     C->SetStringField(TEXT("pattern"),Type==8?TEXT(""):(B.Num()?B[0]:TEXT("")));
-                    C->SetStringField(TEXT("exclude"),Type==9&&B.Num()>1?B[1]:TEXT(""));
+                    C->SetStringField(TEXT("exclude"),Type==9&&B.Num()>1&&!B[1].TrimStartAndEnd().IsEmpty()?B[1]:TEXT(""));
+                }
+                else if(Type>=14&&Type<=16)
+                {
+                    const int Count=Type==14?5:6;Supported=B.Num()==Count;A Args;
+                    for(int Index=0;Supported&&Index<(Type==15?5:Count);++Index){double Arg=0;Supported=Num(Index,Arg);Args.Add(MakeShared<FJsonValueNumber>(Arg));}
+                    C->SetStringField(TEXT("field"),TEXT("legacy"));C->SetNumberField(TEXT("key"),Type);C->SetArrayField(TEXT("args"),Args);
+                    if(Supported&&Type==15)
+                    {
+                        C->SetStringField(TEXT("group"),B[5]);A Slots;
+                        if(const auto* Group=ACEUCMLootPresentation::ColorGroups().Find(B[5]))for(int Slot:*Group)Slots.Add(MakeShared<FJsonValueNumber>(Slot));
+                        else Supported=false;
+                        C->SetArrayField(TEXT("slots"),Slots);
+                    }
+                    Supported=Supported&&ACEUCMLootPresentation::ValidColorMatch(C);
                 }
                 else if(Type==6||Type==7||Type==10||Type==17||Type==1000||Type==1001||Type==1002||Type==1003||Type==1004||Type==2000||Type==2001||Type==2003||Type==2005||Type==2006||Type==2007||Type==2008)
                 {

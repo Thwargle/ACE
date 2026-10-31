@@ -221,7 +221,7 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakePanel()
     for(const auto& O:Fields)
     {
         const FString Key=CosmeticPanelField(O,TEXT("key"));Add(Label(CosmeticPanelField(O,TEXT("label"),Key)));
-        Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Text_Lambda([Self,Key](){return FText::FromString(Self.IsValid()?Self->Inputs.FindRef(Key):FString());})
+        Add(SNew(SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Text_Lambda([Self,Key](){return FText::FromString(Self.IsValid()?Self->Inputs.FindRef(Key):FString());})
             .OnTextChanged_Lambda([Self,Key](const FText& T){if(Self.IsValid())Self->Inputs[Key]=T.ToString();}));
     }
     Add(Button(TEXT("Convert and wear"),[Self](){Self->QueueRequest(TEXT("convert"));}));

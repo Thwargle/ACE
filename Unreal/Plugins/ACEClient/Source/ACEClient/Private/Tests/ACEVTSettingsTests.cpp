@@ -283,7 +283,7 @@ bool FACEVTSettingsTest::RunTest(const FString&)
         Profile->SetArrayField(TEXT("weapon_items"),{MakeShared<FJsonValueNumber>(20),MakeShared<FJsonValueNumber>(21)});
         auto S=Snapshot();S->SetNumberField(TEXT("health"),100);S->SetNumberField(TEXT("level"),200);S->SetNumberField(TEXT("combat_mode"),1);
         S->SetArrayField(TEXT("spells"),{});S->GetObjectField(TEXT("skills"))->SetObjectField(TEXT("54"),SettingsJSON(TEXT(R"({"current":400,"training":2})")));
-        S->SetArrayField(TEXT("targets"),SettingsJSON(TEXT(R"({"v":[{"id":100,"name":"Target","distance":10,"resists":{"8":1.5,"16":0.5}},{"id":101,"name":"Other","distance":20}]})"))->GetArrayField(TEXT("v")));
+        S->SetArrayField(TEXT("targets"),SettingsJSON(TEXT(R"({"v":[{"id":100,"name":"Target","distance":10,"resists":{"16":1.5,"8":0.5}},{"id":101,"name":"Other","distance":20}]})"))->GetArrayField(TEXT("v")));
         auto Fire=SettingsJSON(TEXT(R"({"id":20,"name":"Fire Essence","type":0,"wcid":1000,"identified":true,"usable":true,"structure":20,"max_structure":50,"icon_effects":32,"int_properties":{"280":213,"369":150,"366":54,"367":350}})"));
         auto Cold=SettingsJSON(TEXT(R"({"id":21,"name":"Cold Essence","type":0,"wcid":1001,"identified":true,"usable":true,"structure":20,"max_structure":50,"icon_effects":128,"int_properties":{"280":213,"369":180,"366":54,"367":350}})"));
         S->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(Fire),MakeShared<FJsonValueObject>(Cold)});

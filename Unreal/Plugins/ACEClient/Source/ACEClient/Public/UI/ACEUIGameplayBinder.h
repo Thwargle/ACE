@@ -413,8 +413,6 @@ private:
 	 */
 	int32 ChatSendChannel = 0;
 	bool bChatTargetPopupOpen = false;
-	bool bMainChatExpanded = false;
-	int32 MainChatRestoreY = 0, MainChatRestoreHeight = 0;
 	void ToggleMainChatExpanded();
 	FString LastOutgoingTellName;
 	FString LastOutgoingTellLineKey;
@@ -492,6 +490,9 @@ private:
 	bool bChatUnread[5] = {};
 	int32 ScrollDragChatWindow = 0;
 	void RefreshChatRowLayout(int32 Window);
+	void RefreshChatEntryLayouts();
+	uint32 ChatEntryFontId = 0;
+	int32 ChatEntryLineHeight = 12;
 	float ChatRowWidths[5] = {};
 	uint32 ChatRowFontIds[5] = {};
 	FVector2D ChatRowScales[5] = {};

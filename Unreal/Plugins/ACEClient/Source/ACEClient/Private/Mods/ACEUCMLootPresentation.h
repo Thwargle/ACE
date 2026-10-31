@@ -10,6 +10,10 @@ namespace ACEUCMLootPresentation
     const TArray<FProperty>& Properties(const FString& Field);
     FString PropertyLabel(const FString& Field,int32 Id);
     bool IsWeaponSkillProperty(const FString& Field,int32 Id);
+    FString ValueKind(const FString& Field,int32 Id);
+    const TMap<FString,TArray<int32>>& ColorGroups();
+    bool ValidTextMatch(const TSharedPtr<FJsonObject>& Condition);
+    bool ValidColorMatch(const TSharedPtr<FJsonObject>& Condition);
     const TMap<int32,FCalculated>& Calculated();
     FString ConditionSummary(const TSharedPtr<FJsonObject>& Condition);
     FString DataRequirement(const TSharedPtr<FJsonObject>& Condition);

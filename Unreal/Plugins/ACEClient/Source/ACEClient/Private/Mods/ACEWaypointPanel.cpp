@@ -569,7 +569,7 @@ public:
         ShowTitle=A._ShowTitle;
         auto Body=SNew(SVerticalBox);if(ShowTitle)Body->AddSlot().AutoHeight()[WaypointLabel(A._Map?TEXT("Explore Dereth"):TEXT("Waypoint"),26)];
         auto Input=SNew(SHorizontalBox);
-        Input->AddSlot().FillWidth(1)[SAssignNew(Entry,SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",18)).HintText(FText::FromString(TEXT("42.0N, 33.6E")))
+        Input->AddSlot().FillWidth(1)[SAssignNew(Entry,SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",18)).HintText(FText::FromString(TEXT("42.0N, 33.6E")))
             .OnTextCommitted_Lambda([this](const FText& T,ETextCommit::Type Type){if(Type==ETextCommit::OnEnter)Navigate(T.ToString());})];
         Input->AddSlot().AutoWidth().Padding(8,0)[WaypointButton(TEXT("Go"),[this]{Navigate(Entry->GetText().ToString());})];
         Input->AddSlot().AutoWidth().Padding(4,0)[WaypointButton(TEXT("Clear"),[this]{if(Host.IsValid())Host->ClearWaypoint();})];
@@ -595,7 +595,7 @@ public:
                 .Value_Lambda([this](){return Host.IsValid()?Host->WaypointMapOpacity():1.f;})
                 .OnValueChanged_Lambda([this](float Value){if(Host.IsValid())Host->SetWaypointMapOpacity(Value);})];
             Body->AddSlot().AutoHeight()[WaypointLabel(TEXT("The pinned map follows you, automatically switches between overworld and interior layouts, and stays visible when this window closes. Both views share the same position and size. Use + and − to zoom, even while locked. Unlock the game UI to move, resize or use wheel zoom. Uncheck Pin to hide it."),13)];
-            Body->AddSlot().AutoHeight().Padding(0,6)[SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).HintText(FText::FromString(TEXT("Filter locations by name"))).OnTextChanged_Lambda([this](const FText& T){if(Map)Map->SetSearch(T.ToString());})];
+            Body->AddSlot().AutoHeight().Padding(0,6)[SNew(SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).HintText(FText::FromString(TEXT("Filter locations by name"))).OnTextChanged_Lambda([this](const FText& T){if(Map)Map->SetSearch(T.ToString());})];
             Body->AddSlot().FillHeight(1).Padding(0,10)[SAssignNew(Map,SWaypointMap).Host(Host.Get())];
             Body->AddSlot().AutoHeight()[SNew(SHorizontalBox)
                 +SHorizontalBox::Slot().AutoWidth()[WaypointButton(TEXT("+"),[this]{Map->ChangeZoom(1.5,Map->GetCachedGeometry().GetLocalSize()*.5);})]
@@ -613,7 +613,7 @@ public:
             Body->AddSlot().AutoHeight().Padding(0,8)[WaypointLabel(TEXT("Use the game UI lock or hold Quick-show pinned windows to move the arrow."),13)];
             Body->AddSlot().AutoHeight()[WaypointButton(TEXT("Open map"),[this]{if(Host.IsValid())ChildSlot[Host->MakeWaypointPanel(true,false,ShowTitle)];})];
             Body->AddSlot().AutoHeight().Padding(0,12)[WaypointLabel(TEXT("GoArrow atlas (optional)"),18)];
-            Body->AddSlot().AutoHeight()[SAssignNew(AtlasPath,SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).HintText(FText::FromString(TEXT("Full path to GoArrow locations.xml")))];
+            Body->AddSlot().AutoHeight()[SAssignNew(AtlasPath,SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).HintText(FText::FromString(TEXT("Full path to GoArrow locations.xml")))];
             Body->AddSlot().AutoHeight().Padding(0,6)[WaypointButton(TEXT("Import locations"),[this]{if(Host.IsValid()){Host->ImportWaypointLocations(AtlasPath->GetText().ToString().TrimStartAndEnd());Status=Host->Notice;}})];
             Body->AddSlot().AutoHeight().Padding(0,12)[WaypointLabel(TEXT("Click coordinates in chat or enter them above. The arrow shows your current coordinates. Unlock the game UI and drag its title to move it; its position is saved."),15)];
         }

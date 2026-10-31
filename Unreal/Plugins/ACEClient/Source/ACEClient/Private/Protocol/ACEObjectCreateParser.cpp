@@ -112,6 +112,7 @@ bool FACEObjectCreateParser::ParseModelData(FACEBinaryReader& Reader, FACEObjDes
 		return false;
 	}
 	const uint8 NumPalettes = Reader.ReadUInt8();
+	Out.bHasWireSubPalettes = true;
 	const uint8 NumTextures = Reader.ReadUInt8();
 	const uint8 NumAnimParts = Reader.ReadUInt8();
 
@@ -133,6 +134,7 @@ bool FACEObjectCreateParser::ParseModelData(FACEBinaryReader& Reader, FACEObjDes
 		Sub.Offset = static_cast<int32>(OffsetByte) * 8;
 		const int32 Length = LengthByte == 0 ? 256 : static_cast<int32>(LengthByte);
 		Sub.NumColors = Length * 8;
+		Out.WireSubPalettes.Add(Sub);
 		ACEAppearanceComposition::AddSubPalette(Out, Sub);
 	}
 	for (uint8 i = 0; i < NumTextures; ++i)
@@ -170,6 +172,7 @@ bool FACEObjectCreateParser::ParsePhysicsData(FACEBinaryReader& Reader, FACEDeco
 		return false;
 	}
 	const uint32 Flags = Reader.ReadUInt32();
+	Out.PhysicsDataFlags = Flags;
 	Out.PhysicsState = static_cast<int32>(Reader.ReadUInt32());
 
 	if (Flags & Movement)
@@ -367,6 +370,7 @@ bool FACEObjectCreateParser::ParseWeenieHeader(FACEBinaryReader& Reader, FACEDec
 	using namespace ACEWeenieHeaderFlags2;
 	if (!Reader.CanRead(4)) return false;
 	const uint32 WeenieFlags = Reader.ReadUInt32();
+	Out.CreateFlags1 = WeenieFlags;
 	Out.Name = Reader.ReadString16L();
 	Out.WeenieClassId = static_cast<int32>(ReadPackedDword(Reader));
 	Out.IconId = static_cast<int32>(ReadPackedKnown(Reader, 0x06000000));
@@ -381,6 +385,7 @@ bool FACEObjectCreateParser::ParseWeenieHeader(FACEBinaryReader& Reader, FACEDec
 	{
 		if (!Reader.CanRead(4)) return false;
 		WeenieFlags2 = Reader.ReadUInt32();
+		Out.CreateFlags2 = WeenieFlags2;
 	}
 
 	auto Need = [&](int32 N) { return Reader.CanRead(N); };
@@ -497,7 +502,7 @@ bool FACEObjectCreateParser::ParseWeenieHeader(FACEBinaryReader& Reader, FACEDec
 		if (!Need(1)) return false;
 		Out.RadarBehavior = Reader.ReadUInt8();
 	}
-	if (WeenieFlags & PScript) { if (!Need(2)) return false; Reader.ReadUInt16(); }
+	if (WeenieFlags & PScript) { if (!Need(2)) return false; Out.PublicPhysicsScript = Reader.ReadUInt16(); }
 	if (WeenieFlags & Workmanship)
 	{
 		if (!Need(4)) return false;

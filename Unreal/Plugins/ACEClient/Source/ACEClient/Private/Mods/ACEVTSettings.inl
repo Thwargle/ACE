@@ -66,6 +66,7 @@ J VTSettings(const J& D,TArray<FString>& Issues)
     Out->SetNumberField(TEXT("monster_attempts"),4);Out->SetNumberField(TEXT("monster_blacklist_seconds"),120);
     Out->SetNumberField(TEXT("corpse_attempts"),30);Out->SetNumberField(TEXT("corpse_blacklist_seconds"),200);
     Out->SetBoolField(TEXT("auto_buffs"),true);Out->SetNumberField(TEXT("attack_spell"),0);Out->SetNumberField(TEXT("damage_type"),0);
+    Out->SetNumberField(TEXT("character_damage_version"),2);Out->SetNumberField(TEXT("monster_damage_version"),2);
     Out->SetNumberField(TEXT("protection_profile"),2);Out->SetNumberField(TEXT("bane_profile"),2);
     Out->SetStringField(TEXT("protection_custom"),TEXT("ALL"));Out->SetStringField(TEXT("bane_custom"),TEXT("ALL"));
     Out->SetArrayField(TEXT("weapons"),{});Out->SetArrayField(TEXT("consumables"),{});Out->SetArrayField(TEXT("excluded_buffs"),{});
@@ -164,7 +165,7 @@ J VTSettings(const J& D,TArray<FString>& Issues)
                 bool Streak=true;Row->TryGetBoolField(TEXT("Streak"),Streak);R->SetBoolField(TEXT("streak"),Streak);
                 bool Ring=false;Row->TryGetBoolField(TEXT("Ring"),Ring);R->SetBoolField(TEXT("ring"),Ring);
                 R->SetBoolField(TEXT("ignore"),!Attack&&!Streak&&!Ring);
-                const int Damage=int(N(Row,TEXT("DamageType"),8));const int Elements[]={2,4,1,32,64,16,8};
+                const int Damage=int(N(Row,TEXT("DamageType"),8));const int Elements[]={2,4,1,32,64,8,16};
                 if(Damage>=0&&Damage<7)R->SetNumberField(TEXT("damage_type"),Elements[Damage]);
                 else if(Damage==9)R->SetNumberField(TEXT("damage_type"),1024);
                 else if(Damage!=8)Issues.Add(TEXT("Unsupported monster damage mode: ")+Monster);

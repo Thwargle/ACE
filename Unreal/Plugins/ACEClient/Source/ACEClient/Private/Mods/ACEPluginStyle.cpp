@@ -4,6 +4,7 @@
 #include "ACEClientSubsystem.h"
 #include "ACEHoverTooltipWidget.h"
 #include "ACEDatSubsystem.h"
+#include "ACERuntimeOptions.h"
 #include "Dat/ACEDatTextureResolver.h"
 #include "UI/ACEUIFontStyles.h"
 #include "UI/ACEUIResourceResolver.h"
@@ -87,6 +88,15 @@ FSlateFontInfo FACEPluginStyle::NativeFont(FName Typeface,int32 Size)
 {
     const int32 ConsistentSize=Size==13?12:Size>=14&&Size<=16?15:Size>=17&&Size<=20?18:Size;
     return FCoreStyle::GetDefaultFontStyle(Typeface,ConsistentSize);
+}
+FSlateFontInfo FACEPluginStyle::ScaleFont(FSlateFontInfo Font)
+{
+    Font.Size=FMath::Max(1.f,Font.Size*ACERuntimeOptions::PluginTextScale());
+    return Font;
+}
+TAttribute<FSlateFontInfo> FACEPluginStyle::ScaledFont(TAttribute<FSlateFontInfo> Font)
+{
+    return TAttribute<FSlateFontInfo>::CreateLambda([Font](){return ScaleFont(Font.Get());});
 }
 void FACEPluginStyle::AddReferencedObjects(FReferenceCollector& C)
 {C.AddReferencedObject(Resolver);C.AddReferencedObject(Atlas);for(auto& Pair:Fonts)C.AddReferencedObject(Pair.Value->Atlas);for(auto& Texture:ButtonTextures)C.AddReferencedObject(Texture);}
@@ -366,7 +376,9 @@ int32 SACEPluginTab::OnPaint(const FPaintArgs& A,const FGeometry& G,const FSlate
 void SACEPluginText::Construct(const FArguments& A)
 {
     Retail=FACEPluginStyle::Current();Wrap=A._AutoWrapText;WrapAt=A._WrapTextAt;Justification=A._Justification;
-    STextBlock::Construct(A);
+    FArguments Scaled=A;
+    Scaled.Font(FACEPluginStyle::ScaledFont(A._Font.IsSet()?A._Font:TAttribute<FSlateFontInfo>(A._TextStyle->Font)));
+    STextBlock::Construct(Scaled);
     // Match the bitmap path when a label uses characters absent from the DAT.
     // Never turn a narrow plugin title, setting or button into stacked fragments.
     SetWrappingPolicy(ETextWrappingPolicy::DefaultWrapping);
@@ -402,7 +414,12 @@ bool SACEPluginText::CanDrawNative() const
     // a Lua control keeps its Slate identity. Refresh both glyphs and wrapping.
     const int32 Size=GetFont().Size;
     if(!Face||FaceSize!=Size||!Face->Atlas)
-    {Face=Retail->Typeface(Size);FaceSize=Size;CachedWidth=-1;CheckedGlyphs.Reset();NativeGlyphs=true;}
+    {
+        // A centered button previously allotted only the old text width. Do not
+        // keep wrapping into that width after a font change: measure anew first.
+        if(FaceSize!=Size)Width=0;
+        Face=Retail->Typeface(Size);FaceSize=Size;CachedWidth=-1;CheckedGlyphs.Reset();NativeGlyphs=true;
+    }
     if(!Face->Atlas)return false;
     const FString Text=GetText().ToString();
     if(Text!=CheckedGlyphs)

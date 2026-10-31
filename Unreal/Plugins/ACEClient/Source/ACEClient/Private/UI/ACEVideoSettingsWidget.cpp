@@ -216,6 +216,9 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  for(const TCHAR* Name:{TEXT("Arial"),TEXT("Courier New"),TEXT("Palatino Linotype"),TEXT("Tahoma"),TEXT("Times New Roman")}) ChatFontFace->AddOption(Name);
  ChatFontSize=Combo(TEXT("Chat Font Size")); ChatFontSize->Rename(TEXT("ChatFontSize"));
  for(const TCHAR* Name:{TEXT("Tiny"),TEXT("Small"),TEXT("Medium"),TEXT("Large"),TEXT("Extra Large")}) ChatFontSize->AddOption(Name);
+ PluginTextScale=Combo(TEXT("Lua Plugin Text Scale")); PluginTextScale->Rename(TEXT("PluginTextScale"));
+ for(int32 Percent=75;Percent<=200;Percent+=25)PluginTextScale->AddOption(FString::Printf(TEXT("%d%%"),Percent));
+ UACEHoverTooltipWidget::SetWidgetTooltip(PluginTextScale,FText::FromString(TEXT("Scales plugin labels, buttons and editable text independently of chat. Applies to bundled and third-party Lua plugins, including open windows. Saved with Apply.")));
  Section(TEXT("Screenshots"));
  Box->AddChild(Fixed(Label(TEXT("Save screenshots to:")),272,18));
  ScreenshotDirectory=WidgetTree->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass(),TEXT("ScreenshotDirectory"));
@@ -284,6 +287,7 @@ void UACEVideoSettingsWidget::ResetVideo()
  RefreshFrameRateOption();
  ChatFontFace->SetSelectedIndex(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontFace"))));
  ChatFontSize->SetSelectedIndex(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontSize"))));
+ PluginTextScale->SetSelectedIndex(FMath::RoundToInt((ACERuntimeOptions::Get(TEXT("PluginTextScale"))-.75f)*4.f));
  ScreenshotDirectory->SetText(FText::FromString(ACEScreenshotSettings::GetDirectory()));
 }
 void UACEVideoSettingsWidget::RefreshFrameRateOption()
@@ -346,6 +350,7 @@ bool UACEVideoSettingsWidget::HasPendingChanges() const
   || ShowFrameRate->IsChecked()!=(ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f)
   || ChatFontFace->GetSelectedIndex()!=FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontFace")))
   || ChatFontSize->GetSelectedIndex()!=FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontSize")))
+  || PluginTextScale->GetSelectedIndex()!=FMath::RoundToInt((ACERuntimeOptions::Get(TEXT("PluginTextScale"))-.75f)*4.f)
   || ScreenshotDirectory->GetText().ToString()!=ACEScreenshotSettings::GetDirectory();
 }
 
@@ -412,6 +417,7 @@ void UACEVideoSettingsWidget::ApplyInterfaceOptions()
  ACERuntimeOptions::Set(TEXT("ShowFrameRate"),ShowFrameRate->IsChecked()?1.f:0.f);
  if(ChatFontFace->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("ChatFontFace"),ChatFontFace->GetSelectedIndex());
  if(ChatFontSize->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("ChatFontSize"),ChatFontSize->GetSelectedIndex());
+ if(PluginTextScale->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("PluginTextScale"),.75f+PluginTextScale->GetSelectedIndex()*.25f);
  ACERuntimeOptions::Apply();
 }
 
@@ -490,6 +496,7 @@ void UACEVideoSettingsWidget::DefaultsVideo()
  ConstrainUIWindows->SetIsChecked(true);
  ShowFrameRate->SetIsChecked(false);
  ChatFontFace->SetSelectedIndex(2); ChatFontSize->SetSelectedIndex(1);
+ PluginTextScale->SetSelectedIndex(1);
  ScreenshotDirectory->SetText(FText::FromString(ACEScreenshotSettings::DefaultDirectory()));
 }
 

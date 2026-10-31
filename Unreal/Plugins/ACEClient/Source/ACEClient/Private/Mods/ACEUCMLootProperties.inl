@@ -476,6 +476,25 @@ static const TArray<FProperty> IntProperties={
     {105,TEXT("Workmanship")},
     {129,TEXT("XPForVPReduction")},
     {146,TEXT("XpOverride")},
+    {218103851,TEXT("EquippedBy")},
+    {218103852,TEXT("LastAttacker")},
+    {218103853,TEXT("AllegianceObject")},
+    {218103854,TEXT("Patron")},
+    {226492416,TEXT("IdentifyFlags1")},
+    {226492417,TEXT("CreatureCurrentHealth")},
+    {226492418,TEXT("CreatureMaximumHealth")},
+    {226492419,TEXT("CreatureBuffedStrength")},
+    {226492420,TEXT("CreatureBuffedEndurance")},
+    {226492421,TEXT("CreatureBuffedQuickness")},
+    {226492422,TEXT("CreatureBuffedCoordination")},
+    {226492423,TEXT("CreatureBuffedFocus")},
+    {226492424,TEXT("CreatureBuffedSelf")},
+    {226492425,TEXT("CreatureCurrentStamina")},
+    {226492426,TEXT("CreatureCurrentMana")},
+    {226492427,TEXT("CreatureMaximumStamina")},
+    {226492428,TEXT("CreatureMaximumMana")},
+    {226492429,TEXT("CreatureAttributeHighlight")},
+    {226492430,TEXT("CreatureAttributeColor")},
 };
 static const TArray<FProperty> FloatProperties={
     {159,TEXT("AbsorbMagicDamage")},
@@ -674,6 +693,7 @@ static const TArray<FProperty> FloatProperties={
     {62,TEXT("WeaponOffense")},
     {116,TEXT("WildAttackProbability")},
     {30,TEXT("WimpyLevel")},
+    {280,TEXT("CooldownTimeSeconds")},
 };
 static const TArray<FProperty> StringProperties={
     {22,TEXT("ActivationFailure")},

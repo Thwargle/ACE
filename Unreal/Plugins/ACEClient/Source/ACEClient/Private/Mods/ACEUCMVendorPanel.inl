@@ -11,7 +11,7 @@
                 Row->AddSlot().AutoHeight()[Text(Str(Rule,TEXT("vendor_name"))+TEXT(" / ")+Str(Rule,TEXT("server")),14,Muted)];
                 Row->AddSlot().AutoHeight()[SNew(SHorizontalBox)
                     +SHorizontalBox::Slot().FillWidth(1)[Text(TEXT("Keep in inventory"))]
-                    +SHorizontalBox::Slot().AutoWidth()[SNew(SSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).MinValue(1).MaxValue(100000).Value(int32(Num(Rule,TEXT("quantity"),1)))
+                    +SHorizontalBox::Slot().AutoWidth()[SNew(SACEPluginSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).MinValue(1).MaxValue(100000).Value(int32(Num(Rule,TEXT("quantity"),1)))
                         .OnValueCommitted_Lambda([this,Index](int32 N,ETextCommit::Type){const TArray<TSharedPtr<FJsonValue>>* Rules=nullptr;if(P()->TryGetArrayField(TEXT("vendor_rules"),Rules)&&Rules->IsValidIndex(Index)){(*Rules)[Index]->AsObject()->SetNumberField(TEXT("quantity"),N);Save();}})]
                     +SHorizontalBox::Slot().AutoWidth().Padding(8,0)[Button(TEXT("Remove"),[this,Index](){auto Rules=P()->GetArrayField(TEXT("vendor_rules"));if(Rules.IsValidIndex(Index))Rules.RemoveAt(Index);P()->SetArrayField(TEXT("vendor_rules"),Rules);Save();Rebuild();})]];
                 Add(Tile(Row));

@@ -113,6 +113,23 @@ bool FACEAppraisalPresentationTest::RunTest(const FString&)
     const auto ShieldColors=ACEAppraisalFormatting::ItemTextColors(Shield,ShieldText);
     TestTrue(TEXT("Base shield level uses the armor enchantment color"),ShieldColors[ShieldText.Find(TEXT("Base Shield Level:"))].G>.8f);
     TestTrue(TEXT("Reordered Cold resistance keeps the correct harmful wire color"),ShieldColors[ShieldText.Find(TEXT("Cold:"))].R>.9f);
+    FACEAppraisalInfo Unenchantable;Unenchantable.bSuccess=true;Unenchantable.ItemType=ACEItemType::MeleeWeapon;
+    for(int32 ResistMagic:{0,9998,9999,10000,MAX_int32})
+    {
+        Unenchantable.IntProperties.Add(36,ResistMagic);
+        for(bool IncludeChrome:{false,true})
+        {
+            const FString Details=ACEAppraisalFormatting::ItemExaminationText(Unenchantable,nullptr,IncludeChrome,IncludeChrome);
+            TestEqual(TEXT("Desktop and VR use retail's Unenchantable threshold"),Details.Contains(TEXT("Properties: Unenchantable")),ResistMagic>=9999);
+            TestFalse(TEXT("Unenchantable alone does not imply an imbue"),Details.Contains(TEXT("cannot be further imbued")));
+        }
+    }
+    Unenchantable.bSuccess=false;Unenchantable.ItemType=ACEItemType::Armor;
+    TestTrue(TEXT("Supplied Unenchantable property also appears on partially appraised armor"),
+        ACEAppraisalFormatting::ItemExaminationText(Unenchantable,nullptr).Contains(TEXT("Properties: Unenchantable")));
+    Unenchantable.IntProperties.Remove(36);
+    TestFalse(TEXT("Missing ResistMagic does not invent Unenchantable"),
+        ACEAppraisalFormatting::ItemExaminationText(Unenchantable,nullptr).Contains(TEXT("Unenchantable")));
     FACEAppraisalInfo Cleaving;Cleaving.bSuccess=true;Cleaving.ItemType=ACEItemType::MeleeWeapon;
     Cleaving.FloatProperties.Add(157,1.2);Cleaving.IntProperties.Add(263,4);
     Cleaving.IntProperties.Add(45,1); // Actual weapon damage may differ from its resistance cleave.

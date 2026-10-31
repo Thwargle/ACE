@@ -97,7 +97,7 @@ local skill_categories = {[17]=45,[19]=47,[21]=3,[23]=46,[25]=5,[27]=9,[29]=10,[
 -- ordinary buffs; category IDs preserve this order across every spell tier.
 local casting_buff_order={43,9,11,51,47,45,49,645}
 local casting_buff_family={};for _,category in ipairs(casting_buff_order) do casting_buff_family[category]=true end
-local elements={32,4,16,64,8,2,1}
+local elements={32,4,8,64,16,2,1} -- retail damage bits: cold=8, fire=16
 local damage_elements={1,2,4,8,16,32,64,1024}
 local combat_school_skill={[1]=34,[2]=33,[3]=32,[4]=31,[5]=43}
 local function trained_skill(s,id)
@@ -165,13 +165,27 @@ local function element(spell)
  if c==640 or c==639 or c==636 or c==637 or c==638 or c==641 then return 1024 end
  return 0
 end
-local function resistance(t,damage) return t and t.resists and t.resists[tostring(math.floor(damage))] or 1 end
+local function resistance(t,damage) return t and t.resists and t.resists[tostring(math.floor(damage or 0))] or 1 end
 -- Standard ACE appraisals omit elemental resistances. Like VT's GameInfoDB,
 -- use named-monster/species preferences only when the server supplied none.
 local function element_preference(t,damage)
- if t.resists and next(t.resists) then return 0 end
+ if not damage or damage==0 then return 0 end
+ if t.resists and next(t.resists) then return resistance(t,damage) end
  for index,e in ipairs(t.preferred_elements or {}) do if e==damage then return 16-index end end
  return 0
+end
+-- VT ga.a resolves elemental rends, then cleaves; neither is the weapon's
+-- displayed physical damage mask. Keep these separate from actual attack damage.
+local function weapon_traits(v)
+ local ints,floats=v.int_properties or {},v.float_properties or {}
+ local imbue=ints['179'] or 0
+ local rend=({[8]=1,[16]=2,[32]=4,[64]=32,[128]=8,[256]=64,[512]=16})[band(imbue,1023)] or 0
+ if rend==0 then
+  for _,e in ipairs({32,4,8,16,64,2,1}) do if band(ints['263'],e)~=0 then rend=e;break end end
+ end
+ local bonus=(band(imbue,4)~=0 and 4000 or 0)+(band(imbue,1)~=0 and 2000 or 0)+(band(imbue,2)~=0 and 1000 or 0)
+  +((floats['155'] or 0)>0 and 400 or 0)+((floats['136'] or 0)>0 and 200 or 0)+((floats['147'] or 0)>0 and 100 or 0)
+ return rend,bonus
 end
 local function preferred_damage(t,mask)
  local damage,value,preference=0,-1,-1
@@ -2151,7 +2165,7 @@ local function tick(s,p)
    end
    if pet_target and count>=option('pet_min_targets',1) then
     local best,best_rank,best_level=nil,-1,-1
-    local preferred=({[0]=2,4,1,32,64,16,8})[pet_rule.pet_damage_type]
+    local preferred=({[0]=2,4,1,32,64,8,16})[pet_rule.pet_damage_type]
     local attack_element=pet_rule.damage_type or option('damage_type',0)
     if attack_element==0 then
      local score=-1
@@ -2166,7 +2180,7 @@ local function tick(s,p)
      -- VT's equipment list explicitly opts devices in. A native profile can
      -- instead select device classes through its equipment picker.
      if pet_allowed(v) and pet_eligible(s,v) and s.time>=(until_time['pet'..v.id] or 0) then
-      local damage=({[1]=4,[32]=8,[64]=64,[128]=16,[256]=32})[v.icon_effects] or 4
+      local damage=({[1]=4,[32]=16,[64]=64,[128]=8,[256]=32})[v.icon_effects] or 4
       local rank=resistance(pet_target,damage)
       if damage==preferred then rank=rank+1000000
       elseif (preferred or (pet_rule.pet_damage_type or 101)==101) and damage==attack_element then rank=rank+10000 end
@@ -2473,7 +2487,7 @@ local function tick(s,p)
   local nav=navigate();if nav then return nav end
  end
  activity='combat'
- local attack_spells,combat_inventory,best_debuffs,attack_indices={},{},{},{}
+ local attack_spells,combat_inventory,best_debuffs,attack_indices,ammo_by_kind={},{},{},{},{}
  if target and combat~='off' then
  for _,v in ipairs(spell_groups.offense) do
   if element(v)~=0 and not v.beneficial and v.category~=636 and v.category~=637 and v.category~=638 then
@@ -2485,16 +2499,22 @@ local function tick(s,p)
     elseif v.id==p.attack_spell or (attack_spells[index].id~=p.attack_spell and v.power>attack_spells[index].power) then attack_spells[index]=v end
   elseif not v.beneficial and not v.caster_target and (v.duration or 0)>0 and (not best_debuffs[v.category] or v.power>best_debuffs[v.category].power) then best_debuffs[v.category]=v end
  end
- for _,v in ipairs(inventory) do if band(v.type,0x8101)~=0 or band(v.slots,0x800000)~=0 then combat_inventory[#combat_inventory+1]=v end end
+ for _,v in ipairs(inventory) do
+  if band(v.type,0x8101)~=0 or band(v.slots,0x800000)~=0 then combat_inventory[#combat_inventory+1]=v end
+  if band(v.slots,0x800000)~=0 then local kind=v.ammo_type or 0;ammo_by_kind[kind]=ammo_by_kind[kind] or {};table.insert(ammo_by_kind[kind],v) end
  end
- local effect_index={}
+ end
+ local effect_index,active_vulnerabilities={},{}
  for _,e in ipairs(s.debuffs or {}) do
+ if e.expires-s.time>.5 then
+  local active=active_vulnerabilities[e.target] or {};active_vulnerabilities[e.target]=active;active[e.category]=true
+ end
  local refresh=(e.category==636 or e.category==637 or e.category==638) and 0 or option('debuff_refresh',5)
  if e.expires-s.time>refresh then
   local effects=effect_index[e.target] or {};effect_index[e.target]=effects
   effects[e.category]=math.max(effects[e.category] or 0,e.power)
  end end
- local vulns={[32]=102,[4]=104,[16]=106,[64]=108,[8]=110,[2]=112,[1]=114}
+ local vulns={[32]=102,[4]=104,[8]=106,[64]=108,[16]=110,[2]=112,[1]=114}
  local function wanted(rule,key) if rule and rule[key]~=nil then return rule[key] end;return option(key,false) end
  local function debuff_categories(rule,element)
   local categories={}
@@ -2537,70 +2557,123 @@ local function tick(s,p)
    local selected=by_id[selected_spell]
    if not selected or element(selected)~=damage_override then selected_spell=nil end
   end
-  local attack,best_score=nil,-1
-  local ring,ring_score,streak_spell,streak_score=nil,-1,nil,-1
-  local arc,arc_score=nil,-1
-  local use_ring=ring_enabled(target_rule)
-  -- Void damage-over-time spells are attacks in their own right. Requiring a
-  -- bolt/streak first rejected the wand before the enabled curse pass could run.
-  local dot_attack,dot_score,dot_skill=nil,-1,-1
-  if not damage_override or damage_override==0 or damage_override==1024 then
-   for _,family in ipairs({{636,'debuff_destructive'},{637,'debuff_corrosion'},{638,'debuff_corruption'}}) do
-    local v=best_debuffs[family[1]]
-    if v and wanted(target_rule,family[2]) then
-     local rank=trained_skill(s,combat_school_skill[v.school]);local score=v.power*resistance(target,1024)
-     if rank>dot_skill or (rank==dot_skill and score>dot_score) then dot_attack=v;dot_score=score;dot_skill=rank end
+  local spell_plans={}
+  local function spell_plan(requested_element)
+   local key=requested_element or 0
+   if spell_plans[key] then return spell_plans[key] end
+   local damage_override=requested_element
+   local attack,best_score=nil,-1
+   local ring,ring_score,streak_spell,streak_score=nil,-1,nil,-1
+   local arc,arc_score=nil,-1
+   local use_ring=ring_enabled(target_rule)
+   -- Void damage-over-time spells are attacks in their own right. Requiring a
+   -- bolt/streak first rejected the wand before the enabled curse pass could run.
+   local dot_attack,dot_score,dot_skill=nil,-1,-1
+   if not damage_override or damage_override==0 or damage_override==1024 then
+    for _,family in ipairs({{636,'debuff_destructive'},{637,'debuff_corrosion'},{638,'debuff_corruption'}}) do
+     local v=best_debuffs[family[1]]
+     if v and wanted(target_rule,family[2]) then
+      local rank=trained_skill(s,combat_school_skill[v.school]);local score=v.power*resistance(target,1024)
+      if rank>dot_skill or (rank==dot_skill and score>dot_score) then dot_attack=v;dot_score=score;dot_skill=rank end
+     end
     end
    end
-  end
-  local magic_skill=-1
-  if target_combat=='auto' then
-   magic_skill=dot_skill
-   for _,v in ipairs(attack_spells) do
-    local e=element(v)
-    if e~=0 and not v.beneficial and (not damage_override or damage_override==0 or damage_override==e)
-     and (not selected_spell or selected_spell==0 or selected_spell==v.id) then magic_skill=math.max(magic_skill,trained_skill(s,combat_school_skill[v.school])) end
+   local magic_skill=-1
+   if target_combat=='auto' then
+    magic_skill=dot_skill
+    for _,v in ipairs(attack_spells) do
+     local e=element(v)
+     if e~=0 and not v.beneficial and (not damage_override or damage_override==0 or damage_override==e)
+      and (not selected_spell or selected_spell==0 or selected_spell==v.id) then magic_skill=math.max(magic_skill,trained_skill(s,combat_school_skill[v.school])) end
+    end
    end
-  end
-  local bolt_enabled=not target_rule or target_rule.bolt~=false
-  local streak_enabled=not target_rule or target_rule.streak~=false
-  for _,v in ipairs(attack_spells) do local e=element(v)
-   local streak=(v.category>=243 and v.category<=249) or v.category==639
-   local is_ring=(v.category>=222 and v.category<=228) or v.category==641
-   if e~=0 and not v.beneficial and (not selected_spell or selected_spell==0 or selected_spell==v.id) and trained_skill(s,combat_school_skill[v.school])>=magic_skill then
-    local score=v.power*resistance(target,e);if damage_override and damage_override~=0 and e~=damage_override then score=-1 end
-    if is_ring then if use_ring and score>ring_score then ring=v;ring_score=score end
-    elseif streak then if streak_enabled and score>streak_score then streak_spell=v;streak_score=score end
-    elseif band(v.flags,0x1000)~=0 then if score>arc_score then arc=v;arc_score=score end
-    elseif score>best_score then attack=v;best_score=score end
+   if not damage_override or damage_override==0 then
+    local preference,score=-1,-1
+    for _,v in ipairs(attack_spells) do local e=element(v)
+     local is_ring=(v.category>=222 and v.category<=228) or v.category==641
+     local ring_usable=use_ring and (ring_count>=option('ring_min_targets',4) or (target_rule and target_rule.bolt==false and target_rule.streak==false and ring_count>0))
+     if (not is_ring or ring_usable) and (not selected_spell or selected_spell==0 or selected_spell==v.id) and trained_skill(s,combat_school_skill[v.school])>=magic_skill then
+      local rank=element_preference(target,e);local value=v.power*resistance(target,e)
+      if rank>preference or (rank==preference and value>score) then damage_override=e;preference=rank;score=value end
+     end
+    end
    end
+   local bolt_enabled=not target_rule or target_rule.bolt~=false
+   local streak_enabled=not target_rule or target_rule.streak~=false
+   for _,v in ipairs(attack_spells) do local e=element(v)
+    local streak=(v.category>=243 and v.category<=249) or v.category==639
+    local is_ring=(v.category>=222 and v.category<=228) or v.category==641
+    if e~=0 and not v.beneficial and (not selected_spell or selected_spell==0 or selected_spell==v.id) and trained_skill(s,combat_school_skill[v.school])>=magic_skill then
+     local score=v.power*resistance(target,e);if damage_override and damage_override~=0 and e~=damage_override then score=-1 end
+     if is_ring then if use_ring and score>ring_score then ring=v;ring_score=score end
+     elseif streak then if streak_enabled and score>streak_score then streak_spell=v;streak_score=score end
+     elseif band(v.flags,0x1000)~=0 then if score>arc_score then arc=v;arc_score=score end
+     elseif score>best_score then attack=v;best_score=score end
+    end
+   end
+   -- VT chooses the higher-quality eligible family first. The arc preference
+   -- breaks ties; it does not discard the only usable family.
+   local arc_mode=option('use_arcs',1)
+   if arc and (arc_score>best_score or (arc_score==best_score and (arc_mode==3 or (arc_mode==2 and target.distance>=option('arc_range',5))))) then attack=arc;best_score=arc_score end
+   -- VT keeps ordinary spells as fallback if a requested streak/ring is not
+   -- usable. Ring-only rules cast with one nearby eligible target, otherwise
+   -- the configured minimum applies (counted only from ring-enabled rules).
+   if streak_spell and (not bolt_enabled or streak_score>best_score) then attack=streak_spell;best_score=streak_score end
+   if ring and (ring_count>=option('ring_min_targets',4) or (not bolt_enabled and not streak_enabled and ring_count>0)) then attack=ring;best_score=ring_score end
+   local casting_attack=attack or dot_attack
+   local casting_score=attack and best_score or dot_score
+   local value={attack=attack,dot=dot_attack,score=casting_score,casting=casting_attack}
+   spell_plans[key]=value;return value
   end
-  -- VT chooses the higher-quality eligible family first. The arc preference
-  -- breaks ties; it does not discard the only usable family.
-  local arc_mode=option('use_arcs',1)
-  if arc and (arc_score>best_score or (arc_score==best_score and (arc_mode==3 or (arc_mode==2 and target.distance>=option('arc_range',5))))) then attack=arc;best_score=arc_score end
-  -- VT keeps ordinary spells as fallback if a requested streak/ring is not
-  -- usable. Ring-only rules cast with one nearby eligible target, otherwise
-  -- the configured minimum applies (counted only from ring-enabled rules).
-  if streak_spell and (not bolt_enabled or streak_score>best_score) then attack=streak_spell;best_score=streak_score end
-  if ring and (ring_count>=option('ring_min_targets',4) or (not bolt_enabled and not streak_enabled and ring_count>0)) then attack=ring;best_score=ring_score end
-  local casting_attack=attack or dot_attack
-  local casting_score=attack and best_score or dot_score
-  local weapon,score,best_skill,best_preference,best_requested=nil,-1,-1,-1,false
+  local initial_spells=spell_plan(damage_override)
+  local attack,dot_attack,casting_attack=initial_spells.attack,initial_spells.dot,initial_spells.casting
+  local weapon,best,best_spells,best_ammo,best_element
   local usable_caster=false
   local unassessed,unassessed_ammo
-  local ammo_scores,ammo_elements,ammo_preferences,unknown_ammo={},{},{},{}
-  for _,a in ipairs(combat_inventory) do if band(a.slots,0x800000)~=0 then
-   local kind=a.ammo_type or 0
-   if not a.identified then unknown_ammo[kind]=a end
-   if a.identified and a.can_wield and (not damage_override or damage_override==0 or band(a.damage_type,damage_override)~=0) then
-    local rank=(a.damage or 0)*resistance(target,a.damage_type or 2)
-    local preference=element_preference(target,a.damage_type or 2)
-    if a.equipped then rank=rank*1.01 end
-    if preference>(ammo_preferences[kind] or -1) or (preference==(ammo_preferences[kind] or -1) and rank>(ammo_scores[kind] or -1)) then
-     ammo_scores[kind]=rank;ammo_elements[kind]=a.damage_type or 2;ammo_preferences[kind]=preference end
+  local function better(a,b)
+   if not b then return true end
+   for i=1,#a do if a[i]~=b[i] then return a[i]>b[i] end end
+   return false
+  end
+  local function tier(v,e,rend,bonus,launcher,caster)
+   local species=target.creature_type or ((p.monster_catalog or {})[target.name] or {}).species
+   if (v.slayer or 0)>0 and v.slayer==species then return 8 end
+   local preference=element_preference(target,e)
+   if strict_damage then preference=e==damage_override and 1 or 0 end
+   local confirmed=(active_vulnerabilities[target.id] or {})[vulns[e]]
+   if bonus>0 and preference>0 and confirmed then return 7 end
+   if rend~=0 and rend==e and preference>0 then return 6 end
+   if caster and e==1024 then return 5 end
+   if bonus>0 and preference>0 then return 4 end
+   if caster and bonus>0 and (v.damage_type or 0)==0 then return 3 end
+   if preference>0 then return 2 end
+   if launcher then return 1 end
+   return 0
+  end
+  -- One ammunition choice belongs to the entire loadout. Reusing it for
+  -- equip/debuff/attack avoids independently choosing a different element later.
+  local ammo_cache={}
+  local function ammunition(v,requested)
+   local base_damage=(v.damage_type or 0)~=0 and v.damage_type or 2
+   local key=tostring(v.ammo_type)..':'..tostring(requested or 0)..':'..tostring(base_damage)
+   if ammo_cache[key] then return table.unpack(ammo_cache[key]) end
+   local best_ammo,best_rank,best_e,unknown
+   for _,a in ipairs(ammo_by_kind[v.ammo_type] or {}) do
+    if not a.identified then unknown=a
+    elseif a.can_wield then
+     -- Prismatic (retail Base bit) inherits the launcher's damage, not the
+     -- monster's preferred element. A neutral bow still fires piercing prisms.
+     local mask=a.damage_type==0x10000000 and base_damage or a.damage_type
+     if not requested or requested==0 or band(mask,requested)~=0 then
+      local e=requested and requested~=0 and requested or preferred_damage(target,mask)
+      local rank={element_preference(target,e),(a.damage or 0)*resistance(target,e),a.equipped and 1 or 0}
+      if better(rank,best_rank) then best_ammo=a;best_rank=rank;best_e=e end
+     end
+    end
    end
-  end end
+   ammo_cache[key]={best_ammo or false,best_e or 0,unknown or false}
+   return best_ammo,best_e,unknown
+  end
   for _,v in ipairs(combat_inventory) do
    local melee=band(v.type,1)~=0;local missile=band(v.type,0x100)~=0 and band(v.slots,0x800000)==0;local caster=band(v.type,0x8000)~=0
    local allowed=explicit and v.id==explicit.id or (not explicit or strict_damage) and weapon_allowed(v)
@@ -2613,52 +2686,51 @@ local function tick(s,p)
    if not v.identified and allowed and (melee or missile or caster) then unassessed=v end
    if v.identified and v.can_wield and allowed and ((explicit and v.id==explicit.id) or (target_combat=='auto' and (melee or missile or (caster and casting_attack))) or (target_combat=='melee' and melee) or (target_combat=='missile' and missile) or (target_combat=='magic' and caster)) then
     local damage=v.damage_type or 0
-    local _,resist,preference=preferred_damage(target,damage)
-    if damage==0 then resist=1;preference=0 end
-    if damage_override and damage_override~=0 then resist=resistance(target,damage_override);preference=0 end
-    local value=caster and casting_score or ((v.damage or 0)*(1-(v.variance or 0)*.5)*math.max(1,v.damage_mod or 1)*resist/(1+(v.weapon_time or 0)/100))
-    if caster and casting_attack and band(damage,element(casting_attack))~=0 then value=value*math.max(1,v.element_mod or 1) end
+    local rend,bonus=weapon_traits(v)
     local launcher=missile and (v.ammo_type or 0)~=0
-    if launcher then
-     local ammo_score=ammo_scores[v.ammo_type] or -1
-     unassessed_ammo=unknown_ammo[v.ammo_type] or unassessed_ammo
-     value=ammo_score<0 and -1 or ammo_score*math.max(1,v.damage_mod or 1)/(1+(v.weapon_time or 0)/100)
-     preference=element_preference(target,ammo_elements[v.ammo_type])
+    local e=strict_damage and damage_override or rend~=0 and rend or preferred_damage(target,damage)
+    if not strict_damage and not caster and not launcher and band(damage,e)==0 then e=preferred_damage(target,damage) end
+    local spells=initial_spells
+    local ammo,unknown
+    if caster then
+     if not strict_damage and rend==0 and damage==0 then e=casting_attack and element(casting_attack) or 0 end
+     -- A deliberately selected spell remains authoritative. Otherwise an
+     -- elemental wand must select its corresponding spell, never an unrelated
+     -- highest-tier bolt chosen before the wand was considered.
+     if not strict_damage and selected_spell and selected_spell~=0 and by_id[selected_spell] then e=element(by_id[selected_spell]) end
+     spells=spell_plan(e)
+     if not spells.casting and initial_spells.casting then
+      spells=initial_spells;e=element(spells.casting)
+     end
+    elseif launcher then
+     local requested=strict_damage and damage_override or rend~=0 and rend or nil
+     ammo,e,unknown=ammunition(v,requested)
+     unassessed_ammo=unknown or unassessed_ammo
     end
-    if caster then preference=0 end
-    if (v.slayer or 0)~=0 and v.slayer==target.creature_type then value=value*math.max(1,v.slayer_mod or 1) end
-    -- Offhand equipment is not already in the requested main-hand slot.
-    -- Favor only the actual main hand on otherwise equivalent loadouts.
-    if v.equipped and band(v.equipped_slot,0x200000)==0 then value=value*1.01 end
-    -- Bows/launchers inherit the ammunition's element. Their own piercing
-    -- profile must not reject a requested fire/acid/etc. arrow loadout.
-    if strict_damage and not caster and not launcher and band(damage,damage_override)==0 then value=-1 end
-    -- Compare usable skill first, then damage within that skill. A wand's
-    -- spell damage is not comparable to a sword's per-swing damage.
-    local skill_id=caster and casting_attack and combat_school_skill[casting_attack.school] or v.weapon_skill
-    local rank=trained_skill(s,skill_id)
-    if target_combat~='auto' then rank=0 end
-    -- An explicit weapon is preferred only if it can deliver this element.
-    -- Otherwise search the permitted equipment pool instead of attacking with
-    -- the wrong damage or getting stuck on an incompatible manual preference.
-    local preferred=explicit and v.id==explicit.id or not explicit and melee and main_hand>0 and v.id==main_hand or false
-    if value>=0 and ((preferred and not best_requested) or (preferred==best_requested and (rank>best_skill or (rank==best_skill and (preference>best_preference or (preference==best_preference and value>score)))))) then
-     weapon=v;score=value;best_skill=rank;best_preference=preference;best_requested=preferred
-    end
+    local resist=resistance(target,e)
+    local value=caster and spells.score or ((v.damage or 0)*(1-(v.variance or 0)*.5)*math.max(1,v.damage_mod or 1)*resist/(1+(v.weapon_time or 0)/100))
+    if caster then
+     if not spells.casting then value=-1
+     elseif band(damage,e)~=0 then value=value*math.max(1,v.element_mod or 1) end
+    elseif launcher then
+     value=ammo and (ammo.damage or 0)*resist*math.max(1,v.damage_mod or 1)/(1+(v.weapon_time or 0)/100) or -1
+    elseif strict_damage and band(damage,damage_override)==0 then value=-1 end
+    if (v.slayer or 0)>0 and v.slayer==target.creature_type then value=value*math.max(1,v.slayer_mod or 1) end
+    local skill_id=caster and spells.casting and combat_school_skill[spells.casting.school] or v.weapon_skill
+    local skill=target_combat=='auto' and trained_skill(s,skill_id) or 0
+    local requested=explicit and v.id==explicit.id or not explicit and melee and main_hand>0 and v.id==main_hand or false
+    local rank={requested and 1 or 0,tier(v,e,rend,bonus,launcher,caster),element_preference(target,e),bonus,skill,value,
+     v.equipped and band(v.equipped_slot,0x200000)==0 and 1 or 0}
+    if value>=0 and better(rank,best) then weapon=v;best=rank;best_spells=spells;best_ammo=ammo;best_element=e end
    end
   end
+  if best_spells then attack=best_spells.attack;dot_attack=best_spells.dot;casting_attack=best_spells.casting end
   local mode=weapon and (band(weapon.type,0x8000)~=0 and 'magic' or band(weapon.type,0x100)~=0 and 'missile' or 'melee') or target_combat
-  local debuff_element=damage_override
-  if not debuff_element or debuff_element==0 then
-   if mode=='magic' and casting_attack then debuff_element=element(casting_attack)
-   elseif mode=='missile' and weapon and (weapon.ammo_type or 0)~=0 then
-    debuff_element=ammo_elements[weapon.ammo_type]
-   elseif weapon then debuff_element=preferred_damage(target,weapon.damage_type) end
-  end
+  local debuff_element=best_element or damage_override
   local categories=debuff_categories(target_rule,debuff_element)
   local confirmed=effect_index[target.id] or {}
   local needs=missing_debuff(target,categories)
-  return {attack=attack,dot_only=not attack and dot_attack~=nil,missing_attack=usable_caster and not casting_attack and (target_combat=='auto' or target_combat=='magic'),weapon=weapon,unassessed=unassessed,unassessed_ammo=unassessed_ammo,mode=mode,categories=categories,confirmed=confirmed,needs=needs,damage=damage_override}
+  return {attack=attack,dot_only=not attack and dot_attack~=nil,missing_attack=usable_caster and not casting_attack and (target_combat=='auto' or target_combat=='magic'),weapon=weapon,unassessed=unassessed,unassessed_ammo=unassessed_ammo,mode=mode,categories=categories,confirmed=confirmed,needs=needs,damage=damage_override,attack_element=best_element,ammo=best_ammo,priority=tier}
  end
  -- Keep an in-flight debuff on its recipient until the server answers. A new
  -- higher-priority spawn must not make UseDone look like successful debuffing.
@@ -2744,7 +2816,7 @@ local function tick(s,p)
   if weapon and mode=='melee' and secondary_request~=nil and band(weapon.slots,0x2000000)==0 then
    local requested=secondary_request
    local current,shield,secondary,unknown
-   local rank,best_preference=-1,-1
+   local rank,best_preference,best_priority,best_bonus=-1,-1,-1,-1
    for _,v in ipairs(inventory) do
     if v.equipped and band(v.equipped_slot,0x200000)~=0 then current=v end
     local melee=band(v.type,1)~=0 and band(v.slots,0x2000000)==0
@@ -2756,9 +2828,14 @@ local function tick(s,p)
       if requested>3 then secondary=v
       elseif armor and not shield then shield=v
       elseif melee then
-       local _,resistance_score,preference=preferred_damage(target,v.damage_type)
+       local rend,bonus=weapon_traits(v)
+       local e=damage_override and damage_override~=0 and damage_override or rend~=0 and rend or preferred_damage(target,v.damage_type)
+       local resistance_score,preference=resistance(target,e),element_preference(target,e)
+       local priority=plan.priority(v,e,rend,bonus,false,false)
        local value=(v.damage or 0)*(1-(v.variance or 0)*.5)*resistance_score/(1+(v.weapon_time or 0)/100)
-       if not secondary or (v.auto_wield_left and not secondary.auto_wield_left) or ((v.auto_wield_left==true)==(secondary.auto_wield_left==true) and (preference>best_preference or (preference==best_preference and value>rank))) then secondary=v;rank=value;best_preference=preference end
+       if not secondary or (v.auto_wield_left and not secondary.auto_wield_left) or ((v.auto_wield_left==true)==(secondary.auto_wield_left==true)
+        and (priority>best_priority or priority==best_priority and (preference>best_preference or preference==best_preference and (bonus>best_bonus or bonus==best_bonus and value>rank)))) then
+        secondary=v;rank=value;best_preference=preference;best_priority=priority;best_bonus=bonus end
       end
      end
     end
@@ -2772,18 +2849,8 @@ local function tick(s,p)
    elseif current then return equip(current,false,true) end
   end
   if mode=='missile' and weapon and (weapon.ammo_type or 0)~=0 then
-   local ammo,rank,unknown_ammo,best_preference=nil,-1,nil,-1
-   for _,v in ipairs(inventory) do if band(v.slots,0x800000)~=0 and v.ammo_type==weapon.ammo_type and not v.identified then unknown_ammo=v end end
-   for _,v in ipairs(inventory) do if band(v.slots,0x800000)~=0 and v.ammo_type==weapon.ammo_type and v.can_wield then
-    local value=(v.damage or 1)*resistance(target,v.damage_type or 2)
-    local preference=element_preference(target,v.damage_type or 2)
-    if damage_override and damage_override~=0 and band(v.damage_type,damage_override)==0 then value=-1 end
-    if v.equipped then value=value*1.01 end
-    if value>=0 and (preference>best_preference or (preference==best_preference and value>rank)) then ammo=v;rank=value;best_preference=preference end
-   end end
-   if not ammo and unknown_ammo then return assess(unknown_ammo) end
-   if not ammo then return failed('No usable ammunition for this weapon') end
-   if not ammo.equipped then return equip(ammo) end
+   if not plan.ammo then return failed('No usable ammunition for this weapon') end
+   if not plan.ammo.equipped then return equip(plan.ammo) end
   end
   local range=mode=='melee' and option('melee_range',2) or option('radius',30)
   if target_rule and (target_rule.range or 0)>0 then range=target_rule.range end
@@ -2803,8 +2870,7 @@ local function tick(s,p)
    if option('auto_attack_power',true) and weapon then
     power=1
     if mode=='melee' then
-     local damage=damage_override
-     if not damage or damage==0 then damage=preferred_damage(target,weapon.damage_type) end
+     local damage=plan.attack_element or preferred_damage(target,weapon.damage_type)
      local secondary='none';for _,v in ipairs(inventory) do if v.equipped and band(v.equipped_slot,0x200000)~=0 then secondary=band(v.type,1)~=0 and 'melee' or 'shield';break end end
      local dual=weapon.damage_type==3;local multi=band(weapon.attack_type,0x40)~=0
      if weapon.weapon_type==1 and secondary~='melee' then power=damage==1 and dual and .5 or 0

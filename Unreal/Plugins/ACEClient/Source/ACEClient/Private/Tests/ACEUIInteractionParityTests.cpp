@@ -834,6 +834,13 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     }
     auto* Face=Video?Cast<UComboBoxString>(Video->WidgetTree->FindWidget(TEXT("ChatFontFace"))):nullptr;
     auto* FontSize=Video?Cast<UComboBoxString>(Video->WidgetTree->FindWidget(TEXT("ChatFontSize"))):nullptr;
+    auto* PluginScale=Video?Cast<UComboBoxString>(Video->WidgetTree->FindWidget(TEXT("PluginTextScale"))):nullptr;
+    if(TestNotNull(TEXT("Independent Lua text scale control"),PluginScale))
+    {
+        PluginScale->SetSelectedIndex(5);Video->ApplyInterfaceOptions();Video->ResetVideo();
+        TestEqual(TEXT("Plugin text scale applies and reloads"),ACERuntimeOptions::PluginTextScale(),2.f);
+        TestEqual(TEXT("Saved 200% selection retained"),PluginScale->GetSelectedIndex(),5);
+    }
     if(TestNotNull(TEXT("Retail chat font face control"),Face) && TestNotNull(TEXT("Retail chat font size control"),FontSize))
     {
         TestEqual(TEXT("All five retail font faces"),Face->GetOptionCount(),5);TestEqual(TEXT("All five retail font sizes"),FontSize->GetOptionCount(),5);
@@ -845,13 +852,35 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
             const auto* Font=Row->GetBitmapFont();
             TestTrue(TEXT("Every chosen face/size resolves a real retail atlas"),Font && Font->Id==ACERuntimeOptions::ChatFontId());
             TestTrue(TEXT("Changing fonts preserves selectable chat"),Row->IsSelectable());
+            for(int32 W=0;W<=4;++W)
+            {
+                const FString RootName=W==0?TEXT("RootGameplay_FloatyMainChat_Field"):FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"),W);
+                const auto Root=Manager->FindElementByName(RootName);
+                const auto Entry=Manager->FindElementUnder(RootName,TEXT("ChatPanelTextEntry"));
+                const auto Send=Manager->FindElementUnder(RootName,TEXT("SendButton"));
+                const auto ChatLog=Manager->FindElementUnder(RootName,TEXT("ChatLog"));
+                auto* Input=Binder->GetChatEntryWidget(W);
+                if(!TestTrue(TEXT("All chat windows retain their input and send control"),Root&&Entry&&Send&&ChatLog&&Input))continue;
+                TestTrue(TEXT("Typing font follows selected chat font and canvas scale"),FMath::IsNearlyEqual(float(Input->GetWidgetStyle().TextStyle.Font.Size),Font->MaxCharHeight*.75f*float(Canvas->GetLastScale2D().Y)));
+                TestTrue(*FString::Printf(TEXT("Chat %d font %08X typing height %d fits %d plus padding"),W,Font->Id,Entry->Height,Font->MaxCharHeight),Entry->Height>=int32(Font->MaxCharHeight)+4);
+                TestTrue(TEXT("Chat log stays above entry"),ChatLog->GetScreenOrigin().Y+ChatLog->Height<=Entry->GetScreenOrigin().Y);
+                TestTrue(TEXT("Send button stays beside entry"),Entry->GetScreenOrigin().X+Entry->Width<=Send->GetScreenOrigin().X);
+                const auto Before=Entry->GetScreenOrigin();const int32 Height=Entry->Height,Width=Entry->Width;
+                for(int32 Pass=0;Pass<3;++Pass)UACEUIElementManager::ApplyFloatyResizeLayout(Root);
+                TestEqual(TEXT("Reflow does not accumulate input offsets"),Entry->GetScreenOrigin(),Before);
+                TestEqual(TEXT("Reflow does not accumulate input height"),Entry->Height,Height);
+                TestEqual(TEXT("Reflow does not accumulate input width"),Entry->Width,Width);
+            }
         }
         Face->SetSelectedIndex(3);FontSize->SetSelectedIndex(4);Video->ApplyInterfaceOptions();
         Video->ResetVideo();TestEqual(TEXT("Reset retains applied Tahoma"),Face->GetSelectedIndex(),3);
         TestEqual(TEXT("Reset retains applied extra large size"),FontSize->GetSelectedIndex(),4);
+        Binder->GetChatEntryWidget(0)->SetText(FText::FromString(TEXT("Larger chat entry text stays clear of Send.")));
+        TestEqual(TEXT("Chat sizing does not change plugin sizing"),ACERuntimeOptions::PluginTextScale(),2.f);
         Draw(TEXT("ChatFontExtraLarge"));
         Video->DefaultsVideo();Video->ApplyInterfaceOptions();Binder->RefreshChatRowLayout(0);
         TestEqual(TEXT("Defaults restore original retail chat font"),Row->GetBitmapFont()->Id,0x40000000u);
+        TestEqual(TEXT("Defaults restore plugin scale independently"),ACERuntimeOptions::PluginTextScale(),1.f);
     }
 
     // Retail separates skill-credit training from XP advancement, including the

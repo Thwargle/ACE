@@ -1,4 +1,5 @@
 #include "Mods/ACEPluginStyle.h"
+#include "ACERuntimeOptions.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
@@ -143,7 +144,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
         [SNew(SACEPluginText).Text(FText::FromString(TEXT("C"))).Font(FACEPluginStyle::NativeFont("Regular",14))]];
     Rows->AddSlot().AutoHeight().Padding(2,4)[Quick];
     // Text length must never change the Micro window/drag-bar dimensions.
-    Rows->AddSlot().AutoHeight().Padding(2,4)[SNew(SBox).WidthOverride(1).HeightOverride(40).Clipping(EWidgetClipping::ClipToBounds)
+    Rows->AddSlot().AutoHeight().Padding(2,4)[SNew(SBox).WidthOverride(1).HeightOverride_Lambda([](){return FOptionalSize(40.f*ACERuntimeOptions::PluginTextScale());}).Clipping(EWidgetClipping::ClipToBounds)
         .ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([Host](){return FText::FromString(Host.IsValid()?Host->UCMCurrentStatus():FString());})))
         [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[SNew(SACEPluginText).Text(FText::FromString(TEXT("Current status"))).Font(FACEPluginStyle::NativeFont("Regular",13))]
         +SVerticalBox::Slot().AutoHeight()[SNew(SACEPluginText).AutoWrapText(false).Font(FACEPluginStyle::NativeFont("Regular",14))

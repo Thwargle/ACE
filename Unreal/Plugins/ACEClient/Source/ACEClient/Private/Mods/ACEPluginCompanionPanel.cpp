@@ -195,7 +195,7 @@ namespace ACEPluginCompanionPanelPrivate
             else if(Type==TEXT("input"))
             {
                 auto Applying=MakeShared<bool>(false);
-                auto Input=SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",15)).Text(FText::FromString(S(R,TEXT("value"))))
+                auto Input=SNew(SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",15)).Text(FText::FromString(S(R,TEXT("value"))))
                     .HintText_Lambda([R](){return FText::FromString(S(R,TEXT("placeholder")));}).SelectAllTextWhenFocused(false)
                     .OnTextChanged_Lambda([Changed,R,Applying](const FText& Text){if(!*Applying&&B(R,TEXT("live"),false))Changed(MakeShared<FJsonValueString>(Text.ToString().Left(1024)));})
                     .OnTextCommitted_Lambda([Changed,Applying](const FText& Text,ETextCommit::Type){if(!*Applying)Changed(MakeShared<FJsonValueString>(Text.ToString().Left(1024)));});
@@ -205,7 +205,7 @@ namespace ACEPluginCompanionPanelPrivate
             }
             else if(Type==TEXT("number"))
             {
-                auto Input=SNew(SSpinBox<double>).Style(&FACEPluginStyle::Current()->Spin).Font(FACEPluginStyle::NativeFont("Regular",15)).MinValue(N(R,TEXT("min"))).MaxValue(N(R,TEXT("max"),100)).Delta(N(R,TEXT("step"),1)).Value(N(R,TEXT("value")))
+                auto Input=SNew(SACEPluginSpinBox<double>).Style(&FACEPluginStyle::Current()->Spin).Font(FACEPluginStyle::NativeFont("Regular",15)).MinValue(N(R,TEXT("min"))).MaxValue(N(R,TEXT("max"),100)).Delta(N(R,TEXT("step"),1)).Value(N(R,TEXT("value")))
                     .OnValueCommitted_Lambda([Changed](double V,ETextCommit::Type){Changed(MakeShared<FJsonValueNumber>(V));})
                     .OnEndSliderMovement_Lambda([Changed](double V){Changed(MakeShared<FJsonValueNumber>(V));});
                 Node->Sync=[R,Input](){if(Input->HasAnyUserFocusOrFocusedDescendants()||Input->HasMouseCapture())return false;

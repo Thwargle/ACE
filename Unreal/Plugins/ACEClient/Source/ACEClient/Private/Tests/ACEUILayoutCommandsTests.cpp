@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
 #include "Misc/FileHelper.h"
@@ -52,7 +53,7 @@ bool FACEUILayoutCommandsTest::RunTest(const FString&)
 
     auto* GI = NewObject<UGameInstance>();
     auto* Dat = NewObject<UACEDatSubsystem>(GI);
-    if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat->LoadDatDirectory(ACETestDatDirectory())) return false;
     auto* Manager = NewObject<UACEUIElementManager>(); Manager->Initialize();
     auto* Layout = NewObject<UACEUILayoutResolver>(); Layout->Initialize(Dat, Manager);
     if (!Layout->LoadLayout(ACEUI::LayoutId::ClassicGameplay)) return false;
@@ -164,11 +165,20 @@ bool FACEUILayoutCommandsTest::RunTest(const FString&)
     const FString NamedPath = FPaths::ProjectSavedDir()/TEXT("UILayouts")/(Stem + TEXT(".txt"));
     FString AutoPath; TestTrue(TEXT("Automatic path available"), Binder->GetAutoUILayoutPath(AutoPath));
     ON_SCOPE_EXIT { IFileManager::Get().Delete(*NamedPath); IFileManager::Get().Delete(*AutoPath); Manager->Shutdown(); Dat->Deinitialize(); };
+    const FString BeforePeek = Manager->ExportScreenLayout();
+    Binder->ToggleMainChatExpanded();
+    TestTrue(TEXT("Bottom chat peek grows upward"), Chat->Height > 240 && Chat->GetDrawY() < 640);
+    TestEqual(TEXT("Export excludes peek size and displacement"), Manager->ExportScreenLayout(), BeforePeek);
     TestTrue(TEXT("Slash save consumed locally"), Binder->TryDispatchChatCommand(TEXT("/saveui ") + Stem));
     TestTrue(TEXT("Named snapshot saved"), IFileManager::Get().FileExists(*NamedPath));
+    TestTrue(TEXT("Saving does not collapse the visible peek"), Chat->ChatPeekRestore.IsSet() && Chat->Height > 240);
     Chat->UserDragX += 55; Chat->RecomputeLayoutOffset();
     TestTrue(TEXT("At-sign load consumed locally"), Binder->TryDispatchChatCommand(TEXT("@loadui ") + Stem));
     TestEqual(TEXT("Named command restored chat"), Chat->GetDrawX(), 35);
+    TestEqual(TEXT("Named save while peeking preserves normal height"), Chat->Height, 240);
+    TestEqual(TEXT("Named save while peeking preserves normal position"), Chat->GetDrawY(), 640);
+    TestFalse(TEXT("Loading a layout cancels stale peek state"), Chat->ChatPeekRestore.IsSet());
+    Binder->ToggleMainChatExpanded();
     Binder->TryDispatchChatCommand(TEXT("/saveautoui"));
     TestTrue(TEXT("Automatic snapshot saved"), IFileManager::Get().FileExists(*AutoPath));
     FString Before; Load(AutoPath, Before, Error);
@@ -177,6 +187,8 @@ bool FACEUILayoutCommandsTest::RunTest(const FString&)
     TestEqual(TEXT("Dragging does not overwrite explicit auto snapshot"), After, Before);
     Binder->UpdateAutoUILayout();
     TestEqual(TEXT("First character context automatically restores snapshot"), Chat->GetDrawX(), 35);
+    TestEqual(TEXT("Automatic snapshot also excludes peek height"), Chat->Height, 240);
+    TestFalse(TEXT("Automatic restore clears peek state"), Chat->ChatPeekRestore.IsSet());
     Chat->UserDragX += 20; Chat->RecomputeLayoutOffset(); Binder->UpdateAutoUILayout();
     TestEqual(TEXT("Ordinary HUD ticks do not keep reloading"), Chat->GetDrawX(), 55);
     Binder->TryDispatchChatCommand(TEXT("/loadautoui"));
@@ -222,6 +234,42 @@ bool FACEUILayoutCommandsTest::RunTest(const FString&)
         Manager->ApplyEdgeAnchoredLayout(1920,1080);
         TestEqual(TEXT("Enabling bounds recovers retail windows"),FIntPoint(Radar->GetDrawX(),Radar->GetDrawY()),FIntPoint::ZeroValue);
     }
+    // The square is a temporary reading aid, even when a separate action saves
+    // every window, or the HUD is destroyed by logout while it is still open.
+    Manager->ImportScreenLayout(TEXT("<CHAT> X:35 Y:640 W:520 H:240"), Error);
+    Binder->ToggleMainChatExpanded();
+    Chat->UserResizeW += 80; UACEUIElementManager::ApplyFloatyResizeLayout(Chat);
+    Manager->SetUiLocked(!Manager->IsUiLocked());
+    Manager->LoadFloatyLayout();
+    TestEqual(TEXT("Normal layout save retains intentional width changes during peek"), Chat->Width, 600);
+    TestEqual(TEXT("Normal layout reload excludes peek height"), Chat->Height, 240);
+    TestEqual(TEXT("Normal layout reload excludes peek position"), Chat->GetDrawY(), 640);
+    TestFalse(TEXT("Normal layout reload clears peek state"), Chat->ChatPeekRestore.IsSet());
+    Binder->ToggleMainChatExpanded(); Binder->ToggleMainChatExpanded();
+    TestEqual(TEXT("Next expand/collapse restores loaded geometry"), FIntPoint(Chat->GetDrawY(), Chat->Height), FIntPoint(640,240));
+    Manager->ImportScreenLayout(TEXT("<CHAT> X:35 Y:40 W:600 H:240"), Error);
+    const FString TopLayout = Manager->ExportScreenLayout();
+    Binder->ToggleMainChatExpanded();
+    TestTrue(TEXT("Top chat peek grows downward"), Chat->Height > 240 && Chat->GetDrawY() == 40);
+    TestEqual(TEXT("Top chat export excludes peek too"), Manager->ExportScreenLayout(), TopLayout);
+    Manager->ImportScreenLayout(TEXT("<CHAT> X:35 Y:640 W:600 H:240"), Error);
+    Binder->ToggleMainChatExpanded();
+    Manager->ApplyEdgeAnchoredLayout(1280,720);
+    Manager->ApplyEdgeAnchoredLayout(1920,1080);
+    Manager->SaveFloatyLayout();
+    Manager->Shutdown();
+    auto* LoginManager = NewObject<UACEUIElementManager>(); LoginManager->Initialize();
+    auto* LoginLayout = NewObject<UACEUILayoutResolver>(); LoginLayout->Initialize(Dat, LoginManager);
+    TestTrue(TEXT("Gameplay reloads after logout while peeking"), LoginLayout->LoadLayout(ACEUI::LayoutId::ClassicGameplay));
+    LoginManager->ApplyEdgeAnchoredLayout(1920,1080);
+    const auto LoginChat = LoginManager->FindElementByName(TEXT("RootGameplay_FloatyMainChat_Field"));
+    if (TestTrue(TEXT("Fresh login has main chat"), LoginChat.IsValid()))
+    {
+        TestEqual(TEXT("Logout during peek keeps normal size"), FIntPoint(LoginChat->Width,LoginChat->Height), FIntPoint(600,240));
+        TestEqual(TEXT("Logout during peek keeps normal position"), FIntPoint(LoginChat->GetDrawX(),LoginChat->GetDrawY()), FIntPoint(35,640));
+        TestFalse(TEXT("Fresh login starts without a peek"), LoginChat->ChatPeekRestore.IsSet());
+    }
+    LoginManager->Shutdown();
     return true;
 }
 #endif

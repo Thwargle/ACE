@@ -34,7 +34,7 @@ def convert(source):
             next(lines)
         tables[name] = [dict(zip(columns, (value() for _ in columns)))
                         for _ in range(int(next(lines)))]
-    protocol = {0: 2, 1: 4, 2: 1, 3: 32, 4: 64, 5: 16, 6: 8, 9: 1024}
+    protocol = {0: 2, 1: 4, 2: 1, 3: 32, 4: 64, 5: 8, 6: 16, 9: 1024}
     def elements(text):
         return list(dict.fromkeys(protocol[int(v)] for v in text.split(';') if int(v) in protocol))
     # Column positions are the public VT schema (e0.d): monster overrides win

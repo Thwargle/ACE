@@ -617,35 +617,69 @@ void UACEUIGameplayBinder::ToggleMainChatExpanded()
 	// keeping any width changes made while expanded and respecting the screen.
 	const int32 ScreenHeight = Parent->Height;
 	const int32 OldY = Root->GetDrawY();
+	if (Root->AuthoredHeight < 0) Root->AuthoredHeight = Root->Height;
 	int32 Y, Height;
-	if (bMainChatExpanded)
+	if (Root->ChatPeekRestore.IsSet())
 	{
-		Height = FMath::Clamp(MainChatRestoreHeight, Root->MinHeight, Root->MaxHeight);
+		Height = FMath::Clamp(Root->AuthoredHeight + Root->GetPersistentResizeH(), Root->MinHeight, Root->MaxHeight);
 		Height = FMath::Min(Height, ScreenHeight);
-		Y = FMath::Clamp(MainChatRestoreY, 0, FMath::Max(0, ScreenHeight - Height));
+		Y = FMath::Clamp(Root->Y + Root->EdgeAnchorY + Root->GetPersistentDragY(), 0, FMath::Max(0, ScreenHeight - Height));
+		Root->ChatPeekRestore.Reset();
 	}
 	else
 	{
-		MainChatRestoreY = OldY;
-		MainChatRestoreHeight = Root->Height;
+		Root->ChatPeekRestore = FACEUIElement::FChatPeekRestore{Root->UserDragY, Root->UserResizeH};
 		const int32 HalfScreen = ScreenHeight / 2;
 		Y = OldY < HalfScreen && OldY + Root->Height < ScreenHeight ? OldY : OldY - HalfScreen;
 		Y = FMath::Clamp(Y, 0, FMath::Max(0, ScreenHeight - Root->MinHeight));
 		Height = FMath::Min(FMath::Clamp(Root->Height + HalfScreen, Root->MinHeight, Root->MaxHeight), ScreenHeight - Y);
 	}
-	if (Root->AuthoredHeight < 0) Root->AuthoredHeight = Root->Height;
 	Root->UserResizeH = Height - Root->AuthoredHeight;
 	Root->UserDragY += Y - OldY;
 	Root->RecomputeLayoutOffset();
 	UACEUIElementManager::ApplyFloatyResizeLayout(Root);
-	bMainChatExpanded = !bMainChatExpanded;
 	RefreshChatChromeOverlays();
 	RefreshInventoryOverlays(); // Reposition the log and entry on their resized DAT regions.
 	Manager->SaveFloatyLayout();
 }
 
+void UACEUIGameplayBinder::RefreshChatEntryLayouts()
+{
+	if(!Canvas||!Manager)return;
+	const uint32 FontId=ACERuntimeOptions::ChatFontId();
+	if(ChatEntryFontId!=FontId)
+	{
+		FACEDatFont Font;
+		if(auto* Resources=Canvas->GetResourceResolver();Resources&&Resources->ResolveFont(FontId,Font))
+		{ChatEntryFontId=FontId;ChatEntryLineHeight=FMath::Max(1u,Font.MaxCharHeight);}
+	}
+	const float Points=FMath::Max(1.f,ChatEntryLineHeight*.75f*float(Canvas->GetLastScale2D().Y));
+	for(int32 Window=0;Window<=NumFloatyChats;++Window)
+	{
+		const FString RootName=Window==0?TEXT("RootGameplay_FloatyMainChat_Field"):FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"),Window);
+		if(const auto Root=Manager->FindElementByName(RootName))
+		{
+			if(Root->ChatEntryLineHeight!=ChatEntryLineHeight)
+			{Root->ChatEntryLineHeight=ChatEntryLineHeight;UACEUIElementManager::ApplyFloatyResizeLayout(Root);}
+			for(const TCHAR* Name:{TEXT("SendButton"),TEXT("ChatTargetButtonText")})
+				if(const auto Label=Manager->FindElementUnder(RootName,Name))Label->FontId=FontId;
+		}
+		if(auto* Entry=GetChatEntryWidget(Window))
+		{
+			// UE's SetWidgetStyle forwards the caller's style address to Slate.
+			// Keep that address on the widget, never in a temporary stack copy.
+			auto& Style=Entry->WidgetStyle;
+			if(!FMath::IsNearlyEqual(float(Style.TextStyle.Font.Size),Points))
+			{Style.TextStyle.Font.Size=Points;Entry->SetWidgetStyle(Style);}
+		}
+	}
+	if(auto* Label=Cast<UACERetailTextBlock>(ChatSendLabel))Label->SetFontOverride(FontId);
+	if(auto* Label=Cast<UACERetailTextBlock>(ChatTargetLabel))Label->SetFontOverride(FontId);
+}
+
 void UACEUIGameplayBinder::RefreshChatRowLayout(int32 Window)
 {
+	RefreshChatEntryLayouts();
 	if (!Canvas || !Manager || Window < 0 || Window > NumFloatyChats) return;
 	auto* Log = GetChatLogWidget(Window);
 	const FString Root = Window ? FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"), Window)

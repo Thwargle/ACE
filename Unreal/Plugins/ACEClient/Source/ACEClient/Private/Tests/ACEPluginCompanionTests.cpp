@@ -20,6 +20,10 @@
 #include "Widgets/Input/SButton.h"
 #include "Serialization/JsonSerializer.h"
 #include "HAL/FileManager.h"
+#include "ACERuntimeOptions.h"
+#include "ACEDatSubsystem.h"
+#include "ACETestDatDirectory.h"
+#include "Mods/ACEPluginStyle.h"
 
 namespace
 {
@@ -231,8 +235,52 @@ bool FACEPluginCompanionTest::RunTest(const FString&)
     }
     if(FApp::CanEverRender())
     {
+        const float OriginalScale=ACERuntimeOptions::Get(TEXT("PluginTextScale"));
+        ON_SCOPE_EXIT{ACERuntimeOptions::Set(TEXT("PluginTextScale"),OriginalScale);};
+        TestTrue(TEXT("DAT available for plugin text scaling"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(ACETestDatDirectory()));
+        ACERuntimeOptions::Set(TEXT("PluginTextScale"),1.f);
         H->ApplyCompanionOutput(*P,J(TEXT(R"({"ui":[{"id":"rat","text":"Red Rat - 5 m","action":"select","target":12},{"id":"progress","text":"Kill task: 12 / 50"},{"id":"nav","text":"Point arrow to nearest Red Rat","action":"waypoint","target":12}]})")),Error);
         FWidgetRenderer Renderer(false,true);auto Panel=H->MakePanel(P->Id);const FVector2D Size(540,720);auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
+        for(int I=0;I<3;++I){Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}
+        TSharedPtr<SACEPluginText> Label,ButtonLabel;
+        TFunction<void(TSharedRef<SWidget>)> FindLabel=[&](TSharedRef<SWidget> Widget)
+        {
+            if(Widget->GetType()==TEXT("SACEPluginText"))
+            {
+                auto Text=StaticCastSharedRef<SACEPluginText>(Widget);
+                if(Text->GetText().ToString()==TEXT("Kill task: 12 / 50"))Label=Text;
+                if(Text->GetText().ToString()==TEXT("Red Rat - 5 m"))ButtonLabel=Text;
+            }
+            auto* Children=Widget->GetChildren();for(int32 I=0;I<Children->Num();++I)FindLabel(Children->GetChildAt(I));
+        };
+        FindLabel(Panel);
+        if(TestTrue(TEXT("Lua label found in live companion tree"),Label.IsValid()))
+        {
+            const float OriginalFont=Label->GetFont().Size;const float OriginalHeight=Label->GetDesiredSize().Y;
+            ACERuntimeOptions::Set(TEXT("PluginTextScale"),2.f);
+            for(int I=0;I<4;++I){Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}
+            TestEqual(TEXT("Existing Lua label adopts 200% font without rebuild"),Label->GetFont().Size,OriginalFont*2.f);
+            TestTrue(TEXT("Layout reserves space for enlarged Lua text"),Label->GetDesiredSize().Y>=OriginalHeight*1.9f);
+            if(TestTrue(TEXT("Lua action label found"),ButtonLabel.IsValid()))
+                TestTrue(TEXT("Short enlarged button label uses the available row width"),ButtonLabel->GetDesiredSize().Y<60.f);
+            ACERuntimeOptions::Set(TEXT("PluginTextScale"),.75f);
+            for(int I=0;I<3;++I){Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}
+            TestEqual(TEXT("Existing Lua label shrinks without compounding"),Label->GetFont().Size,OriginalFont*.75f);
+            ACERuntimeOptions::Set(TEXT("PluginTextScale"),1.f);
+        }
+        auto Input=SNew(SACEPluginEditableTextBox).Font(FACEPluginStyle::NativeFont("Regular",15)).Text(FText::FromString(TEXT("Unsaved draft")));
+        auto Number=SNew(SACEPluginSpinBox<double>).Font(FACEPluginStyle::NativeFont("Regular",15)).Value(42.);
+        auto Editor=SNew(SACEPluginMultiLineEditableTextBox).Font(FACEPluginStyle::NativeFont("Regular",15)).Text(FText::FromString(TEXT("First command\nSecond command")));
+        auto CheckControls=[&](){for(const TSharedRef<SWidget>& Control:{StaticCastSharedRef<SWidget>(Input),StaticCastSharedRef<SWidget>(Number),StaticCastSharedRef<SWidget>(Editor)})
+            for(int I=0;I<3;++I){Renderer.DrawWidget(Target,Control,Size,0);FlushRenderingCommands();}};
+        CheckControls();const float InputHeight=Input->GetDesiredSize().Y,NumberHeight=Number->GetDesiredSize().Y,EditorHeight=Editor->GetDesiredSize().Y;
+        ACERuntimeOptions::Set(TEXT("PluginTextScale"),2.f);CheckControls();
+        TestTrue(TEXT("Editable fields reserve enlarged font height"),Input->GetDesiredSize().Y>InputHeight+8);
+        TestTrue(TEXT("Numeric fields reserve enlarged font height"),Number->GetDesiredSize().Y>NumberHeight+8);
+        TestTrue(TEXT("Multiline editors reserve enlarged line height"),Editor->GetDesiredSize().Y>EditorHeight+8);
+        TestEqual(TEXT("Scaling preserves unsaved input"),Input->GetText().ToString(),FString(TEXT("Unsaved draft")));
+        TestEqual(TEXT("Scaling preserves numeric input"),Number->GetValue(),42.);
+        TestEqual(TEXT("Scaling preserves unsaved multiline input"),Editor->GetText().ToString(),FString(TEXT("First command\nSecond command")));
         for(int I=0;I<3;++I){Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}
         TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
         TArray64<uint8> Png;FImageUtils::PNGCompressImageArray(540,720,Pixels,Png);FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("Companion-panel.png")));Target->ReleaseResource();

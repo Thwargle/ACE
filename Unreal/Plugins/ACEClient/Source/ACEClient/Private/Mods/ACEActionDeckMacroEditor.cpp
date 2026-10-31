@@ -46,7 +46,7 @@ public:
         auto Identity=SNew(SHorizontalBox);
         Identity->AddSlot().FillWidth(1).Padding(0,0,12,0)[SNew(SVerticalBox)
             +SVerticalBox::Slot().AutoHeight()[Label(TEXT("Macro name"))]
-            +SVerticalBox::Slot().AutoHeight()[SAssignNew(Name,SEditableTextBox).Tag(TEXT("ActionDeck.Macro.Name")).Style(&Theme->Edit)
+            +SVerticalBox::Slot().AutoHeight()[SAssignNew(Name,SACEPluginEditableTextBox).Tag(TEXT("ActionDeck.Macro.Name")).Style(&Theme->Edit)
                 .Font(FACEPluginStyle::NativeFont("Regular",15)).Text(FText::FromString(Editing?Slot.Item.Name:TEXT("")))
                 .OnTextChanged_Lambda([this](const FText&){Error.Empty();})]];
         Identity->AddSlot().AutoWidth()[SNew(SBox).WidthOverride(180)[SNew(SVerticalBox)
@@ -66,7 +66,7 @@ public:
             .Text(FText::FromString(TEXT("All icons"))).Selected_Lambda([this]{return All;})
             .OnClicked_Lambda([this]{All=true;Page=0;RebuildIcons();return FReply::Handled();})];
         Body->AddSlot().AutoHeight().Padding(0,8,0,4)[IconHeading];
-        Body->AddSlot().AutoHeight()[SNew(SEditableTextBox).Tag(TEXT("ActionDeck.Macro.IconSearch")).Style(&Theme->Edit)
+        Body->AddSlot().AutoHeight()[SNew(SACEPluginEditableTextBox).Tag(TEXT("ActionDeck.Macro.IconSearch")).Style(&Theme->Edit)
             .Font(FACEPluginStyle::NativeFont("Regular",15)).HintText(FText::FromString(TEXT("Find inventory / known spell name or hexadecimal icon ID")))
             .OnTextChanged_Lambda([this](const FText& T){Search=T.ToString().TrimStartAndEnd();Page=0;RebuildIcons();})];
         Body->AddSlot().AutoHeight().Padding(0,4)[SNew(SBox).HeightOverride(136)[SAssignNew(Icons,SVerticalBox).Tag(TEXT("ActionDeck.Macro.IconGrid"))]];
@@ -80,7 +80,7 @@ public:
         Body->AddSlot().AutoHeight()[Pager];
         Body->AddSlot().AutoHeight().Padding(0,8,0,3)[Label(TEXT("Commands · one per line"))];
         Body->AddSlot().AutoHeight()[SNew(SBox).HeightOverride(116)
-            [SAssignNew(Commands,SMultiLineEditableTextBox).Tag(TEXT("ActionDeck.Macro.Commands")).Style(&Theme->Edit)
+            [SAssignNew(Commands,SACEPluginMultiLineEditableTextBox).Tag(TEXT("ActionDeck.Macro.Commands")).Style(&Theme->Edit)
                 .Font(FACEPluginStyle::NativeFont("Regular",15)).AutoWrapText(true)
                 .Text(FText::FromString(Editing?Slot.MacroText:TEXT("")))
                 .OnTextChanged_Lambda([this](const FText&){Error.Empty();})
@@ -88,7 +88,7 @@ public:
         Body->AddSlot().AutoHeight().Padding(0,4)[Label(TEXT("/wait uses milliseconds: 1000 = 1 second, 30000 = 30 seconds."),12)];
         auto Delay=SNew(SHorizontalBox);
         Delay->AddSlot().FillWidth(1).VAlign(VAlign_Center)[Label(TEXT("Extra delay between commands (ms)"),12)];
-        Delay->AddSlot().AutoWidth()[SNew(SBox).WidthOverride(120)[SNew(SSpinBox<int32>).Tag(TEXT("ActionDeck.Macro.Delay"))
+        Delay->AddSlot().AutoWidth()[SNew(SBox).WidthOverride(120)[SNew(SACEPluginSpinBox<int32>).Tag(TEXT("ActionDeck.Macro.Delay"))
             .Style(&Theme->Spin).MinValue(0).MaxValue(3600000).MinSliderValue(0).MaxSliderValue(30000).Delta(100)
             .Value_Lambda([this]{return Spacing;}).OnValueChanged_Lambda([this](int32 V){Spacing=V;Error.Empty();})]];
         Body->AddSlot().AutoHeight()[Delay];

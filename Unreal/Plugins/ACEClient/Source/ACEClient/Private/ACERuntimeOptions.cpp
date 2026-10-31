@@ -12,6 +12,8 @@ namespace ACERuntimeOptions
 namespace
 {
  uint64 SoundSettingsFrame=MAX_uint64;
+ uint64 PluginTextSettingsFrame=MAX_uint64;
+ float CachedPluginTextScale=1.f;
  float AmbientGain=1.f,EffectsGain=1.f;
  int32 AppliedDynamicLightingQuality=2;
 }
@@ -48,12 +50,14 @@ void Set(const TCHAR* Key,float Value)
  if (!FMath::IsFinite(Value)) return;
  if (FCString::Strcmp(Key,TEXT("DesktopUIScale"))==0) Value=FMath::RoundToFloat(Value*4.f)/4.f;
  SoundSettingsFrame=MAX_uint64;
+ PluginTextSettingsFrame=MAX_uint64;
  for (const auto& O : Values) if (FCString::Strcmp(O.Key,Key)==0 && GConfig)
   GConfig->SetFloat(TEXT("ACE.Presentation"),Key,FMath::Clamp(Value,O.Min,O.Max),GGameUserSettingsIni);
 }
 void Apply()
 {
  SoundSettingsFrame=MAX_uint64;
+ PluginTextSettingsFrame=MAX_uint64;
  UACEWorldTextureMipProvider::RefreshQuality();
  const int32 LightingQuality=FMath::RoundToInt(Get(TEXT("DynamicLightingQuality")));
  if (auto* C=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.FXLightBudget")))
@@ -100,6 +104,15 @@ uint32 ChatFontId()
  };
  return Fonts[FMath::Clamp(FMath::RoundToInt(Get(TEXT("ChatFontFace"))),0,4)]
   [FMath::Clamp(FMath::RoundToInt(Get(TEXT("ChatFontSize"))),0,4)];
+}
+float PluginTextScale()
+{
+ if(PluginTextSettingsFrame!=GFrameCounter)
+ {
+  PluginTextSettingsFrame=GFrameCounter;
+  CachedPluginTextScale=Get(TEXT("PluginTextScale"));
+ }
+ return CachedPluginTextScale;
 }
 float DesktopUIScale(FIntPoint Size,bool bVR)
 {

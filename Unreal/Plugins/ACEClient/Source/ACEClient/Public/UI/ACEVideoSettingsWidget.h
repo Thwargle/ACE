@@ -81,5 +81,6 @@ private:
  UPROPERTY() TObjectPtr<UTextBlock> ScreenContrastLabel;
  UPROPERTY() TObjectPtr<UComboBoxString> ChatFontFace;
  UPROPERTY() TObjectPtr<UComboBoxString> ChatFontSize;
+    UPROPERTY() TObjectPtr<UComboBoxString> PluginTextScale;
  UPROPERTY() TObjectPtr<UEditableTextBox> ScreenshotDirectory;
 };

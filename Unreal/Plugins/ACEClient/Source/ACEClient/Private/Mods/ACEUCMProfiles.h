@@ -14,6 +14,7 @@ namespace ACEUCMProfiles
     FString SectionFor(const FString& Key);
     bool SafeName(const FString& Name);
     TSharedPtr<FJsonObject> Copy(const TSharedPtr<FJsonObject>& Object);
+    void NormalizeDamageTypes(const TSharedPtr<FJsonObject>& Profile,const FString& Section=FString());
     TSharedPtr<FJsonObject> Extract(const TSharedPtr<FJsonObject>& Profile, const FString& Section);
     TArray<FString> List(const FString& Root, const FString& Section);
     FString UniqueName(const FString& Root, const FString& Section, const FString& Name);

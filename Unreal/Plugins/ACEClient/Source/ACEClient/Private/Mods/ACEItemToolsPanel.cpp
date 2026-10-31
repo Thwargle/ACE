@@ -107,7 +107,7 @@ private:
     void Quantity(const FString& Key,const FString& Caption,int32 Default=0,int32 Max=100000)
     {
         Add(Tile(SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[Text(Caption)]
-            +SHorizontalBox::Slot().AutoWidth().Padding(10,0)[SNew(SBox).WidthOverride(112)[SNew(SSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).MinValue(0).MaxValue(Max).MinDesiredWidth(104).Font(FACEPluginStyle::NativeFont("Regular",14))
+            +SHorizontalBox::Slot().AutoWidth().Padding(10,0)[SNew(SBox).WidthOverride(112)[SNew(SACEPluginSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).MinValue(0).MaxValue(Max).MinDesiredWidth(104).Font(FACEPluginStyle::NativeFont("Regular",14))
                 .Value_Lambda([this,Key,Default](){return int32(Number(P(),*Key,Default));})
                 .OnValueChanged_Lambda([this,Key](int32 Value){P()->SetNumberField(*Key,Value);})
                 .OnEndSliderMovement_Lambda([this](int32){Save();})
@@ -144,7 +144,7 @@ private:
     void Library()
     {
         Add(Text(TEXT("Loot profile folder"),14,Muted));
-        Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Text(FText::FromString(Host->GetProfileFolder())).OnTextCommitted_Lambda([this](const FText& Value,ETextCommit::Type){Host->SetProfileFolder(Value.ToString());}));
+        Add(SNew(SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Text(FText::FromString(Host->GetProfileFolder())).OnTextCommitted_Lambda([this](const FText& Value,ETextCommit::Type){Host->SetProfileFolder(Value.ToString());}));
         Add(Button(TEXT("Refresh profiles"),[this](){Rebuild();Host->Notice=TEXT("Profile list refreshed. Re-select a profile to apply edits from disk.");}));
         Add(Text(TEXT("Reads .utl files without changing the originals. First matching rule wins; only unlimited Keep items are given; Keep # limits are honored when collecting from chests. Use the Loot Editor to edit rules."),12,Muted));
     }
@@ -166,7 +166,7 @@ private:
             Box->AddSlot().AutoHeight().Padding(0,5)[SNew(SACEPluginText).ColorAndOpacity(Muted).Text_Lambda([this,R](){const uint32 Wcid=uint32(Number(R,TEXT("wcid")));
                 return FText::FromString(FString::Printf(TEXT("Owned: %d  |  %s"),Owned.FindRef(Wcid),Client()->GetOpenVendorGuid()?(Stocked.Contains(Wcid)?TEXT("Available at vendor"):TEXT("Not sold here")):TEXT("Open a vendor to check stock")));})];
             Box->AddSlot().AutoHeight()[SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[Text(TEXT("Keep this many"))]
-                +SHorizontalBox::Slot().AutoWidth().Padding(6,0)[SNew(SSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).MinValue(0).MaxValue(100000).MinDesiredWidth(100).Font(FACEPluginStyle::NativeFont("Regular",14)).Value_Lambda([this,Index](){return int32(Number(P()->GetArrayField(TEXT("restock"))[Index]->AsObject(),TEXT("quantity")));})
+                +SHorizontalBox::Slot().AutoWidth().Padding(6,0)[SNew(SACEPluginSpinBox<int32>).Style(&FACEPluginStyle::Current()->Spin).MinValue(0).MaxValue(100000).MinDesiredWidth(100).Font(FACEPluginStyle::NativeFont("Regular",14)).Value_Lambda([this,Index](){return int32(Number(P()->GetArrayField(TEXT("restock"))[Index]->AsObject(),TEXT("quantity")));})
                     .OnValueChanged_Lambda([this,Index](int32 N){P()->GetArrayField(TEXT("restock"))[Index]->AsObject()->SetNumberField(TEXT("quantity"),N);})
                     .OnEndSliderMovement_Lambda([this](int32){Save();})
                     .OnValueCommitted_Lambda([this,Index](int32 N,ETextCommit::Type){P()->GetArrayField(TEXT("restock"))[Index]->AsObject()->SetNumberField(TEXT("quantity"),N);Save();})]

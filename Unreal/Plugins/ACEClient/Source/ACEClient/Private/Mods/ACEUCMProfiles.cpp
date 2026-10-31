@@ -43,6 +43,7 @@ namespace
         if(Section==TEXT("Metas")){Part->RemoveField(TEXT("vt_revision"));Part->RemoveField(TEXT("vt_loaded_kind"));}
         for (const auto& Pair : Part->Values) if (SectionFor(FString(Pair.Key)) != Section)
         { Error = Section + TEXT(" profile contains a setting from another section: ") + FString(Pair.Key); return nullptr; }
+        NormalizeDamageTypes(Part,Section);
         return Part;
     }
     void Replace(TSharedPtr<FJsonObject>& Profile, const FString& Section, const TSharedPtr<FJsonObject>& Part)
@@ -77,7 +78,7 @@ FString SectionFor(const FString& Key)
         TEXT("looting"), TEXT("buff_others"), TEXT("vendor_restock"), TEXT("meta_enabled"), TEXT("idle_peace"),
         TEXT("import_source"), TEXT("ucm_format_version"), TEXT("loot_revision"), TEXT("vt_revision"), TEXT("vt_loaded_kind")};
     if (Run.Contains(Key)) return TEXT("ucm");
-    if (Key == TEXT("monsters") || Key == TEXT("monster_catalog")) return TEXT("Monsters");
+    if (Key == TEXT("monsters") || Key == TEXT("monster_catalog") || Key == TEXT("monster_damage_version")) return TEXT("Monsters");
     if (Key.StartsWith(TEXT("vendor_"))) return TEXT("Vendors");
     if (Key == TEXT("states") || Key == TEXT("initial_state") || Key.StartsWith(TEXT("vt_"))
         || Key.StartsWith(TEXT("meta_")) || Key == TEXT("met_source")) return TEXT("Metas");
@@ -103,6 +104,27 @@ TSharedPtr<FJsonObject> Copy(const TSharedPtr<FJsonObject>& Object)
     auto Result=MakeShared<FJsonObject>();
     for(const auto& Pair:Object->Values)Result->Values.Add(Pair.Key,Clone(Pair.Value));
     return Result;
+}
+void NormalizeDamageTypes(const TSharedPtr<FJsonObject>& Profile,const FString& Section)
+{
+    // Through v144 the UI/importer encoded Fire=8 and Cold=16. Preserve the
+    // chosen labels while adopting the retail bits. Version each shared section
+    // independently; loading a different Monsters file must migrate that file too.
+    if(!Profile)return;
+    auto Swap=[](const TSharedPtr<FJsonObject>& O,const TCHAR* Key)
+    {double V=0;if(O->TryGetNumberField(Key,V)&&(V==8||V==16))O->SetNumberField(Key,V==8?16:8);};
+    double Version=0;
+    if((Section.IsEmpty()||Section==TEXT("Character"))
+        &&(!Profile->TryGetNumberField(TEXT("character_damage_version"),Version)||Version<2))
+    {Swap(Profile,TEXT("damage_type"));Profile->SetNumberField(TEXT("character_damage_version"),2);}
+    if((Section.IsEmpty()||Section==TEXT("Monsters"))
+        &&(!Profile->TryGetNumberField(TEXT("monster_damage_version"),Version)||Version<2))
+    {
+        const TArray<TSharedPtr<FJsonValue>>* Rules=nullptr;
+        if(Profile->TryGetArrayField(TEXT("monsters"),Rules))for(const auto& Rule:*Rules)
+            if(Rule->Type==EJson::Object){Swap(Rule->AsObject(),TEXT("damage_type"));Swap(Rule->AsObject(),TEXT("secondary_vuln"));}
+        Profile->SetNumberField(TEXT("monster_damage_version"),2);
+    }
 }
 TSharedPtr<FJsonObject> Extract(const TSharedPtr<FJsonObject>& Profile, const FString& Section)
 {
@@ -139,6 +161,7 @@ bool Load(const FString& Root, const FString& Name, TSharedPtr<FJsonObject>& Pro
     if (!Manifest->HasField(TEXT("profile_refs")))
     {
         // The host validates legacy data before calling Save to migrate it.
+        NormalizeDamageTypes(Manifest);
         Profile = Manifest; Links = MakeShared<FJsonObject>(); return true;
     }
     double Version = 0;

@@ -2076,6 +2076,8 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecrea
 	FACEWorldObject Obj;
 	Obj.Guid = Decoded.Guid;
 	Obj.Name = Decoded.Name;
+	Obj.CreateFlags1 = Decoded.CreateFlags1; Obj.CreateFlags2 = Decoded.CreateFlags2; Obj.PhysicsDataFlags = Decoded.PhysicsDataFlags;
+	Obj.PublicPhysicsScript = Decoded.PublicPhysicsScript;
 	Obj.PluralName = Decoded.PluralName;
 	Obj.WeenieClassId = Decoded.WeenieClassId;
 	Obj.IconId = Decoded.IconId;
@@ -6155,6 +6157,7 @@ void FACESession::HandleIdentifyObjectResponse(FACEBinaryReader& Reader)
 		if (Reader.CanRead(12))
 		{
 			const uint32 CreatureFlags = Reader.ReadUInt32();
+			Info.CreatureProfileFlags = CreatureFlags;
 			Info.Health = static_cast<int32>(Reader.ReadUInt32());
 			Info.MaxHealth = static_cast<int32>(Reader.ReadUInt32());
 			Info.bHasCreatureHealth = true;
@@ -6485,6 +6488,8 @@ void FACESession::HandleApproachVendor(FACEBinaryReader& Reader)
 		Obj.Guid = Decoded.Guid;
 		Obj.Name = Decoded.Name;
 		Obj.PluralName = Decoded.PluralName;
+		Obj.CreateFlags1 = Decoded.CreateFlags1; Obj.CreateFlags2 = Decoded.CreateFlags2;
+		Obj.PublicPhysicsScript = Decoded.PublicPhysicsScript;
 		Obj.WeenieClassId = Decoded.WeenieClassId;
 		Obj.IconId = Decoded.IconId;
 		Obj.IconOverlayId = Decoded.IconOverlayId;

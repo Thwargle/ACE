@@ -59,7 +59,7 @@ private:
         auto Content=SNew(SBox).WidthOverride(430).HeightOverride(340)
             [SNew(SBorder).BorderImage(&Style->Background).Padding(8)[SNew(SVerticalBox)
                 +SVerticalBox::Slot().AutoHeight().Padding(0,0,0,6)
-                    [SAssignNew(Search,SEditableTextBox).Tag(TEXT("AutoCraft.Search")).Style(&Style->Edit).HintText(FText::FromString(TEXT("Type to search...")))
+                    [SAssignNew(Search,SACEPluginEditableTextBox).Tag(TEXT("AutoCraft.Search")).Style(&Style->Edit).HintText(FText::FromString(TEXT("Type to search...")))
                         .OnTextChanged(this,&SCraftPicker::Filter)
                         .OnTextCommitted_Lambda([this](const FText&,ETextCommit::Type Type){if(Type==ETextCommit::OnEnter&&!Filtered.IsEmpty())Select(Filtered[0]);})]
                 +SVerticalBox::Slot().FillHeight(1)
@@ -120,7 +120,7 @@ public:
         auto Quantity=SNew(SHorizontalBox);
         Quantity->AddSlot().FillWidth(1).VAlign(VAlign_Center)[Toggle(TEXT("maximum"),TEXT("Max available"),false)];
         Quantity->AddSlot().AutoWidth().Padding(8,0)[SNew(SBox).WidthOverride(140).IsEnabled_Lambda([this](){return !Option(TEXT("maximum"));})
-            [SNew(SSpinBox<int32>).Tag(TEXT("AutoCraft.Quantity")).Style(&Style->Spin).MinValue(1).MaxValue(ACEAutoCraft::MaxUnits).MinDesiredWidth(130)
+            [SNew(SACEPluginSpinBox<int32>).Tag(TEXT("AutoCraft.Quantity")).Style(&Style->Spin).MinValue(1).MaxValue(ACEAutoCraft::MaxUnits).MinDesiredWidth(130)
                 .Value_Lambda([this](){return int32(ACEItemTools::Number(Plugin->Profile,TEXT("quantity"),1));})
                 .OnValueChanged_Lambda([this](int32 Value){Plugin->Profile->SetNumberField(TEXT("quantity"),Value);})
                 .OnValueCommitted_Lambda([this](int32 Value,ETextCommit::Type){Plugin->Profile->SetNumberField(TEXT("quantity"),Value);Save();})

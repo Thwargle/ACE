@@ -7,6 +7,8 @@
 /** Decoded ObjectCreate (0xF745) fields needed for world representation. */
 struct ACECLIENT_API FACEDecodedObject
 {
+	uint32 CreateFlags1 = 0, CreateFlags2 = 0, PhysicsDataFlags = 0;
+	uint16 PublicPhysicsScript = 0;
 	int32 Guid = 0;
 	FString Name;
 	FString PluralName;

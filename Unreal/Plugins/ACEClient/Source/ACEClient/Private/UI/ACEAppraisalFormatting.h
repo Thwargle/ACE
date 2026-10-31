@@ -235,6 +235,8 @@ inline FString WeaponDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Da
     FString Text, Skill; uint32 Icon = 0;
     if (Dat) Dat->TryGetSkillInfo(Info.WeaponSkill, Skill, Icon);
     if (!Skill.IsEmpty()) Text += TEXT("Skill: ") + Skill;
+    // Retail ItemExamineUI adds property 353 independently of the attack skill.
+    // Light Weapons (Unarmed Weapon) is a valid skill/subtype combination.
     static const TCHAR* Types[] = {TEXT(""),TEXT("Unarmed Weapon"),TEXT("Sword"),TEXT("Axe"),TEXT("Mace"),TEXT("Spear"),TEXT("Dagger"),TEXT("Staff"),TEXT("Bow"),TEXT("Crossbow"),TEXT("Thrown")};
     const int32 Type = Info.IntProperties.FindRef(353);
     if (Type > 0 && Type < UE_ARRAY_COUNT(Types))
@@ -427,6 +429,9 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
         {128,TEXT("Cold Rending")},{256,TEXT("Lightning Rending")},{512,TEXT("Fire Rending")},{16384,TEXT("Nether Rending")},
         {1024,TEXT("+1 Melee Defense")},{2048,TEXT("+1 Missile Defense")},{4096,TEXT("+1 Magic Defense")},{0x80000000u,TEXT("Phantasmal")}})
         if (Imbued & E.Key) Properties.Add(E.Value);
+    // ItemExamineUI::Appraisal_ShowSpecialProperties reads ResistMagic (int 36),
+    // including fields supplied by a partially successful appraisal.
+    if (Info.IntProperties.FindRef(36) >= 9999) Properties.Add(TEXT("Unenchantable"));
     if (Info.BoolProperties.FindRef(91)) Properties.Add(TEXT("Retained"));
     for (const auto& Property : {TPair<uint32,const TCHAR*>(136,TEXT("Crushing Blow")),
         {147,TEXT("Biting Strike")},{155,TEXT("Armor Cleaving")}})

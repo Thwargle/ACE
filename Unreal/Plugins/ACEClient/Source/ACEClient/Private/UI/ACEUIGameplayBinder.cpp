@@ -8235,6 +8235,7 @@ void UACEUIGameplayBinder::CastSelectedHotbarSpell()
 
 void UACEUIGameplayBinder::RefreshChatChromeOverlays()
 {
+	RefreshChatEntryLayouts();
 	RefreshChatOpacity();
 	if (!Canvas || !Canvas->WidgetTree || !Manager)
 	{
@@ -8246,7 +8247,8 @@ void UACEUIGameplayBinder::RefreshChatChromeOverlays()
 		// Retail changes this button's explicit maximized/minimized state. Normal
 		// button rollover states have no artwork and otherwise hide the control.
 		Maximize->bUseExplicitState = true;
-		Maximize->DefaultState = bMainChatExpanded ? 0x10000047 : 0x10000048;
+		const auto MainChat = Manager->FindElementByName(TEXT("RootGameplay_FloatyMainChat_Field"));
+		Maximize->DefaultState = MainChat && MainChat->ChatPeekRestore.IsSet() ? 0x10000047 : 0x10000048;
 	}
 	if (!ChatTargetLabel)
 	{

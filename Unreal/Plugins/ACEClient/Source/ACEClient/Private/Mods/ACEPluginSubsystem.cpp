@@ -5,6 +5,7 @@
 #include "ACEPluginVM.h"
 #include "ACEProfiling.h"
 #include "ACEVTProfile.h"
+#include "ACEUCMLootPresentation.h"
 #include "Mods/ACEUCMProfiles.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
@@ -179,7 +180,9 @@ namespace
             for(const TCHAR* K:{TEXT("name"),TEXT("label")})if(FTCHARToUTF8(*String(R,K)).Length()>256)return false;
             for(const TCHAR* K:{TEXT("action"),TEXT("name_mode")})if(R->HasField(K)&&R->Values[K]->Type!=EJson::String)return false;
             if(!TArray<FString>{TEXT("keep"),TEXT("skip"),TEXT("salvage"),TEXT("sell"),TEXT("read")}.Contains(String(R,TEXT("action"),TEXT("keep"))))return false;
-            if(!TArray<FString>{TEXT("prefix"),TEXT("exact"),TEXT("contains")}.Contains(String(R,TEXT("name_mode"),TEXT("prefix"))))return false;
+            if(!TArray<FString>{TEXT("prefix"),TEXT("exact"),TEXT("contains"),TEXT("any"),TEXT("all"),TEXT("regex")}.Contains(String(R,TEXT("name_mode"),TEXT("prefix"))))return false;
+            if(String(R,TEXT("name_mode"))==TEXT("regex")&&!ACEVTProfile::IsSupportedPattern(String(R,TEXT("name"))))return false;
+            if(R->HasField(TEXT("conditions_mode"))&&(!R->HasTypedField<EJson::String>(TEXT("conditions_mode"))||!TArray<FString>{TEXT("all"),TEXT("any")}.Contains(String(R,TEXT("conditions_mode")))))return false;
             if(R->HasField(TEXT("enabled"))&&R->Values[TEXT("enabled")]->Type!=EJson::Boolean)return false;
             if(R->HasField(TEXT("count_by_name"))&&R->Values[TEXT("count_by_name")]->Type!=EJson::Boolean)return false;
             if(R->HasField(TEXT("compatibility_issues")))
@@ -204,16 +207,23 @@ namespace
                     if(Field==TEXT("legacy"))
                     {
                         const int Key=int(Number(C,TEXT("key")));const TArray<TSharedPtr<FJsonValue>>* Args=nullptr;
-                        if(Number(C,TEXT("key"))!=Key||!TArray<int>{6,7,10,17,1000,1001,1002,1003,1004,2000,2001,2003,2005,2006,2007,2008}.Contains(Key)||!C->TryGetArrayField(TEXT("args"),Args)||Args->Num()!=((Key==1000||Key==17||Key==2003||Key==2005)?2:(Key==1004||Key==2008)?3:1))return false;
+                        if(Number(C,TEXT("key"))!=Key||!TArray<int>{6,7,10,14,15,16,17,1000,1001,1002,1003,1004,2000,2001,2003,2005,2006,2007,2008}.Contains(Key)||!C->TryGetArrayField(TEXT("args"),Args)||Args->Num()!=((Key==1000||Key==17||Key==2003||Key==2005)?2:(Key==1004||Key==2008)?3:Key==14||Key==15?5:Key==16?6:1))return false;
                         for(const auto& Arg:*Args)if(Arg->Type!=EJson::Number||!FMath::IsFinite(Arg->AsNumber()))return false;
+                        if(Key>=14&&Key<=16&&!ACEUCMLootPresentation::ValidColorMatch(C))return false;
                     }
                     if(Field==TEXT("int")||Field==TEXT("float"))
                     {
-                        if(!TArray<FString>{TEXT("le"),TEXT("ge"),TEXT("eq"),TEXT("ne"),TEXT("bits")}.Contains(String(C,TEXT("op"))))return false;
+                        if(!TArray<FString>{TEXT("le"),TEXT("ge"),TEXT("eq"),TEXT("ne"),TEXT("bits"),TEXT("in")}.Contains(String(C,TEXT("op"))))return false;
                         if(String(C,TEXT("op"))==TEXT("bits")&&(Number(C,TEXT("value"))<0||Number(C,TEXT("value"))>MAX_uint32||FMath::FloorToDouble(Number(C,TEXT("value")))!=Number(C,TEXT("value"))))return false;
+                        if(String(C,TEXT("op"))==TEXT("in"))
+                        {
+                            const TArray<TSharedPtr<FJsonValue>>* Values=nullptr;
+                            if(C->HasField(TEXT("invalid_values"))||!C->TryGetArrayField(TEXT("values"),Values)||Values->IsEmpty()||Values->Num()>64)return false;
+                            for(const auto& Value:*Values)if(Value->Type!=EJson::Number||!FMath::IsFinite(Value->AsNumber()))return false;
+                        }
                     }
                     if(C->HasField(TEXT("missing_zero"))&&C->Values[TEXT("missing_zero")]->Type!=EJson::Boolean)return false;
-                    for(const TCHAR* K:{TEXT("pattern"),TEXT("exclude")})if(C->HasField(K)&&(C->Values[K]->Type!=EJson::String||!ACEVTProfile::IsSupportedPattern(String(C,K))))return false;
+                    if(!ACEUCMLootPresentation::ValidTextMatch(C))return false;
                     if(Field==TEXT("spells")&&(Number(C,TEXT("value"))<0||Number(C,TEXT("value"))>1024||FMath::FloorToDouble(Number(C,TEXT("value")))!=Number(C,TEXT("value"))))return false;
                 }
             }

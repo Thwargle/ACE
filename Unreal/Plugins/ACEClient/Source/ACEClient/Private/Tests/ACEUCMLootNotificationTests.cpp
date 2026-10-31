@@ -27,7 +27,7 @@ bool FACEUCMLootNotificationTest::RunTest(const FString&)
     if(!TestTrue(TEXT("Bundled UCM exists"),P.IsValid()))return false;
     P->Enabled=true;P->Running=false;
     P->Profile=Parse(TEXT(R"({"loot_rules":[{"name":"Ring","label":"Fine rings","action":"salvage","min_workmanship":7},{"label":"Fallback","action":"keep"}]})"));
-    auto* Client=GI->GetSubsystem<UACEClientSubsystem>();Client->Session=MakeShared<FACESession>();
+    auto* Client=GI->GetSubsystem<UACEClientSubsystem>();
     auto& Session=*Client->Session;Session.State=EACESessionState::InWorld;Session.PlayerGuid=1;
     Session.PlayerVitals.bValid=true;Session.PlayerVitals.Health=100;
     FACEWorldObject Ring;Ring.Guid=701;Ring.WeenieClassId=701;Ring.ItemType=ACEItemType::Jewelry;Ring.Name=TEXT("Ring");
@@ -80,6 +80,36 @@ bool FACEUCMLootNotificationTest::RunTest(const FString&)
     Session.State=EACESessionState::Disconnected;Host->TickLootNotifications();
     TestTrue(TEXT("Logout releases jobs, history and VM"),Host->LootMatchQueue.IsEmpty()&&Host->LootMatchReported.IsEmpty()&&!Host->LootMatchVM);
     Session.State=EACESessionState::InWorld;
+
+    // Exercise the actual appraisal broadcast: the background marker must still
+    // be present when UCM observes the reply, then be consumed by the client.
+    {
+    P->Running=true;P->Profile=Parse(TEXT(R"({"salvage_inventory":true,"loot_rules":[{"label":"Inventory salvage","action":"salvage"}]})"));
+    Session.SelectedObject.Guid=0;Host->TickLootNotifications();
+    FACEWorldObject Bag;Bag.Guid=800;Bag.ItemType=ACEItemType::Container;Bag.ContainerId=Session.PlayerGuid;Session.WorldObjects.Add(Bag.Guid,Bag);
+    for(int Location=0;Location<3;++Location)
+    {
+        FACEWorldObject Owned=Ring;Owned.Guid=810+Location;Owned.ContainerId=Location==0?Session.PlayerGuid:Location==1?Bag.Guid:0;
+        if(Location==2){Owned.WielderId=Session.PlayerGuid;Owned.CurrentWieldedLocation=1;}
+        Session.WorldObjects.Add(Owned.Guid,Owned);Info.ObjectGuid=Owned.Guid;
+        const int32 Before=Client->ChatHistory.Num();
+        Client->RequestBackgroundAppraisal(Owned.Guid);Session.OnAppraisal.Broadcast(Info);Host->TickLootNotifications();
+        TestEqual(TEXT("Automatic appraisal of owned gear never announces a match"),Client->ChatHistory.Num(),Before);
+        TestTrue(TEXT("Silent assessment remains available to salvage rules"),Host->Appraisals.Contains(Owned.Guid)&&Host->Appraisals[Owned.Guid].bSuccess);
+        TestFalse(TEXT("Client consumes background marker after UCM observes it"),Client->BackgroundAppraisals.Contains(Owned.Guid));
+        Session.SelectedObject.Guid=Owned.Guid;Host->TickLootNotifications();
+        TestEqual(TEXT("Manual selection can still test a silently assessed possession"),Client->ChatHistory.Num(),Before+1);
+        Session.SelectedObject.Guid=0;Host->TickLootNotifications();
+    }
+    FACEWorldObject Owned=Ring;Owned.Guid=820;Owned.ContainerId=Bag.Guid;Session.WorldObjects.Add(Owned.Guid,Owned);Info.ObjectGuid=Owned.Guid;
+    int32 Before=Client->ChatHistory.Num();
+    Client->RequestBackgroundAppraisal(Owned.Guid);Client->SendIdentifyObject(Owned.Guid);Session.OnAppraisal.Broadcast(Info);Host->TickLootNotifications();
+    TestEqual(TEXT("Explicit assessment supersedes a background scan and still reports"),Client->ChatHistory.Num(),Before+1);
+    Before=Client->ChatHistory.Num();Info.ObjectGuid=Ring.Guid;Host->LootMatchReported.Remove(Ring.Guid);
+    Client->RequestBackgroundAppraisal(Ring.Guid);Session.OnAppraisal.Broadcast(Info);Host->TickLootNotifications();
+    TestEqual(TEXT("Background assessment of external loot can still report matches"),Client->ChatHistory.Num(),Before+1);
+    P->Running=false;
+    }
 
     FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
     auto Snapshot=[&](){return Parse(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"action_serial":0,"action_error":0,"container":700,"container_is_corpse":true,"position":{"cell":2103705613,"x":25,"y":97,"z":12},"spells":[],"enchantments":[],"targets":[],"inventory":[],"contents":[{"id":701,"wcid":701,"name":"Ring","count":2,"identified":true,"type":8}]})"));};

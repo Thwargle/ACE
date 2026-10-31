@@ -1,4 +1,6 @@
 {
+  "character_damage_version": 2,
+  "monster_damage_version": 2,
   "buffing": true,
   "fast_cast_buffs": true,
   "buffs": [],

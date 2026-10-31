@@ -244,7 +244,7 @@ namespace ACEPluginPanelPrivate
                     .HeaderContent()[Label(TEXT("Settings and profiles"),16)].BodyContent()[SettingsBody.ToSharedRef()]];
             }
             Add(Label(TEXT("Profile name")));
-            Add(SAssignNew(Name,SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",20)).Text(FText::FromString(P->ProfileName)));
+            Add(SAssignNew(Name,SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",20)).Text(FText::FromString(P->ProfileName)));
             TArray<FString> SavedProfiles; IFileManager::Get().FindFiles(SavedProfiles, *(Host->UserDirectory()/TEXT("Profiles")/P->Id/TEXT("*.json")),true,false);
             SavedProfiles.Sort();
             for(const FString& File:SavedProfiles)
@@ -267,13 +267,13 @@ namespace ACEPluginPanelPrivate
                 }
                 else if(Kind==TEXT("text"))
                 {
-                    Add(Label(Caption));Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",18)).Text(FText::FromString(Text(P->Profile,*Key)))
+                    Add(Label(Caption));Add(SNew(SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",18)).Text(FText::FromString(Text(P->Profile,*Key)))
                         .OnTextCommitted_Lambda([this,P,Key](const FText& V,ETextCommit::Type){P->Profile->SetStringField(Key,V.ToString().Left(512));Save(P);}));
                 }
                 else if(Kind==TEXT("number"))
                 {
                     double V=0,Min=0,Max=1000;P->Profile->TryGetNumberField(Key,V);O->TryGetNumberField(TEXT("min"),Min);O->TryGetNumberField(TEXT("max"),Max);
-                    Add(Label(Caption));Add(SNew(SSpinBox<double>).Style(&FACEPluginStyle::Current()->Spin).Font(FACEPluginStyle::NativeFont("Regular",20)).MinValue(Min).MaxValue(Max).Value(V)
+                    Add(Label(Caption));Add(SNew(SACEPluginSpinBox<double>).Style(&FACEPluginStyle::Current()->Spin).Font(FACEPluginStyle::NativeFont("Regular",20)).MinValue(Min).MaxValue(Max).Value(V)
                         .OnValueCommitted_Lambda([this,P,Key](double N,ETextCommit::Type){P->Profile->SetNumberField(Key,N);Save(P);}));
                 }
                 else if(Kind==TEXT("choice"))
@@ -304,7 +304,7 @@ namespace ACEPluginPanelPrivate
                 {
                     Add(Label(TEXT("Buff families and attack spell"),24));
                     Add(Label(TEXT("Toggle a Self buff to maintain its family. UCM chooses the strongest known version within your magic skill margin. Choose an attack spell for magic combat."),18));
-                    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",20)).HintText(FText::FromString(TEXT("Filter known spells; press Enter"))).Text(FText::FromString(Search))
+                    Add(SNew(SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",20)).HintText(FText::FromString(TEXT("Filter known spells; press Enter"))).Text(FText::FromString(Search))
                         .OnTextCommitted_Lambda([this](const FText& V,ETextCommit::Type){Search=V.ToString();Rebuild();}));
                     auto List=SNew(SVerticalBox);auto* C=Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto* D=Host->GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
                     const TArray<TSharedPtr<FJsonValue>>* Buffs=nullptr;P->Profile->TryGetArrayField(TEXT("buffs"),Buffs);
@@ -329,7 +329,7 @@ namespace ACEPluginPanelPrivate
             }
             Add(Label(P->HasPresentation()?TEXT("Advanced settings (JSON)"):TEXT("Advanced profile and state rules (JSON)"),24));
             Add(Label(P->HasPresentation()?TEXT("Configuration is separate from this character's saved plugin state. Apply changes here, then Start to resume."):TEXT("Edit buffs, waypoints, and states here, then Apply profile. Invalid scripts stop with an error above. Profile changes stop automation."),18));
-            Add(SNew(SBox).HeightOverride(240)[SAssignNew(Json,SMultiLineEditableTextBox).Font(FACEPluginStyle::NativeFont("Regular",18)).Text(FText::FromString(Host->ProfileJson(P->Id)))]);
+            Add(SNew(SBox).HeightOverride(240)[SAssignNew(Json,SACEPluginMultiLineEditableTextBox).Font(FACEPluginStyle::NativeFont("Regular",18)).Text(FText::FromString(Host->ProfileJson(P->Id)))]);
             Add(Button(TEXT("Apply profile"),[this,P](){if(Host->SaveProfile(P->Id,Name->GetText().ToString(),Json->GetText().ToString()))Rebuild();}));
         }
     };

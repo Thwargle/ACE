@@ -83,9 +83,21 @@ struct FACEUIElement : public TSharedFromThis<FACEUIElement>
 	 * Authored Height is preserved in AuthoredHeight once resize begins.
 	 */
 	int32 UserResizeH = 0;
+	/** Chat only: line height requested by the selected chat font. */
+	int32 ChatEntryLineHeight = 12;
 	int32 AuthoredHeight = -1;
 	int32 UserResizeW = 0;
 	int32 AuthoredWidth = -1;
+	/** Main-chat peek is temporary. Keep its normal vertical geometry on the
+	 * layout node so every save path and a newly loaded layout agree on it. */
+	struct FChatPeekRestore
+	{
+		int32 UserDragY;
+		int32 UserResizeH;
+	};
+	TOptional<FChatPeekRestore> ChatPeekRestore;
+	int32 GetPersistentDragY() const { return ChatPeekRestore.IsSet() ? ChatPeekRestore->UserDragY : UserDragY; }
+	int32 GetPersistentResizeH() const { return ChatPeekRestore.IsSet() ? ChatPeekRestore->UserResizeH : UserResizeH; }
 	bool bResizeLeft = false, bResizeRight = false, bResizeTop = false, bResizeBottom = false;
 
 	void RecomputeLayoutOffset()

@@ -56,6 +56,7 @@ bool FACETailoringLayersTest::RunTest(const FString&)
         FACEBinaryWriter W; WriteDesc(W,Wire); FACEBinaryReader R(W.GetData()); FACEObjDesc D;
         TestTrue(TEXT("Retail ObjDesc wire fixture parses"),FACEObjectCreateParser::ParseModelData(R,D));
         TestEqual(TEXT("Duplicate removal still consumes the entire wire description"),R.Tell(),W.Num());
+        TestTrue(TEXT("Loot palette slots retain the original wire list independently of render layers"),D.bHasWireSubPalettes&&D.WireSubPalettes.Num()==Wire.SubPalettes.Num());
         return D;
     };
     auto Pal=[](int32 Id,int32 Offset,int32 Count)

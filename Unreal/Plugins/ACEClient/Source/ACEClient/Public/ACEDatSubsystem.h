@@ -81,6 +81,8 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "ACE|DAT")
 	bool IsDatReady() const { return bPortalLoaded; }
+	/** Invalidates small consumer caches when the configured DAT set changes. */
+	int32 GetDatGeneration() const { return BackgroundLoadGeneration; }
 	/** Directory changes must not relabel a worker that is indexing another installation. */
 	bool IsDatLoading() const { return bBackgroundLoadInProgress || bCellBackgroundLoadInProgress; }
 

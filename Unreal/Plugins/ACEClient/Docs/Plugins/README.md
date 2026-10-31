@@ -241,6 +241,11 @@ scale. Third-party plugins can supply a PNG icon and a display title through
 [plugin presentation metadata](PublicAPI.md#plugin-title-and-toolbar-icon); an
 extension sigil is used when no valid custom icon is available.
 
+**Options → User Interface Options → Lua Plugin Text Scale** sets plugin text
+from 75% to 200%, independently of the chat font and overall UI scale. Apply saves
+the preference and updates open bundled and third-party Lua panels, including
+labels, buttons, menus and editable fields, without clearing unsaved input.
+
 Waypoint map zoom is saved separately for indoor and outdoor views, both in the
 pinned minimap and the full map window. Closing a map or relogging restores its
 zoom along with saved plugin positions, sizes, visibility, opacity and pin preferences.
@@ -428,10 +433,10 @@ or controller button. It is unbound initially to avoid replacing an existing
 control. The binding is saved in local input settings. It is not exported to
 retail keymaps, which have no equivalent action.
 
-Combat automatically prefers the highest usable trained combat skill, then
-ranks eligible equipment, ammunition and spells for that skill against the
-target's resistances. If that loadout is unavailable, it can use the next usable
-skill. Explicit imported monster-rule weapon/mode overrides are preserved.
+Combat selects eligible loadouts using VT's slayer, elemental rend/cleave,
+confirmed vulnerability and monster-element priorities. Usable skill and estimated
+damage break otherwise equivalent choices. Explicit imported monster-rule
+weapon/mode overrides are preserved, subject to a requested damage element.
 Attack height uses the target's DAT selection origin, server scale and elevation.
 Advanced file profiles may retain `manual_combat` or `manual_attack_height`
 overrides; the normal interface does not require either choice.
@@ -524,14 +529,22 @@ removed; if no matching loadout is available, UCM reports the failure instead
 of attacking with the wrong element. Door navigation uses the server's current
 collision state, including doors that automatically close after being used.
 
-Known attack spells and equipment are scored against resistances **when the
-server sends them**. This is a heuristic, not an exact DPS simulation: it does not
-model every proc, imbue, critical, armor part or projectile trajectory. Many
-servers do not expose base monster resistances. UCM uses neutral values in that
-case; Rules lets the player specify an element, combat mode, ignore flag and
-priority per monster-name prefix. First matching rule wins. It does not bundle or
-copy VT's monster database. Acquisition range, approach distance, attack range,
-power/accuracy and attack height have separate controls.
+When the server supplies monster resistances, those values override the bundled
+VT-derived monster-element preferences. Unknown creatures without either source
+retain neutral values. Matching slayers take priority, followed by weapons with
+armor/critical bonuses against a confirmed vulnerability, elemental rends/cleaves,
+other bonus weapons and base-element matches. This is selection policy, not an
+exact DPS simulation. Raw damage and usable skill break remaining ties.
+
+Wand elements come from their appraisal qualities. The chosen wand, attack spell
+and vulnerability share one element; launcher selection retains its corresponding
+ammunition. Prismatic ammunition inherits the launcher's actual damage type.
+Retail cold is `8`, fire is `16`; old native combat/monster profiles migrate their
+previously displayed Fire/Cold choices once. Loot-rule property IDs and values
+are unchanged. Rules lets players specify an element, combat mode, ignore flag
+and priority per monster-name prefix. First matching rule wins. Acquisition
+range, approach distance, attack range, power/accuracy and attack height have
+separate controls.
 
 ### Navigation, loot and states
 
@@ -649,6 +662,9 @@ notification switches, both on by default:
 after UCM confirms the item reached your inventory. **Announce item ID matches**
 reports the first matching rule and its Keep, Skip, Salvage,
 Sell or Read action when you select an item or receive a successful assessment.
+Automatic appraisals of your own inventory, including UCM salvage scans and
+items in side bags, do not produce match messages. Manual selection/inspection
+and confirmed pickup announcements still work.
 The latter also works while UCM is stopped, provided the plugin is enabled.
 Unknown properties wait for a normal assessment; notifications never request
 additional assessments. Repeated assessments of the same item/rule are suppressed;
@@ -768,8 +784,29 @@ IDs, and missing-value policy.
 
 `WieldReqAttribute` can also describe a non-skill requirement. For skill-only
 wield rules, check `WieldReqType`: Skill = 1, Raw Skill = 2, or Training = 8.
-Add the relevant type as another integer requirement if needed. Use separate
-rules for alternatives: every requirement within one rule must match.
+Add the relevant type as another integer requirement if needed. **Combine
+requirements** chooses **AND - all requirements** or **OR - any requirement**.
+Basic name, material, type and value filters always apply. Existing rules retain
+AND unless changed.
+
+**Weapon type** creates a named multi-select requirement for
+`WeaponMasteryCategory (353)`: select **Sword** and **Unarmed** to accept either.
+This is separate from Light/Heavy/Finesse attack skills. Numeric properties also
+offer **OR - any of these values**, with pipe-separated custom IDs.
+
+**Text / name** supports Contains, Exact, Starts with, OR/AND pipe-separated
+literal terms, and **Regular expression (VT)**. For example, `sword|unarmed` in
+OR mode matches either word. **Ignore letter case** is explicit; new literal
+requirements default to ignoring case, while existing/imported VT regexes keep
+their original case sensitivity and syntax. Numeric classifications do not
+become text: use Weapon type for an item's class, or Name/FullDescription to
+match the actual server text. SecondaryName is the server's plural name.
+
+All standard Classic requirement kinds are available, including palette color
+matching by any palette, slot, or one of the 63 default armor groups. Color
+matching samples the DAT palette exactly as VT does; it does not compare lit
+screen pixels. Imported custom armor-group definitions and custom expression
+scripts still need an adapter; unsupported imports remain inactive.
 
 **View / edit original Classic UTL copy** opens the source document separately
 from the active converted rules. The document editor exposes all 31 Classic
@@ -954,6 +991,10 @@ operations. No filesystem/process/network/native loading, debug, coroutine,
 dynamic load, pcall/xpcall, or metatable APIs are exposed. Lua string pattern
 functions are omitted because their C execution is outside the instruction hook.
 Install plugins from authors you trust; these limits are not an OS process sandbox.
+
+`string.findplain(text, value, start=1)` returns the first literal match's
+one-based byte position, or nil. It never interprets patterns and caps text at
+16,384 bytes and the search value at 8,192 bytes. `start` is clamped to at least 1.
 
 `workavailable()` lets a plugin cooperatively save its cursor and return before
 exhausting the callback's work allowance. It becomes false after 200,000 Lua

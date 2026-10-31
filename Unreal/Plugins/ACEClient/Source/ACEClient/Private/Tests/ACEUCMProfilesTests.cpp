@@ -45,7 +45,8 @@ bool FACEUCMProfileStorageTest::RunTest(const FString&)
     TestTrue(TEXT("Migration writes linked setup"),Save(Root,TEXT("First"),Profile,Links,nullptr,Error));
     FString Backup;FFileHelper::LoadFileToString(Backup,*(Root/TEXT("Profiles/Legacy/ucm/First.json")));
     TSharedPtr<FJsonObject> BackupObject;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Backup),BackupObject);
-    TestTrue(TEXT("Migration preserves all original data in backup"),BackupObject && FJsonValue::CompareEqual(FJsonValueObject(Original),FJsonValueObject(BackupObject)));
+    TSharedPtr<FJsonObject> OriginalOnDisk;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Legacy),OriginalOnDisk);
+    TestTrue(TEXT("Migration preserves all original data in backup"),BackupObject && FJsonValue::CompareEqual(FJsonValueObject(OriginalOnDisk),FJsonValueObject(BackupObject)));
     TestEqual(TEXT("All six sections have references"),Links->Values.Num(),6);
     TSharedPtr<FJsonObject> Reload,ReloadLinks;
     TestTrue(TEXT("Linked setup resolves"),Load(Root,TEXT("First"),Reload,ReloadLinks,Error));

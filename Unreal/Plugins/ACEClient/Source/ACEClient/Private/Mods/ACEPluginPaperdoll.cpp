@@ -270,7 +270,7 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakePaperdollPanel()
     for(const auto& Field:Fields)
     {
         const FString Key=Text(Field,TEXT("key"));Advanced->AddSlot().AutoHeight().Padding(2)[PaperdollLabel(Text(Field,TEXT("label"),Key))];
-        Advanced->AddSlot().AutoHeight().Padding(2)[SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Text_Lambda([Self,Key](){return FText::FromString(Self.IsValid()?Self->Inputs.FindRef(Key):FString());})
+        Advanced->AddSlot().AutoHeight().Padding(2)[SNew(SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Text_Lambda([Self,Key](){return FText::FromString(Self.IsValid()?Self->Inputs.FindRef(Key):FString());})
             .OnTextChanged_Lambda([Self,Key](const FText& V){if(Self.IsValid())Self->Inputs[Key]=V.ToString();})];
     }
     Advanced->AddSlot().AutoHeight().Padding(4)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).ButtonStyle(&FACEPluginStyle::Current()->Button).IsEnabled_Lambda([Self](){return Self.IsValid()&&!Self->ToolProcess.IsValid();})

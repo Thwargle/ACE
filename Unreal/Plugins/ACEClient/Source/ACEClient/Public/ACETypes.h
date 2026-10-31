@@ -386,6 +386,9 @@ USTRUCT(BlueprintType)
 struct ACECLIENT_API FACEObjDesc
 {
 	GENERATED_BODY()
+	/** Decal palette slots retain wire order before render-layer replacement. */
+	TArray<FACEObjDescSubPalette> WireSubPalettes;
+	bool bHasWireSubPalettes = false;
 
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 PaletteBaseId = 0;
@@ -1198,6 +1201,9 @@ USTRUCT(BlueprintType)
 struct ACECLIENT_API FACEWorldObject
 {
 	GENERATED_BODY()
+	/** Original public/physics header masks for Decal-compatible property queries. */
+	uint32 CreateFlags1 = 0, CreateFlags2 = 0, PhysicsDataFlags = 0;
+	uint16 PublicPhysicsScript = 0;
 	/** Transient event metadata: cached placement is not a fresh physics update. */
 	bool bAppearanceOnlyUpdate = false;
 	/** Transient event metadata: a wield/parent notification, not a new item description. */
@@ -1684,6 +1690,7 @@ USTRUCT(BlueprintType)
 struct ACECLIENT_API FACEAppraisalInfo
 {
 	GENERATED_BODY()
+	uint32 CreatureProfileFlags = 0;
 	/** Public descriptor flags used by retail item examination (e.g. Healer). */
 	int32 ObjectDescriptionFlags = 0;
 	TMap<uint32, int32> IntProperties;
