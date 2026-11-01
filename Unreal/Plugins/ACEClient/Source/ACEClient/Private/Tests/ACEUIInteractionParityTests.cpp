@@ -871,6 +871,16 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
                 TestEqual(TEXT("Reflow does not accumulate input height"),Entry->Height,Height);
                 TestEqual(TEXT("Reflow does not accumulate input width"),Entry->Width,Width);
             }
+            ++GFrameCounter;Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f);
+            for(const TCHAR* Name:{TEXT("ChatTarget"),TEXT("SendButton")})
+            {
+                const auto Button=Manager->FindElementUnder(TEXT("RootGameplay_FloatyMainChat_Field"),Name);
+                const auto* Paint=Button?Canvas->PaintStates.Find(Button->InstanceId):nullptr;
+                TestTrue(*FString::Printf(TEXT("Font %08X %s paints one complete button face"),Font->Id,Name),
+                    Paint&&Paint->Texture.IsValid()&&Paint->Tiling==uint8(ESlateBrushTileType::NoTile));
+            }
+            if(F==0&&Size==0)Draw(TEXT("ChatFontSmallButtons"));
+            if(F==0&&Size==2)Draw(TEXT("ChatFontMediumButtons"));
         }
         Face->SetSelectedIndex(3);FontSize->SetSelectedIndex(4);Video->ApplyInterfaceOptions();
         Video->ResetVideo();TestEqual(TEXT("Reset retains applied Tahoma"),Face->GetSelectedIndex(),3);
@@ -893,6 +903,37 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
             UACEUIElementManager::ApplyFloatyResizeLayout(MainChat);
         }
         Draw(TEXT("ChatFontExtraLargeResized"));
+        // Exercise actual brush state for every chat window and DAT button state,
+        // including pressed/disabled textures after the input row has grown.
+        for(int32 W=0;W<=4;++W)
+        {
+            const FString RootName=W==0?TEXT("RootGameplay_FloatyMainChat_Field"):FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"),W);
+            const auto Root=Manager->FindElementByName(RootName);
+            const bool WasVisible=Root->bVisible;Root->bVisible=true;
+            for(const TCHAR* Name:{TEXT("ChatTarget"),TEXT("SendButton")})
+            {
+                const auto Button=Manager->FindElementUnder(RootName,Name);
+                if(!Button)continue; // The auxiliary chats have Send but no target selector.
+                TGuardValue<bool> Explicit(Button->bUseExplicitState,true);
+                TGuardValue<uint32> State(Button->DefaultState,Button->DefaultState);
+                for(uint32 Id:{1u,3u,13u})if(Button->States.Contains(Id))
+                {
+                    Button->DefaultState=Id;
+                    ++GFrameCounter;Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f);
+                    const auto* Paint=Canvas->PaintStates.Find(Button->InstanceId);
+                    const auto& Media=Button->States.FindChecked(Id);
+                    if(Media.bHasMedia&&Media.ImageFileId==0)
+                        TestTrue(TEXT("Text-only auxiliary Send states do not invent a button background"),!Paint||Paint->Visibility==ESlateVisibility::Collapsed);
+                    else
+                        TestTrue(*FString::Printf(TEXT("Chat %d %s state %u never duplicates button artwork"),W,Name,Id),
+                            Paint&&Paint->Texture.IsValid()&&Paint->Tiling==uint8(ESlateBrushTileType::NoTile));
+                }
+            }
+            const auto EntryRow=Manager->FindElementUnder(RootName,W==0?TEXT("ChatEntryField"):TEXT("ChatPanelTextEntryField"));
+            const auto* Paint=EntryRow?Canvas->PaintStates.Find(EntryRow->InstanceId):nullptr;
+            TestTrue(TEXT("Scaled entry background tiles only along its width"),Paint&&Paint->Tiling==uint8(ESlateBrushTileType::Horizontal));
+            Root->bVisible=WasVisible;
+        }
         MainChat->UserResizeW=SavedW;MainChat->UserResizeH=SavedH;
         UACEUIElementManager::ApplyFloatyResizeLayout(MainChat);
         TestEqual(TEXT("Chat sizing does not change plugin sizing"),ACERuntimeOptions::PluginTextScale(),2.f);

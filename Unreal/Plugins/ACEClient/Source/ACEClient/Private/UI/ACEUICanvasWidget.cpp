@@ -822,8 +822,13 @@ void UACEUICanvasWidget::SyncElementRecursive(
 		// own presenter; the ordinary DAT canvas follows retail's image semantics.
 		if (Tex && !Element->bFloatingHealthArtwork)
 		{
-			const float TexW = FMath::Max(1.f, static_cast<float>(Tex->GetSizeX()) * LastScaleX);
-			const float TexH = FMath::Max(1.f, static_cast<float>(Tex->GetSizeY()) * LastScaleY);
+			// Font-sized chat controls opt into stretching per axis. Their complete
+			// button faces must not repeat when the logical region grows, while the
+			// entry strip still tiles horizontally and normal DAT borders keep tiling.
+			const float TexW = Element->bStretchImageX ? float(ElX1 - ElX0)
+				: FMath::Max(1.f, static_cast<float>(Tex->GetSizeX()) * LastScaleX);
+			const float TexH = Element->bStretchImageY ? float(ElY1 - ElY0)
+				: FMath::Max(1.f, static_cast<float>(Tex->GetSizeY()) * LastScaleY);
 			const bool bTileX = !FMath::IsNearlyEqual(static_cast<float>(ElX1 - ElX0), TexW);
 			const bool bTileY = !FMath::IsNearlyEqual(static_cast<float>(ElY1 - ElY0), TexH);
 			if (bTileX && bTileY)

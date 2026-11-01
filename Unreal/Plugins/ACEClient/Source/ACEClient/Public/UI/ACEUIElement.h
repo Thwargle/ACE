@@ -197,6 +197,9 @@ struct FACEUIElement : public TSharedFromThis<FACEUIElement>
 	FLinearColor ImageTint = FLinearColor::White;
 	/** ChatInterface background opacity; text remains independently readable. */
 	float ImageOpacity = 1.f;
+	/** Runtime opt-in for enlarged controls; ordinary DAT art keeps native-size tiling. */
+	bool bStretchImageX = false;
+	bool bStretchImageY = false;
 	FString DebugName;
     uint32 TextEntryId = 0;
     uint32 TooltipEntryId = 0;

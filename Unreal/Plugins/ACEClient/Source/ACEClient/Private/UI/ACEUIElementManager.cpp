@@ -787,12 +787,15 @@ void UACEUIElementManager::ApplyFloatyResizeLayout(const TSharedPtr<FACEUIElemen
 				int32 Extra=FMath::Max(0,Floaty->ChatEntryLineHeight+6-OldH);
 				for(const auto& Child:Floaty->Children)if(Child->ElementName==TEXT("ChatLogField"))Extra=FMath::Min(Extra,FMath::Max(0,Child->Height-16));
 				Entry->Height+=Extra;Entry->EdgeAnchorY-=Extra;Entry->RecomputeLayoutOffset();
+				Entry->bStretchImageY=true;
 				for(const auto& Child:Entry->Children)FRetailReflow::Reflow(Child,Entry->LayoutAuthoredW,Entry->LayoutAuthoredH,Entry->Width,Entry->Height,true);
 				const float Scale=FMath::Max(1.f,Floaty->ChatEntryLineHeight/12.f);
 				int32 LeftExtra=0,RightExtra=0;
 				for(const auto& Child:Entry->Children)
 				{
 					if(Child->ElementName!=TEXT("ChatTarget")&&Child->ElementName!=TEXT("SendButton"))continue;
+					// These are complete button faces, not repeatable border strips.
+					Child->bStretchImageX=true;
 					const int32 OldW=Child->Width;
 					Child->Width=FMath::RoundToInt(OldW*Scale);
 					if(Child->ElementName==TEXT("ChatTarget"))LeftExtra=Child->Width-OldW;
@@ -810,6 +813,9 @@ void UACEUIElementManager::ApplyFloatyResizeLayout(const TSharedPtr<FACEUIElemen
 				TFunction<void(const TSharedPtr<FACEUIElement>&)> FitRow=[&](const auto& Node)
 				{
 					Node->Height=Entry->Height;
+					// Stretch the row's art with its font height. Keep horizontal
+					// tiling for the entry strip, but never repeat its top/bottom edges.
+					Node->bStretchImageY=true;
 					for(const auto& Part:Node->Children)FitRow(Part);
 				};
 				for(const auto& Child:Entry->Children)FitRow(Child);
