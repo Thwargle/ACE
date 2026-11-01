@@ -23,13 +23,15 @@
 static TAutoConsoleVariable<int32> CVarACEFrameHitches(TEXT("ace.Performance.Hitches"),1,
 	TEXT("Log up to 20 slow gameplay frames per session, at least 10 seconds apart. No capture or GPU readback."));
 
-void UACEClientSubsystem::ReceiveChatMessage(const FString& Text, const FString& Sender, int32 Type, int32 FilterType)
+void UACEClientSubsystem::ReceiveChatMessage(const FString& Text, const FString& Sender, int32 Type, int32 FilterType, uint8 ForcedWindows, TOptional<FLinearColor> Color)
 {
+	TGuardValue<uint8> WindowsScope(CurrentChatWindows, ForcedWindows);
+	TGuardValue<TOptional<FLinearColor>> ColorScope(CurrentChatColor, Color);
 	// Transient notices should not reappear after changing the HUD.
 	if (!ACEChatMessageType::IsTransientNotice(Type))
 	{
 		if (ChatHistory.Num() >= 256) ChatHistory.RemoveAt(0);
-		ChatHistory.Add({Text.Left(16384), Sender.Left(256), Type, FilterType});
+		ChatHistory.Add({Text.Left(16384), Sender.Left(256), Type, FilterType, ForcedWindows, Color});
 	}
 	OnChatMessage.Broadcast(Text, Sender, Type);
 	OnRoutedChatMessage.Broadcast(Text, Sender, Type, FilterType);

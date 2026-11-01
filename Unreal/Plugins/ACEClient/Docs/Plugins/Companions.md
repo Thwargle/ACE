@@ -48,7 +48,9 @@ plugin again. `chat` exposes received messages (including tells); `state` grants
 one character-specific saved object; `ui` allows rows and selection; `markers`
 allows world/map annotations; `waypoint` controls the enabled Waypoint arrow;
 `messaging` exchanges local events; `commands` invokes the documented native
-command bridges. Companion manifests cannot request automation or native-tool
+command bridges. `identify` permits targeted background appraisal, and `sound`
+permits bounded bundled WAV notifications; see [API 2](PublicAPI.md#permissions-and-snapshots).
+Companion manifests cannot request automation or native-tool
 permissions. Native settings also support bool, number and choice controls.
 
 ## Callback and snapshot
@@ -75,7 +77,7 @@ Snapshots include:
 - `plugins`: map from installed ID to `{enabled,running}`. It exposes no profile
   or private state and grants no capability to bypass the other plugin's checks.
 - `chat_events`: new received events for this companion, each
-  `{serial,time,text,raw_text,sender,color}`. `text` includes rendered speaker
+  `{serial,time,text,raw_text,sender,sender_type,color,chat_type}`. `text` includes rendered speaker
   wording; `raw_text` is the original message. `color` is the retail chat type.
   Events arrive regardless of visible chat-window filters and without running
   UCM. Each callback delivers up to 128 events and 64 KiB of UTF-8 message text,
@@ -96,6 +98,9 @@ Snapshots include:
   Separate plugins have separate delivery cursors; a faster reader does not
   consume a slower reader's messages. Validate the sender/type before trusting
   progress messages.
+  For low-latency delivery of only relevant lines, use native
+  [chat_subscriptions and chat_history](PublicAPI.md#read-and-filter-chat).
+  Their inbox limits and counters apply to matched messages only.
 - `events`: up to 64 queued clicks, local commands and plugin messages, consumed
   by this callback. Each has a global `serial`; gaps can represent other plugins'
   events. Oldest entries are replaced on overflow.

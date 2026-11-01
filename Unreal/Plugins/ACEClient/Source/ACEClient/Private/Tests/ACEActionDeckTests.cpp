@@ -128,8 +128,11 @@ bool FACEActionDeckTest::RunTest(const FString&)
         TestEqual(TEXT("Legacy profile retains its three-row layout"),Deck->VisibleRows(),3);
         TestEqual(TEXT("Legacy custom row modifier survives"),Deck->RowModifiers[0],uint8(4));
         TestEqual(TEXT("Legacy custom key survives"),Deck->KeyLabel(0),FString(TEXT("C+S+F8")));
-        TestFalse(TEXT("Enabling extra row does not steal an existing Alt shortcut"),Deck->SetFourthRowEnabled(true));
-        TestFalse(TEXT("Conflicting optional row stays disabled"),Deck->IsFourthRowEnabled());
+        TestTrue(TEXT("Shortcut conflicts do not prevent displaying the fourth row"),Deck->SetFourthRowEnabled(true));
+        TestTrue(TEXT("Conflicting optional row is visible and usable by mouse"),Deck->IsFourthRowEnabled());
+        TestEqual(TEXT("Existing Alt shortcut keeps its owner"),Deck->MatchKey(FInputChord(EKeys::Two,false,false,true,false)),1);
+        TestFalse(TEXT("Conflicting new slot starts unbound"),Deck->EffectiveKey(37).Key.IsValid());
+        Deck->Reset();Deck->Deserialize(Legacy);
         TestTrue(TEXT("Existing row can free Alt shortcuts"),Deck->SetRowModifier(0,1));
         TestTrue(TEXT("Fourth row can be enabled"),Deck->SetFourthRowEnabled(true));
         TestEqual(TEXT("Fourth row defaults to Alt+1"),Deck->KeyLabel(36),FString(TEXT("A+1")));

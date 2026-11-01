@@ -1,0 +1,12 @@
+{
+  "api": 2,
+  "mode": "companion",
+  "id": "graphics_gallery",
+  "name": "Graphics Gallery",
+  "version": "1.0",
+  "description": "Optional example of local PNG artwork, native effects and layered gauges.",
+  "permissions": ["ui"],
+  "snapshot_fields": ["health", "max_health", "time", "window_chrome_hidden"],
+  "update_interval": 0.5,
+  "presentation": {"controls": "none", "settings": false}
+}

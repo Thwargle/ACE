@@ -423,6 +423,7 @@ private:
             .Text_Lambda([this]{return FText::FromString(FString::Printf(TEXT("Row %d · Slot %d: %s"),Deck->DisplayRow(Selected)+1,Selected%UACEActionDeckSubsystem::Columns+1,*Deck->SlotName(Selected)));})
             .AutoWrapText(true)];
         auto Binding=SNew(SHorizontalBox);
+        Body->AddSlot().AutoHeight()[DeckLabel(TEXT("Click a deck slot while settings are open, then click Key to rebind it."),11)];
         Binding->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,8,0)[DeckLabel(TEXT("Key"))];
         Binding->AddSlot().FillWidth(1)[SAssignNew(KeySelector,SInputKeySelector).Tag(TEXT("ActionDeck.Key")).AllowModifierKeys(true).AllowGamepadKeys(false)
             .SelectedKey_Lambda([this]{return Deck->EffectiveKey(Selected);})

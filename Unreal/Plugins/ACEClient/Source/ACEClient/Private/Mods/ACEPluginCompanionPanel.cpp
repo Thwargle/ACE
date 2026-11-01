@@ -15,6 +15,7 @@
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SScaleBox.h"
 #include "Widgets/Layout/SExpandableArea.h"
 #include "Widgets/Layout/SWidgetSwitcher.h"
 #include "Widgets/SOverlay.h"
@@ -46,8 +47,46 @@ namespace ACEPluginCompanionPanelPrivate
         if(Name==TEXT("red"))return FLinearColor(1,.3f,.2f);
         if(Name==TEXT("yellow"))return FLinearColor(1,.85f,.25f);
         if(Name==TEXT("blue"))return FLinearColor(.25f,.7f,1);
+        if(Name.StartsWith(TEXT("#"))&&(Name.Len()==7||Name.Len()==9))return FLinearColor(FColor::FromHex(Name));
         return FLinearColor(1.f,.98f,.92f);
     }
+    // Effects advance on Slate's frame clock, independent of Lua's callback rate.
+    class SACECompanionVisual : public SCompoundWidget
+    {
+    public:
+        SLATE_BEGIN_ARGS(SACECompanionVisual){} SLATE_ARGUMENT(TSharedPtr<FJsonObject>,Data)
+            SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_ARGUMENT(FString,Plugin)
+            SLATE_DEFAULT_SLOT(FArguments,Content) SLATE_END_ARGS()
+        void Construct(const FArguments& A)
+        {
+            Data=A._Data;Host=A._Host;Plugin=A._Plugin;ChildSlot[A._Content.Widget];
+            SetRenderTransformPivot(FVector2D(.5,.5));
+            SetVisibility(TAttribute<EVisibility>::CreateLambda([this](){return B(Data,TEXT("hide_when_pinned"),false)
+                &&Host.IsValid()&&Host->IsPluginWindowChromeHidden(Plugin)?EVisibility::Collapsed:EVisibility::SelfHitTestInvisible;}));
+            RefreshVisual();
+        }
+        void RefreshVisual()
+        {
+            Effect=S(Data,TEXT("effect"));Period=N(Data,TEXT("period"),1);Opacity=N(Data,TEXT("opacity"),1);
+            Minimum=N(Data,TEXT("min_opacity"),.2);Rotation=FMath::DegreesToRadians(float(N(Data,TEXT("rotation"))));
+            SetRenderOpacity(Opacity);SetRenderTransform(FSlateRenderTransform(FQuat2D(Rotation)));
+            SetCanTick(!Effect.IsEmpty());
+        }
+        void Tick(const FGeometry& G,double Time,float Dt) override
+        {
+            SCompoundWidget::Tick(G,Time,Dt);
+            const double Phase=FMath::Fmod(Time,Period)/Period;
+            float Alpha=Opacity;
+            if(Effect==TEXT("blink"))Alpha*=Phase<.5?1.f:Minimum;
+            if(Effect==TEXT("pulse"))Alpha*=FMath::Lerp(Minimum,1.f,float(.5-.5*FMath::Cos(Phase*2*PI)));
+            SetRenderOpacity(Alpha);
+            const float Angle=Rotation+(Effect==TEXT("rotate")?float(Phase*2*PI):0.f);
+            SetRenderTransform(FSlateRenderTransform(FQuat2D(Angle)));
+        }
+    private:
+        TSharedPtr<FJsonObject> Data;TWeakObjectPtr<UACEPluginSubsystem> Host;FString Plugin;
+        FString Effect;double Period=1;float Opacity=1,Minimum=.2f,Rotation=0;
+    };
     // Stable Lua control IDs are also stable Slate identities. Only structural
     // changes touch slots; ordinary snapshots update the retained row data.
     class SACECompanionRows : public SCompoundWidget
@@ -72,9 +111,12 @@ namespace ACEPluginCompanionPanelPrivate
             FString Type;
             TSharedPtr<FJsonObject> Data;
             TSharedPtr<SWidget> Widget;
+            TSharedPtr<SBox> Frame;
+            TSharedPtr<SACECompanionVisual> Visual;
             TSharedPtr<SVerticalBox> Vertical;
             TSharedPtr<SHorizontalBox> Horizontal,TabButtons;
             TSharedPtr<SWidgetSwitcher> Switch;
+            TSharedPtr<SOverlay> Overlay;
             TArray<TSharedPtr<SWidget>> Children;
             TArray<bool> AutoWidths;
             // False means this control is being edited. Retry just this control,
@@ -89,11 +131,13 @@ namespace ACEPluginCompanionPanelPrivate
         TSet<FString> Visited;
         TArray<TSharedPtr<FRow>> Pending;
         TMap<FString,bool> Expanded;TMap<FString,FString> Tabs;
-        TSharedRef<STextBlock> Label(const TSharedPtr<FJsonObject>& R)
+        TSharedRef<STextBlock> Label(const TSharedPtr<FJsonObject>& R,const TCHAR* ColorKey=TEXT("color"))
         {
             return SNew(SACEPluginText).Text_Lambda([R](){return FText::FromString(S(R,TEXT("text")));})
-                .Font_Lambda([R](){return FCoreStyle::GetDefaultFontStyle(B(R,TEXT("bold"),false)?"Bold":"Regular",FMath::Clamp(int32(N(R,TEXT("size"),15)),10,36));})
-                .ColorAndOpacity_Lambda([R](){return FSlateColor(Color(S(R,TEXT("color"))));})
+                .Font_Lambda([R](){auto Font=FCoreStyle::GetDefaultFontStyle(B(R,TEXT("bold"),false)?"Bold":"Regular",FMath::Clamp(int32(N(R,TEXT("size"),15)),10,36));
+                    Font.OutlineSettings.OutlineSize=int32(N(R,TEXT("outline"),N(R,TEXT("glow"))));Font.OutlineSettings.OutlineColor=Color(S(R,TEXT("outline_color"),S(R,TEXT("glow_color"),TEXT("#000000"))));return Font;})
+                .Justification_Lambda([R](){const auto Align=S(R,TEXT("align"));return Align==TEXT("right")?ETextJustify::Right:Align==TEXT("center")?ETextJustify::Center:ETextJustify::Left;})
+                .ColorAndOpacity_Lambda([R,ColorField=FString(ColorKey)](){return FSlateColor(Color(S(R,*ColorField)));})
                 .AutoWrapText_Lambda([R](){return B(R,TEXT("wrap"));});
         }
         UTexture2D* Image(const FString& Asset)
@@ -108,12 +152,13 @@ namespace ACEPluginCompanionPanelPrivate
             const TArray<TSharedPtr<FJsonValue>>* Values=nullptr;R->TryGetArrayField(TEXT("children"),Values);
             TArray<TSharedPtr<SWidget>> Next;TArray<FString> Keys;
             TArray<bool> AutoWidths;
-            if(Values)for(const auto& V:*Values){Next.Add(Build(V->AsObject()));Keys.Add(S(V->AsObject(),TEXT("id")));AutoWidths.Add(B(R,TEXT("compact"),false)||B(V->AsObject(),TEXT("auto_width"),false));}
+            if(Values)for(const auto& V:*Values){Next.Add(Build(V->AsObject()));Keys.Add(S(V->AsObject(),TEXT("id")));AutoWidths.Add(B(R,TEXT("compact"),false)||B(V->AsObject(),TEXT("auto_width"),false)||V->AsObject()->HasField(TEXT("width")));}
             if(Node.Children!=Next||Node.AutoWidths!=AutoWidths)
             {
                 // Reattach existing child widgets in their new order. In particular,
                 // a dropdown's anchor, text editor and section survive sibling edits.
                 if(Node.Vertical){Node.Vertical->ClearChildren();for(const auto& W:Next)Node.Vertical->AddSlot().AutoHeight().Padding(2)[W.ToSharedRef()];}
+                if(Node.Overlay){Node.Overlay->ClearChildren();for(const auto& W:Next)Node.Overlay->AddSlot()[W.ToSharedRef()];}
                 if(Node.Horizontal)
                 {
                     Node.Horizontal->ClearChildren();
@@ -152,11 +197,16 @@ namespace ACEPluginCompanionPanelPrivate
         {
             const FString Key=S(Source,TEXT("id")),Type=S(Source,TEXT("type"),S(Source,TEXT("action")).IsEmpty()?TEXT("text"):TEXT("button"));
             Visited.Add(Key);auto Node=Controls.FindRef(Key);
-            if(Node&&Node->Type==Type)
+            const auto Clickable=[](const auto& D){return B(D,TEXT("clickable"),false)||D->HasField(TEXT("action"));};
+            if(Node&&Node->Type==Type&&Clickable(Node->Data)==Clickable(Source)
+                &&((Type!=TEXT("image")&&Type!=TEXT("icon"))||S(Node->Data,TEXT("text")).IsEmpty()==S(Source,TEXT("text")).IsEmpty()))
             {
                 Node->Data->Values=Source->Values;
+                Node->Visual->RefreshVisual();
+                Node->Frame->SetHAlign(Source->HasField(TEXT("width"))?HAlign_Left:HAlign_Fill);
+                Node->Frame->SetVAlign(Source->HasField(TEXT("height"))?VAlign_Top:VAlign_Fill);
                 Node->Widget->SetClipping(B(Source,TEXT("wrap"))?EWidgetClipping::Inherit:EWidgetClipping::ClipToBounds);
-                if(Node->Vertical||Node->Horizontal||Node->Switch)Children(*Node);
+                if(Node->Vertical||Node->Horizontal||Node->Switch||Node->Overlay)Children(*Node);
                 if(Node->Sync&&!Node->Sync())Pending.Add(Node);
                 return Node->Widget.ToSharedRef();
             }
@@ -164,9 +214,15 @@ namespace ACEPluginCompanionPanelPrivate
             const auto R=Node->Data;
             auto Changed=[H=Host,Plugin=Id,Key,R](const TSharedPtr<FJsonValue>& Value){if(H.IsValid()&&H->ChangePluginControl(Plugin,Key,Value))R->SetField(TEXT("value"),Value);};
             TSharedRef<SWidget> Content=SNullWidget::NullWidget;
-            if(Type==TEXT("row")||Type==TEXT("column")||Type==TEXT("section")||Type==TEXT("tabs"))
+            if(Type==TEXT("row")||Type==TEXT("column")||Type==TEXT("section")||Type==TEXT("tabs")||Type==TEXT("overlay")||Type==TEXT("frame"))
             {
                 if(Type==TEXT("row")){Node->Horizontal=SNew(SHorizontalBox);Content=Node->Horizontal.ToSharedRef();}
+                else if(Type==TEXT("overlay")||Type==TEXT("frame"))
+                {
+                    Node->Overlay=SNew(SOverlay);Content=Node->Overlay.ToSharedRef();
+                    if(Type==TEXT("frame"))Content=SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+                        .BorderBackgroundColor_Lambda([R](){return Color(S(R,TEXT("color"),TEXT("#00000080")));}).Padding(4)[Content];
+                }
                 else if(Type==TEXT("tabs"))
                 {
                     Node->Switch=SNew(SWidgetSwitcher);Node->TabButtons=SNew(SHorizontalBox);
@@ -244,7 +300,8 @@ namespace ACEPluginCompanionPanelPrivate
                 Content=SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[Label(R)]+SVerticalBox::Slot().AutoHeight()[Combo];
             }
             else if(Type==TEXT("progress"))
-                Content=SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[Label(R)]+SVerticalBox::Slot().AutoHeight().Padding(0,4)[SNew(SProgressBar).Percent_Lambda([R](){return TOptional<float>(FMath::Clamp(N(R,TEXT("value")),0.,1.));}).FillColorAndOpacity_Lambda([R](){return Color(S(R,TEXT("color")));})];
+                Content=SNew(SOverlay)+SOverlay::Slot()[SNew(SBox).MinDesiredHeight(22)[SNew(SProgressBar).Percent_Lambda([R](){return TOptional<float>(FMath::Clamp(N(R,TEXT("value")),0.,1.));}).FillColorAndOpacity_Lambda([R](){return Color(S(R,TEXT("color")));})]]
+                    +SOverlay::Slot().VAlign(VAlign_Center)[Label(R,TEXT("text_color"))];
             else if(Type==TEXT("item_icon"))
             {
                 if(!Resolver.IsValid()&&Host.IsValid()){Resolver.Reset(NewObject<UACEUIResourceResolver>(Host.Get()));Resolver->Initialize(Host->GetGameInstance()->GetSubsystem<UACEDatSubsystem>());}
@@ -275,24 +332,47 @@ namespace ACEPluginCompanionPanelPrivate
             else if(Type==TEXT("icon")||Type==TEXT("image"))
             {
                 if(!Resolver.IsValid()&&Host.IsValid()){Resolver.Reset(NewObject<UACEUIResourceResolver>(Host.Get()));Resolver->Initialize(Host->GetGameInstance()->GetSubsystem<UACEDatSubsystem>());}
-                auto Brush=MakeShared<FSlateBrush>();auto Icon=SNew(SImage).Image_Lambda([Brush]()->const FSlateBrush*{return &Brush.Get();});
+                auto Brush=MakeShared<FSlateBrush>();auto Icon=SNew(SImage).Image_Lambda([Brush]()->const FSlateBrush*{return &Brush.Get();})
+                    .ColorAndOpacity_Lambda([R](){return Color(S(R,TEXT("color"),TEXT("#FFFFFF")));});
                 Node->Sync=[this,R,Type,Brush,Icon]()
                 {
                     const double Size=FMath::Clamp(N(R,TEXT("size"),32),16.,128.);
                     auto* Texture=Type==TEXT("image")?Image(S(R,TEXT("asset"))):Resolver.IsValid()?Resolver->ResolveIconTexture(uint32(N(R,TEXT("icon")))):nullptr;
-                    if(Brush->GetResourceObject()!=Texture||Brush->ImageSize!=FVector2D(Size,Size)){Brush->SetResourceObject(Texture);Brush->ImageSize=FVector2D(Size,Size);Icon->Invalidate(EInvalidateWidgetReason::Layout|EInvalidateWidgetReason::Paint);}return true;
+                    const FVector2D Dimensions=Type==TEXT("image")&&Texture?FVector2D(Texture->GetSizeX(),Texture->GetSizeY()):FVector2D(Size,Size);
+                    if(Brush->GetResourceObject()!=Texture||Brush->ImageSize!=Dimensions){Brush->SetResourceObject(Texture);Brush->ImageSize=Dimensions;Icon->Invalidate(EInvalidateWidgetReason::Layout|EInvalidateWidgetReason::Paint);}return true;
                 };
-                Content=SNew(SHorizontalBox)+SHorizontalBox::Slot().AutoWidth()[SNew(SBox)
-                    .WidthOverride_Lambda([R](){return FOptionalSize(FMath::Clamp(N(R,TEXT("size"),32),16.,128.));})
-                    .HeightOverride_Lambda([R](){return FOptionalSize(FMath::Clamp(N(R,TEXT("size"),32),16.,128.));})[Icon]]
+                TSharedRef<SWidget> Artwork=Icon;
+                {
+                    auto Layers=SNew(SOverlay);
+                    for(float Scale:{1.2f,1.1f})Layers->AddSlot()[SNew(SImage).Image_Lambda([Brush]()->const FSlateBrush*{return &Brush.Get();})
+                        .Visibility_Lambda([R](){return N(R,TEXT("glow"))>0?EVisibility::HitTestInvisible:EVisibility::Collapsed;})
+                        .RenderTransformPivot(FVector2D(.5,.5)).RenderTransform(FSlateRenderTransform(FScale2D(Scale)))
+                        .ColorAndOpacity_Lambda([R](){auto C=Color(S(R,TEXT("glow_color"),TEXT("#FFFFFF")));C.A*=.25f;return C;})];
+                    Layers->AddSlot()[Icon];Artwork=Layers;
+                }
+                Content=SNew(SBox)
+                    .WidthOverride_Lambda([R](){return FOptionalSize(N(R,TEXT("width"),N(R,TEXT("size"),32)));})
+                    .HeightOverride_Lambda([R](){return FOptionalSize(N(R,TEXT("height"),N(R,TEXT("size"),32)));})
+                    [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[Artwork]];
+                if(!S(R,TEXT("text")).IsEmpty())Content=SNew(SHorizontalBox)+SHorizontalBox::Slot().AutoWidth()[Content]
                     +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(6,0)[Label(R)];
             }
             else Content=Label(R);
+            if(Type!=TEXT("button")&&(B(R,TEXT("clickable"),false)||R->HasField(TEXT("action"))))
+                Content=SNew(SButton).ButtonStyle(&FCoreStyle::Get().GetWidgetStyle<FButtonStyle>("NoBorder")).ContentPadding(0).IsFocusable(false)
+                    .OnClicked_Lambda([H=Host,Plugin=Id,Key](){if(H.IsValid())H->ClickPluginRow(Plugin,Key);return FReply::Handled();})[Content];
             Content->SetEnabled(TAttribute<bool>::CreateLambda([R](){return B(R,TEXT("enabled"));}));
             Content->SetToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([R](){return FText::FromString(S(R,TEXT("tooltip")));})));
-            Node->Widget=SNew(SBox).Tag(FName(*(TEXT("PluginControl.")+Key)))
+            Node->Widget=SAssignNew(Node->Frame,SBox)
+                .Visibility_Lambda([H=Host,Plugin=Id,R](){return B(R,TEXT("hide_when_pinned"),false)&&H.IsValid()&&H->IsPluginWindowChromeHidden(Plugin)?EVisibility::Collapsed:EVisibility::SelfHitTestInvisible;})
+                .HAlign(R->HasField(TEXT("width"))?HAlign_Left:HAlign_Fill)
+                .VAlign(R->HasField(TEXT("height"))?VAlign_Top:VAlign_Fill)
                 .Clipping(B(R,TEXT("wrap"))?EWidgetClipping::Inherit:EWidgetClipping::ClipToBounds)
-                .Padding_Lambda([R](){return FMargin(FMath::Clamp(float(N(R,TEXT("padding"),2)),0.f,24.f));})[Content];
+                .Padding_Lambda([R](){return FMargin(FMath::Clamp(float(N(R,TEXT("padding"),2)),0.f,24.f));})
+                [SNew(SBox).Tag(FName(*(TEXT("PluginControl.")+Key)))
+                    .WidthOverride_Lambda([R](){return R->HasField(TEXT("width"))?FOptionalSize(N(R,TEXT("width"))):FOptionalSize();})
+                    .HeightOverride_Lambda([R](){return R->HasField(TEXT("height"))?FOptionalSize(N(R,TEXT("height"))):FOptionalSize();})
+                    [SAssignNew(Node->Visual,SACECompanionVisual).Data(R).Host(Host.Get()).Plugin(Id)[Content]]];
             if(Node->Sync&&!Node->Sync())Pending.Add(Node);
             return Node->Widget.ToSharedRef();
         }

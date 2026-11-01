@@ -151,8 +151,34 @@ Plugins are responsible for fitting their controls into this space.
 ## Read and filter chat
 
 `chat` permission already provides `snapshot.chat_events`, including `raw_text`,
-formatted `text`, `sender`, `color` (chat message type), `time`, and `serial`.
+formatted `text`, `sender`, `color`/`chat_type` (chat message type), `time`, and `serial`.
 Use these events to parse server-specific responses without hiding a chat window.
+
+To receive only relevant lines, declare `chat_subscriptions` in the manifest or
+return it from Lua. These rules filter delivery before messages enter the plugin's
+inbox; they do not change what players or other plugins see. For example:
+
+```json
+"chat_history": false,
+"chat_subscriptions": [
+  {"id":"kills", "prefix":"You have killed", "sender_type":"server"},
+  {"id":"solves", "contains":" solves (", "sender_type":"server"}
+]
+```
+
+Subscriptions use the same matching predicates as display filters below. Rules
+are ORed; predicates within a rule are ANDed. Omission retains subscriptions;
+an empty list subscribes to no lines. Without this option, existing plugins
+continue receiving all chat. A runtime change starts at the newest line; repeating
+the same registration preserves pending messages. Register in the manifest to
+cover responses before the first callback. Each subscriber retains up to 2,048
+matching events / 2 MiB of message text; delivery remains 128 events / 64 KiB per
+callback. `chat_pending`, `chat_more`, `chat_gap` and `chat_dropped` describe this
+matching inbox, so unrelated combat messages cannot delay quest responses.
+
+`chat_history=false` starts or restarts at the newest message. The default, true,
+allows retained messages from this login. Refresh preserves the existing cursor
+instead of replaying messages already delivered. Neither option replays past logins.
 
 Local `notice/show` output uses the **Plugin chat** category in Options > Chat.
 Players can independently enable it for each chat window. Notices retain their
@@ -178,20 +204,40 @@ callback. Hidden messages still reach **all** plugin readers and an enabled chat
 log file. Filtering never changes server state or messages, chat window settings,
 or existing chat history.
 
-Each rule has a unique `id` (1–64 characters) and at least one nonempty `contains`,
-`prefix`, or `exact` string (each at most 256 characters). All supplied tests must
+Each rule has a unique `id` (1–64 characters) and at least one text, sender or
+message-type predicate. `contains`, `prefix`, `exact`, and `pattern` strings allow
+at most 256 characters. All supplied tests must
 match. Optional `sender` is an exact match; `sender=""` restricts matching to
 messages with no sender. `case_sensitive` defaults to false. `chat_type` optionally
 matches a numeric message type, 0–63. `window` is 0 for main chat, 1–4 for extra
 windows, or -1/omitted for all five. `seconds` optionally expires the rule after
 more than 0 and at most 300 seconds; omitting it keeps the rule until cleared.
-Matching is literal, not Lua-pattern or regular-expression matching.
+`contains`, `prefix`, and `exact` are literal. `pattern` is a regular expression
+using the same bounded regex engine as loot rules, not a Lua pattern. Matching
+has native work/stack limits. Invalid patterns are rejected during registration.
+
+`sender_type` optionally matches `player`, `npc`, `vendor`, `server`, or `unknown`.
+It is also included on chat events. Classification uses the currently known
+speaker, fellowship and character data; an unrecognized name remains `unknown`.
+`server` means the message has no sender. The chat protocol does not reliably
+supply spell-school metadata, so there is no inferred `spell_type` field.
+
+Display rules accept `action="hide"` (default), `"show"` or `"color"`, plus
+`color="red"` (also green, blue, yellow, white or `#RRGGBB`). A color alone implies
+the color action. `show` adds the line to the selected windows even if their
+message-category filters are off. Hiding wins conflicting plugin rules; global
+filters and player squelches still apply. For example:
+
+```lua
+chat_filters = {{id="kill_alert", pattern="^You (have |)killed [0-9]+",
+  sender_type="server", action="show", window=2, color="#FF8800"}}
+```
 
 At most 32 rules may be registered per plugin. Omitted `chat_filters` retains
 them; `{}` clears them. A replacement is validated before applying any of its
 rules. Stop, disable, reload, logout, or character change removes that plugin's
 filters. One plugin cannot remove another plugin's rules. Any matching active
-rule can hide a line in its chosen window.
+hide rule can hide a line in its chosen window.
 
 For outgoing custom server commands, API 2 already supports the separate `say`
 permission and `requests={{id="bonus",service="chat",operation="send",text="/bonus"}}`.
@@ -395,8 +441,14 @@ manifest's permission set; adding permissions requires enabling it again.
 - `profiles`: write your own configuration/profile library and import/export data.
 - `data`: opt a companion into the full gameplay snapshot. Ordinary automation
   already receives it. This is read access; it does not grant any game actions.
+- `identify`: allow a companion to request one background appraisal with
+  `action="identify", target=<guid>`. Targets must be owned or currently nearby.
+  Requests share a one-per-second companion command limit and leave the player's
+  selection, examine panel and automation ownership alone. Success means requested;
+  wait for assessment data and handle a denied or unavailable appraisal.
+- `sound`: play bounded WAV notifications from your plugin's `sounds` directory.
 
-Companions may request observational permissions, profiles, data and say. The
+Companions may request observational permissions, profiles, data, identify, sound and say. The
 optional `admin_content` capability provides bounded content authoring operations;
 it does not grant general automation permissions or server privileges. Request a selection through a
 UI button to select an observed world object or, in API 2, an owned inventory item.
@@ -408,7 +460,13 @@ monsters/corpses, route visibility and movement breadcrumbs, vendor stock/curren
 fellowship vitals, confirmations, portal events and combat results. Item Tools'
 transfer eligibility, vendor room/price and inventory failure fields are included
 as well. `identified=false` means a property may be unknown; it is not evidence
-that the property is zero. Requests for new appraisals still require inventory.
+that the property is zero. Automation appraisal uses inventory permission;
+companions use the narrower identify permission above.
+
+An API 2 companion requesting only `inventory`, `inventory_revision` and
+`appraisal_revision` through `snapshot_fields` builds the cached inventory section
+without also building spells, vendor data or scanning combat targets. It still
+requires data permission. Include additional fields only when your plugin needs them.
 
 Item `icon` fields contain full DAT texture IDs for rendering. In
 `int_properties`, the Decal compatibility keys `218103809` (Icon), `218103849`
@@ -444,6 +502,15 @@ session scope. Chat events are empty without chat permission, regardless of
 whether a full snapshot is requested.
 
 `action_error` remains the numeric server result associated with `action_serial`.
+Plugins with data permission also receive native `events` for item use and casts:
+`{type="use",stage="requested",source=<guid>,target=<guid>,wcid=<source wcid>,time=...}`
+or `{type="cast",stage="requested",spell=<id>,target=<guid>,time=...}`. Applying an
+item includes `target_wcid` when known. A `stage="completed"` event copies those
+fields and adds `action_serial` and numeric `error`. Request events alone do not
+confirm success; a completed cast does not prove that its projectile hit.
+Completion reports the client action gate being released, including local
+cancellation/timeouts; an error of zero alone is not proof an item was consumed.
+Use inventory revisions or the corresponding server result to confirm effects.
 `activity_failure` is a separate optional object with the native failure's
 `activity` and `status`. The stock policy also receives this through
 `profile.ucm_activity_failure`. A rejected loot/route/equipment activity does not
@@ -513,7 +580,7 @@ ui = {
 ```
 
 Controls: text, button, checkbox, slider, number, input, select, progress, icon,
-image, row, column, section and tabs. Containers use `children`; tabs use each
+image, row, column, section, tabs, overlay and frame. Containers use `children`; tabs use each
 child's text as its tab title. Sections have `expanded`; their expansion state
 and selected tab are retained while the window is open. Common options are text,
 tooltip, enabled, padding, size (font/icon), bold and color (green/red/yellow/blue).
@@ -526,11 +593,34 @@ Tabs use the shared navigation style: dark inactive backgrounds, with a brighter
 background and gold underline on the selected page. Selection follows the page
 ID through live updates and reordering. Use `tabs` for page navigation so custom
 plugins receive the same selected-state treatment as the built-in interfaces.
-Text `size` is a point size from 10 to 36 (default 16), including intermediate
+Text `size` is a point size from 10 to 36 (default 15), including intermediate
 sizes such as 11, 13 and 15. Updating it on an existing control takes effect
 without replacing the control or losing focus in neighboring inputs.
-Progress is a fraction 0-1. Select takes up to 256 string options. Number and
+Progress is a fraction 0-1 with its label drawn over the bar. Select takes up to 256 string options. Number and
 slider accept min/max/step; native code clamps/snaps the returned value.
+For progress controls, `color` sets the fill and `text_color` sets the label
+(light text by default).
+
+`width` and `height` reserve fixed logical dimensions (0–2,048), including on
+columns and row children. Text accepts `align="left"`, `"center"`, or `"right"`.
+`overlay` draws children in order in the same space; `frame` adds a colored backing
+(default `#00000080`). Colors also accept `#RRGGBB` and `#RRGGBBAA`.
+Any frame, image, text or progress control may set `clickable=true` to emit the
+normal click event, or use the same action fields as buttons.
+
+`hide_when_pinned=true` hides a control while the window chrome is hidden and
+restores it during Quick-show immediately, without waiting for Lua. The same state
+is available as `window_chrome_hidden` in the snapshot.
+
+Custom images preserve their source aspect ratio inside their width/height box.
+All controls accept `opacity` (0–1), `rotation` (degrees, -360–360), and
+`effect="blink"`, `"pulse"`, or `"rotate"`. `period` is 0.1–60 seconds;
+`min_opacity` defaults to 0.2 for blink/pulse. Native Slate animation advances each
+frame even when Lua callbacks run slowly. Text `outline` (0–8) and `outline_color`
+add an outline. `glow` (0–8) enables a simple tinted halo for images, or an outline
+for text, using `glow_color`; these are lightweight UI effects, not postprocess
+materials. See [Graphics Gallery](Examples/graphics_gallery/main.lua) for layered
+artwork, a vital gauge, a countdown, native effects and clickable controls.
 
 Buttons default to `{type="click",id=...}` events. Optional `action` is event,
 select, waypoint or command; a command button uses `command="/acueucm ..."`. Native
@@ -601,6 +691,13 @@ keys. Plugin chat/messages and this inbox are separate bounded streams.
   This display-only service sends no server packet and does not change the host's
   global notice. It shares the four-request / half-second service budget. Read
   the result event and retry a rate-limited notice if delivery matters.
+  Optional `window` (0 main, 1–4 extra, -1 all) explicitly routes past that window's
+  category settings. Optional `color` uses the display-filter colors above. Both
+  are retained in local history across HUD rebuilds. Global filters still apply.
+- **sound**: play with `asset="alert.wav"`, optional `volume` (0–1). Requires sound.
+  Files must be directly inside your plugin's `sounds` directory: PCM16 WAV,
+  mono/stereo, 8–48 kHz, at most ten seconds and 1 MiB. Paths and URLs are rejected.
+  Uses the service rate limit; no looping or persistent audio source is created.
 - **log**: append text and optional level, or clear. snapshot.log contains the last
   200 entries. API 2 also logs native activity errors/status milestones there.
   This is a session ring, not an unbounded disk log. Use bounded state for any

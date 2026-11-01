@@ -78,6 +78,11 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
         TestFalse(TEXT("Unused inventory never crosses into Lua"),Small->HasField(TEXT("inventory")));
         TestFalse(TEXT("Unused nearby objects never cross into Lua"),Small->HasField(TEXT("objects")));
         TestTrue(TEXT("Events and capability envelope survive field selection"),Small->HasField(TEXT("events"))&&Small->HasField(TEXT("capabilities")));
+        Observer.SnapshotFields={TEXT("inventory"),TEXT("inventory_revision"),TEXT("appraisal_revision")};
+        const auto InventoryOnly=H->PublicSnapshot(Observer);
+        TestTrue(TEXT("Inventory observer receives cached item data"),InventoryOnly->HasField(TEXT("inventory"))&&InventoryOnly->HasField(TEXT("inventory_revision")));
+        TestFalse(TEXT("Inventory observer skips spells, targets and full snapshot construction"),Batch.Data.IsValid()||InventoryOnly->HasField(TEXT("spells"))||InventoryOnly->HasField(TEXT("targets")));
+        Observer.SnapshotFields={TEXT("char_ints"),TEXT("action_serial")};
         Observer.Permissions.Reset();const auto Restricted=H->PublicSnapshot(Observer);
         TestFalse(TEXT("Field requests cannot grant data permission"),Restricted->HasField(TEXT("char_ints"))||Restricted->HasField(TEXT("action_serial")));
     }
@@ -136,7 +141,7 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
         H->UpdateCompanionChatContext();TestTrue(TEXT("Character transition clears filter registrations"),P->ChatFilters.IsEmpty());Session.PlayerGuid--;H->UpdateCompanionChatContext();
         H->ApplyPublicOutput(*P,Output,Error);
         TestTrue(TEXT("Explicit empty list clears filters"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"chat_filters":[]})")),Error)&&P->ChatFilters.IsEmpty());
-        for(const TCHAR* Bad:{TEXT(R"({"chat_filters":[{"id":"x","chat_type":6}]})"),TEXT(R"({"chat_filters":[{"id":"x","contains":"a","seconds":301}]})"),TEXT(R"({"chat_filters":[{"id":"x","contains":"a"},{"id":"x","contains":"b"}]})")})
+        for(const TCHAR* Bad:{TEXT(R"({"chat_filters":[{"id":"x"}]})"),TEXT(R"({"chat_filters":[{"id":"x","contains":"a","seconds":301}]})"),TEXT(R"({"chat_filters":[{"id":"x","contains":"a"},{"id":"x","contains":"b"}]})")})
             TestFalse(TEXT("Malformed or unbounded display rules rejected"),H->ApplyPublicOutput(*P,ParseAPI(Bad),Error));
         TestTrue(TEXT("Literal exact/prefix filters accepted"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"chat_filters":[{"id":"bonus","prefix":"BONUS","exact":"Bonus active","window":4,"case_sensitive":false}]})")),Error));
         TestEqual(TEXT("Extra window mask and case-insensitive conjunction work"),int32(H->FilterPluginChatWindows(TEXT("Bonus active"),TEXT(""),6)),16);
@@ -144,6 +149,33 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
         H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"chat_filters":[]})")),Error);
     }
     FACEPluginVM Presentation;
+    {
+        FACEPluginVM Reader;TSharedPtr<FJsonObject> Rules;
+        TestTrue(TEXT("Subscription script loads"),Reader.Load(TEXT("return function() return {chat_subscriptions={{id='kills',prefix='You have killed',sender_type='server'}}} end"),Error));
+        TestTrue(TEXT("Subscriptions survive Lua output decoding"),Reader.Step(Snapshot,P->Profile,Rules,Error)&&Rules->HasField(TEXT("chat_subscriptions")));
+        TestTrue(TEXT("Native delivery subscription installs"),H->ApplyPublicOutput(*P,Rules,Error));
+        for(int32 I=0;I<4000;++I)C->OnChatMessage.Broadcast(TEXT("Combat spam"),TEXT(""),6);
+        C->OnChatMessage.Broadcast(TEXT("You have killed 3 rats."),TEXT(""),6);
+        TestEqual(TEXT("Irrelevant burst never enters the plugin inbox"),P->ChatInbox.Num(),1);
+        H->ApplyPublicOutput(*P,Rules,Error);
+        const auto Batch=H->PublicSnapshot(*P);
+        TestEqual(TEXT("A repeated registration keeps pending relevant messages"),Batch->GetArrayField(TEXT("chat_events")).Num(),1);
+        TestEqual(TEXT("Kill information arrives in the first callback after combat spam"),Batch->GetArrayField(TEXT("chat_events"))[0]->AsObject()->GetStringField(TEXT("raw_text")),FString(TEXT("You have killed 3 rats.")));
+        TestFalse(TEXT("No unrelated catch-up pages remain"),Batch->GetBoolField(TEXT("chat_more")));
+        P->SelectiveChat=false;P->ChatSubscriptions.Reset();
+        TestTrue(TEXT("Pre-display pattern routing accepted"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"chat_filters":[{"id":"solves","pattern":"^You (have |)killed [0-9]+","sender_type":"server","action":"show","window":2,"color":"#FF8800"}]})")),Error));
+        auto Style=H->PresentPluginChat(TEXT("You have killed 3 rats."),TEXT(""),6);
+        TestEqual(TEXT("Matching line forces only the requested window"),int32(Style.Forced),4);
+        TestTrue(TEXT("Matching line has its requested color before display"),Style.Colors.Contains(2)&&Style.Colors[2].Equals(FLinearColor(FColor(255,136,0))));
+        TestEqual(TEXT("A player cannot impersonate a server sender rule"),int32(H->PresentPluginChat(TEXT("You have killed 3 rats."),TEXT("Test character"),6).Forced),0);
+        H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"chat_filters":[]})")),Error);
+        P->Permissions.Add(TEXT("data"));P->PluginEvents.Reset();
+        H->ObserveItemUse(Rat.Guid,0);H->ObserveUseDone(0);
+        TestEqual(TEXT("Use requests and completions are separate events"),P->PluginEvents.Num(),2);
+        TestEqual(TEXT("Use event includes the target GUID"),P->PluginEvents[0]->AsObject()->GetNumberField(TEXT("target")),double(Rat.Guid));
+        TestEqual(TEXT("Completion carries the action serial"),P->PluginEvents[1]->AsObject()->GetNumberField(TEXT("action_serial")),double(H->ActionSerial));
+        P->PluginEvents.Reset();
+    }
     TestTrue(TEXT("Lua presentation script loads"),Presentation.Load(TEXT("return function() return {presentation={title='Quest Tracker - 12 kills',icon='active.png',window={opacity=0.35,pinned=true}}} end"),Error));
     TestTrue(TEXT("Lua decoder exposes presentation output"),Presentation.Step(Snapshot,P->Profile,Output,Error));
     TestTrue(TEXT("Lua presentation applies"),Output&&H->ApplyPublicOutput(*P,Output,Error));
@@ -195,6 +227,11 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
         {"id":"buttons","type":"row","children":[{"id":"rat","type":"button","text":"Select Red Rat","action":"select","target":12},{"id":"refresh","type":"button","text":"Refresh tasks"}]}]},
         {"id":"library","type":"column","text":"Profiles","children":[{"id":"note","text":"Named routes, loot rules and settings are reusable."}]}]}]})JSON"));
     TestTrue(TEXT("All structured controls validate"),H->ApplyPublicOutput(*P,UI,Error));
+    const auto Graphics=ParseAPI(TEXT(R"({"ui":[{"id":"layers","type":"overlay","width":220,"height":100,"children":[{"id":"art","type":"image","asset":"tracker.png","width":220,"height":100,"effect":"pulse","period":2,"min_opacity":0.4,"glow":2},{"id":"gauge","type":"progress","value":0.65,"text":"65 / 100","align":"center","outline":1,"clickable":true}]}]})"));
+    TestTrue(TEXT("Layered graphics and native effects validate"),H->ApplyPublicOutput(*P,Graphics,Error));
+    TestTrue(TEXT("Clicking a gauge delivers a normal click event"),H->ClickPluginRow(P->Id,TEXT("gauge"))&&P->PluginEvents.Last()->AsObject()->GetStringField(TEXT("id"))==TEXT("gauge"));
+    TestFalse(TEXT("Zero-period animations are rejected"),H->ValidatePluginUI(ParseAPI(TEXT(R"({"ui":[{"id":"bad","effect":"rotate","period":0}]})"))->GetArrayField(TEXT("ui")),Error));
+    H->ApplyPublicOutput(*P,UI,Error);
     TestTrue(TEXT("Item icon metadata accepted"),H->ValidatePluginUI(ParseAPI(TEXT(R"({"ui":[{"id":"item","type":"item_icon","icon":100663297,"overlay":0,"underlay":0,"effects":1,"item_type":1}]})"))->GetArrayField(TEXT("ui")),Error));
     TestFalse(TEXT("Item icon metadata cannot wrap negative IDs"),H->ValidatePluginUI(ParseAPI(TEXT(R"({"ui":[{"id":"item","type":"item_icon","effects":-1}]})"))->GetArrayField(TEXT("ui")),Error));
     TestFalse(TEXT("Invalid control mode rejected"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"controls":"invalid"}})")),Error));
@@ -222,7 +259,44 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
         TestEqual(TEXT("Plugin notice reaches routed desktop/mobile/VR chat"),Chat->ChatLog->GetChildrenCount(),1);
         TestEqual(TEXT("Plugin notice is retained for chat rebind"),C->ChatHistory.Num(),Before+1);
         if(C->ChatHistory.Num()>Before)TestEqual(TEXT("Plugin notice retains its routing category"),C->ChatHistory.Last().FilterType,ACEChatMessageType::Plugin);
+        Chat->MainChatTypeFilter=0;
+        Request(TEXT(R"({"requests":[{"id":"forced","service":"notice","operation":"show","text":"Explicit routing","window":0,"color":"red"}]})"));
+        TestEqual(TEXT("Explicit notice routing bypasses the window category filter"),Chat->ChatLog->GetChildrenCount(),2);
+        const auto SavedNotice=C->ChatHistory.Last();
+        TestTrue(TEXT("Explicit notice route and color survive a HUD rebuild"),SavedNotice.ForcedWindows==1&&SavedNotice.Color.IsSet());
+        {
+            TGuardValue<uint8> Windows(C->CurrentChatWindows,SavedNotice.ForcedWindows);
+            TGuardValue<TOptional<FLinearColor>> Color(C->CurrentChatColor,SavedNotice.Color);
+            Chat->HandleChatMessage(SavedNotice.Text,SavedNotice.Sender,SavedNotice.Type,SavedNotice.FilterType);
+            TestEqual(TEXT("History replay retains the explicit notice destination"),Chat->ChatLog->GetChildrenCount(),3);
+        }
         C->OnRoutedChatMessage.RemoveDynamic(Chat,&UACEUIGameplayBinder::HandleChatMessage);
+    }
+    {
+        FACEClientPlugin Observer;Observer.Id=TEXT("identify_observer");Observer.Companion=true;Observer.Api=2;
+        Observer.Enabled=true;Observer.Running=true;Observer.Player=Session.PlayerGuid;Observer.Server=Session.ServerName;
+        const auto Identify=ParseAPI(TEXT(R"({"action":"identify","target":12})"));
+        TestFalse(TEXT("A read-only observer cannot request appraisal without permission"),H->CompanionAction(Observer,Identify,Error));
+        Observer.Permissions.Add(TEXT("identify"));
+        const int32 Selected=C->GetSelectedObject().Guid;
+        TestTrue(TEXT("Companion can request targeted background appraisal"),H->CompanionAction(Observer,Identify,Error));
+        TestEqual(TEXT("Targeted appraisal preserves the user's selection"),C->GetSelectedObject().Guid,Selected);
+        TestTrue(TEXT("Targeted appraisal does not take automation ownership"),H->PolicyPlugin()==P);
+        TestFalse(TEXT("Companion appraisal is rate limited"),H->CompanionAction(Observer,Identify,Error));
+        Observer.NextCommand=0;
+        TestFalse(TEXT("Companion cannot appraise an unknown object"),H->CompanionAction(Observer,ParseAPI(TEXT(R"({"action":"identify","target":123456})")),Error));
+        Request(TEXT(R"({"requests":[{"id":"sound-denied","service":"sound","operation":"play","asset":"alert.wav"}]})"));
+        TestFalse(TEXT("Sound requires an explicit permission"),P->PluginEvents.Last()->AsObject()->GetBoolField(TEXT("ok")));
+        P->Permissions.Add(TEXT("sound"));
+        Request(TEXT(R"({"requests":[{"id":"sound-path","service":"sound","operation":"play","asset":"../alert.wav"}]})"));
+        TestFalse(TEXT("Sound assets cannot escape their folder"),P->PluginEvents.Last()->AsObject()->GetBoolField(TEXT("ok")));
+        IFileManager::Get().MakeDirectory(*(Installed/TEXT("sounds")),true);
+        TArray<uint8> Wave;auto LE=[&](uint32 V,int Bytes){for(int I=0;I<Bytes;++I)Wave.Add(uint8(V>>(I*8)));};
+        auto Tag=[&](const char* T){for(int I=0;I<4;++I)Wave.Add(T[I]);};
+        Tag("RIFF");LE(1636,4);Tag("WAVE");Tag("fmt ");LE(16,4);LE(1,2);LE(1,2);LE(8000,4);LE(16000,4);LE(2,2);LE(16,2);Tag("data");LE(1600,4);Wave.AddZeroed(1600);
+        FFileHelper::SaveArrayToFile(Wave,*(Installed/TEXT("sounds/alert.wav")));
+        Request(TEXT(R"({"requests":[{"id":"sound-valid","service":"sound","operation":"play","asset":"alert.wav"}]})"));
+        TestTrue(TEXT("A bounded PCM16 sound is accepted"),P->PluginEvents.Last()->AsObject()->GetBoolField(TEXT("ok")));
     }
     TestTrue(TEXT("Save service accepted"),Request(TEXT(R"({"requests":[{"id":"save","service":"profiles","operation":"save","group":"Routes","name":"Loop","data":{"route":[{"cell":2103705613,"x":34,"y":104,"z":12}]}}]})")));
     TestTrue(TEXT("Profile write confirmed"),P->PluginEvents.Last()->AsObject()->GetBoolField(TEXT("ok")));
@@ -303,6 +377,49 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
             return nullptr;
         };
         const auto StartButton=FindVisible(Panel,TEXT("PluginStartToggle"));
+        H->ApplyPublicOutput(*P,Graphics,Error);
+        for(int32 I=0;I<3;++I){++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}
+        const auto GraphicFrame=FindVisible(Panel,TEXT("PluginControl.layers"));
+        const auto GraphicImage=FindVisible(Panel,TEXT("PluginControl.art"));
+        TestTrue(TEXT("Layered art renders at its requested fixed dimensions"),GraphicFrame&&GraphicFrame->GetCachedGeometry().GetLocalSize().Equals(FVector2D(220,100),1));
+        TestTrue(TEXT("Custom image is present in the layered UI"),GraphicImage.IsValid());
+        if(GraphicImage)
+        {
+            const auto Visual=GraphicImage->GetChildren()->GetChildAt(0);
+            Visual->Tick(Visual->GetCachedGeometry(),0,0);
+            TestEqual(TEXT("Native pulse starts at minimum opacity"),Visual->GetRenderOpacity(),.4f);
+            Visual->Tick(Visual->GetCachedGeometry(),1,1);
+            TestEqual(TEXT("Native pulse advances without another Lua callback"),Visual->GetRenderOpacity(),1.f);
+        }
+        TArray<FColor> GraphicPixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(GraphicPixels);
+        TArray64<uint8> GraphicPng;FImageUtils::PNGCompressImageArray(740,880,GraphicPixels,GraphicPng);
+        FFileHelper::SaveArrayToFile(GraphicPng,*(FPaths::ProjectSavedDir()/TEXT("PublicAPI-graphics.png")));
+        {
+            const FString Gallery=IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("Docs/Plugins/Examples/graphics_gallery");
+            FString GallerySource;FACEPluginVM Demo;TSharedPtr<FJsonObject> DemoOutput;
+            TestTrue(TEXT("Graphics Gallery example loads"),FFileHelper::LoadFileToString(GallerySource,*(Gallery/TEXT("main.lua")))&&Demo.Load(GallerySource,Error));
+            TestTrue(TEXT("Graphics Gallery runs through the real Lua decoder"),Demo.Step(Snapshot,P->Profile,DemoOutput,Error));
+            if(DemoOutput)
+            {
+                TGuardValue<FString> Directory(P->Directory,Gallery);
+                P->Images=MakeShared<FACEPluginImageCache>();
+                TestTrue(TEXT("Graphics Gallery uses the validated public API"),H->ApplyPublicOutput(*P,DemoOutput,Error));
+                for(int32 I=0;I<3;++I){++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}
+                TestNotNull(TEXT("Bundled gallery PNG is loaded"),P->Images->Load(P->Directory,TEXT("sigil.png")));
+                H->SetPluginWindowPinned(P->Id,true);
+                ++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();
+                TestFalse(TEXT("Pinned gallery hides its Reset control immediately"),FindVisible(Panel,TEXT("PluginControl.restart")).IsValid());
+                H->SetPluginWindowPinned(P->Id,false);
+                ++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();
+                TestTrue(TEXT("Unpin restores Reset without Lua output"),FindVisible(Panel,TEXT("PluginControl.restart")).IsValid());
+                Target->GameThread_GetRenderTargetResource()->ReadPixels(GraphicPixels);
+                FImageUtils::PNGCompressImageArray(740,880,GraphicPixels,GraphicPng);
+                FFileHelper::SaveArrayToFile(GraphicPng,*(FPaths::ProjectSavedDir()/TEXT("PublicAPI-gallery.png")));
+            }
+            P->Images=MakeShared<FACEPluginImageCache>();
+        }
+        H->ApplyPublicOutput(*P,UI,Error);
+        for(int32 I=0;I<3;++I){++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}
         TestTrue(TEXT("Default plugin controls retain separate Start and Stop"),StartButton&&FindVisible(Panel,TEXT("PluginStop")));
         TestTrue(TEXT("Default plugin retains settings and profiles"),FindVisible(Panel,TEXT("PluginSettings")).IsValid());
         TestTrue(TEXT("Runtime control options accepted"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"controls":"toggle","start_label":"Resume tracker","stop_label":"Pause tracker","settings":false}})")),Error));

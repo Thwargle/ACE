@@ -48,6 +48,7 @@ DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnTradeEvent, int32 /*EventType*/);
 DECLARE_MULTICAST_DELEGATE(FACEOnCharacterTitlesChanged);
 DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnUseDone, uint32 /*WeenieError*/);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FACEOnSpellCastRequested, int32 /*SpellId*/, int32 /*TargetGuid*/);
+DECLARE_MULTICAST_DELEGATE_TwoParams(FACEOnItemUseRequested, int32 /*SourceGuid*/, int32 /*TargetGuid*/);
 DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnMoveToFailed, uint32 /*WeenieError*/);
 DECLARE_MULTICAST_DELEGATE(FACEOnFellowshipChanged);
 DECLARE_MULTICAST_DELEGATE(FACEOnAllegianceChanged);
@@ -224,6 +225,7 @@ public:
 	FACEOnCharacterTitlesChanged OnCharacterTitlesChanged;
 	FACEOnUseDone OnUseDone;
 	FACEOnSpellCastRequested OnSpellCastRequested;
+	FACEOnItemUseRequested OnItemUseRequested;
 	FACEOnMoveToFailed OnMoveToFailed;
 	/** Shared local/server approach failure path: cancel movement and show the retail error. */
 	void ReportMoveToFailure(uint32 Error);

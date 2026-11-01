@@ -182,12 +182,29 @@ bool FACEWalkingStepTest::RunTest(const FString&)
  TestTrue(TEXT("Movement resumes when the swing finishes"),PC->ForwardAxis>0);
  Reset();App->PreferredStyle=ACEMotion::StanceSwordCombat;App->SetPreferredStyle(ACEMotion::StanceNonCombat);
  TestTrue(TEXT("Returning to peace plays the stance linkage and pauses movement"),App->IsMovementLockedByAction());
- // Actual DAT links, not a timer based on spell duration, own forward travel.
- // Exercise both directions and walk/run through magic and missile sequences.
+ // Casting intentionally permits ordinary movement throughout its authored
+ // animation. Cover both PowerUp families and forward/backward walk/run.
+ for(uint32 Command : {0x40000034u,0x400000D3u,0x400000E0u,0x400000E1u,
+   0x1000006Fu,0x10000078u,0x1000012Bu,0x10000134u})
+ for(float Dt : {1.f/30,1.f/144}) for(bool Run : {false,true}) for(bool Back : {false,true})
+ {
+  Reset();App->PreferredStyle=ACEMotion::StanceMagic;
+  App->PlayActionMotion(Command,1,ACEMotion::StanceMagic);
+  Key(EKeys::LeftShift,!Run);Key(Back?EKeys::X:EKeys::W,true);
+  TestFalse(TEXT("Cast and windup animations never block forward movement"),App->HasPendingCombatForwardMotion());
+  for(int32 Frame=0;Frame<3;++Frame)
+  {
+   const FVector Before=Pawn->GetActorLocation();Tick(Dt);
+   const float Speed=(Back ? Client->GetLocomotionSpeed(false)*(Run?Client->GetRunRate():1.f)*.65f
+     : Client->GetLocomotionSpeed(Run));
+   TestTrue(*FString::Printf(TEXT("Casting %08X keeps %s speed, direction %d at %.0fHz"),Command,Run?TEXT("run"):TEXT("walk"),Back?-1:1,1/Dt),
+    FMath::IsNearlyEqual(Pawn->GetActorLocation().X-Before.X,(Back?-1.f:1.f)*Speed*100.f*Dt,.05));
+   TestEqual(TEXT("Movement preserves the active casting animation"),App->ActionCommand,Command);
+  }
+ }
+ // Missile links still own forward travel until the draw/reload finishes.
  struct FCombatCase {uint32 Command,Style;};
- for(const auto& C : {FCombatCase{0x40000034,ACEMotion::StanceMagic},
-   {0x1000006F,ACEMotion::StanceMagic},{0x1000012B,ACEMotion::StanceMagic},
-   {0x40000016,ACEMotion::StanceBowCombat},{0x40000022,ACEMotion::StanceBowCombat},
+ for(const auto& C : {FCombatCase{0x40000016,ACEMotion::StanceBowCombat},{0x40000022,ACEMotion::StanceBowCombat},
    {0x40000016,ACEMotion::StanceCrossbow},{0x40000022,ACEMotion::StanceAtlatl},
    {0x40000022,ACEMotion::StanceThrownWeapon}})
  for(float Dt : {1.f/30,1.f/144}) for(bool Run : {false,true}) for(bool Back : {false,true})

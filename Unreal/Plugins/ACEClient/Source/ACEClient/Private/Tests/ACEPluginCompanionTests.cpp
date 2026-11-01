@@ -58,12 +58,14 @@ bool FACEPluginCompanionTest::RunTest(const FString&)
     FFileHelper::SaveStringToFile(TEXT("return function(s) return {status='active'} end"),*(Installed/TEXT("main.lua")));
     const TCHAR* ManifestOptions[]={TEXT(R"({"update_interval":2,"snapshot_fields":["char_ints","health"]})"),
         TEXT(R"({"update_interval":0.1})"),TEXT(R"({"update_interval":61})"),TEXT(R"({"update_interval":"2"})"),
-        TEXT(R"({"snapshot_fields":[7]})"),TEXT(R"({"snapshot_fields":"health"})")};
+        TEXT(R"({"snapshot_fields":[7]})"),TEXT(R"({"snapshot_fields":"health"})"),
+        TEXT(R"({"chat_history":false,"chat_subscriptions":[{"id":"kills","prefix":"You have killed"}]})"),
+        TEXT(R"({"chat_history":"false"})"),TEXT(R"({"chat_subscriptions":[{"id":"bad","pattern":"["}]})")};
     for(int32 I=0;I<UE_ARRAY_COUNT(ManifestOptions);++I)
     {
         auto M=J(ManifestOptions[I]);const FString Id=FString::Printf(TEXT("snapshot_fixture_%d"),I);
         M->SetStringField(TEXT("id"),Id);M->SetStringField(TEXT("name"),Id);M->SetNumberField(TEXT("api"),2);M->SetStringField(TEXT("mode"),TEXT("companion"));
-        M->SetArrayField(TEXT("permissions"),{MakeShared<FJsonValueString>(TEXT("data"))});
+        M->SetArrayField(TEXT("permissions"),{MakeShared<FJsonValueString>(TEXT("data")),MakeShared<FJsonValueString>(TEXT("chat")),MakeShared<FJsonValueString>(TEXT("identify")),MakeShared<FJsonValueString>(TEXT("sound"))});
         const FString Dir=Root/TEXT("Installed")/Id;IFileManager::Get().MakeDirectory(*Dir,true);
         FString Text;FJsonSerializer::Serialize(M.ToSharedRef(),TJsonWriterFactory<>::Create(&Text));
         FFileHelper::SaveStringToFile(Text,*(Dir/TEXT("plugin.json")));
@@ -72,7 +74,9 @@ bool FACEPluginCompanionTest::RunTest(const FString&)
     }
     H->Discover();auto P=H->Find(TEXT("test_tracker"));if(!TestTrue(TEXT("Companion manifest discovered"),P&&P->Companion))return false;
     for(int32 I=0;I<UE_ARRAY_COUNT(ManifestOptions);++I)
-        TestEqual(TEXT("Snapshot manifest accepts valid fields/interval and rejects malformed options"),H->Find(FString::Printf(TEXT("snapshot_fixture_%d"),I)).IsValid(),I==0);
+        TestEqual(FString::Printf(TEXT("Manifest observation fixture %d accepts only valid options"),I),H->Find(FString::Printf(TEXT("snapshot_fixture_%d"),I)).IsValid(),I==0||I==6);
+    if(auto Selected=H->Find(TEXT("snapshot_fixture_6")))
+        TestTrue(TEXT("Manifest subscription and fresh-start option are applied"),Selected->SelectiveChat&&!Selected->ChatHistory&&Selected->ChatSubscriptions.Num()==1);
     if(auto Selected=H->Find(TEXT("snapshot_fixture_0")))
         TestTrue(TEXT("Manifest choices reach the scheduler and snapshot filter"),Selected->UpdateInterval==2&&Selected->SelectiveSnapshot&&Selected->WantsSnapshotField(TEXT("health"))&&!Selected->WantsSnapshotField(TEXT("inventory")));
     C->Session=MakeShared<FACESession>();auto& Session=*C->Session;Session.State=EACESessionState::InWorld;Session.PlayerGuid=0x50000001;Session.ServerName=TEXT("Companion Test");
@@ -112,6 +116,13 @@ bool FACEPluginCompanionTest::RunTest(const FString&)
     TestEqual(TEXT("Raw chat preserved"),Snapshot->GetArrayField(TEXT("chat_events"))[0]->AsObject()->GetStringField(TEXT("raw_text")),FString(TEXT("You have killed 12 of 50 Red Rats.")));
     TestTrue(TEXT("Chat drained independently per companion"),H->CompanionSnapshot(*P)->GetArrayField(TEXT("chat_events")).IsEmpty());
     H->Stop(P->Id);H->Start(P->Id);TestTrue(TEXT("Stop/start does not redeliver consumed chat"),H->CompanionSnapshot(*P)->GetArrayField(TEXT("chat_events")).IsEmpty());
+    H->Stop(P->Id);P->ChatHistory=false;
+    for(int32 I=0;I<300;++I)C->OnChatMessage.Broadcast(TEXT("Before restart"),TEXT(""),6);
+    H->Start(P->Id);
+    TestTrue(TEXT("History opt-out starts at newest chat on restart"),H->CompanionSnapshot(*P)->GetArrayField(TEXT("chat_events")).IsEmpty());
+    C->OnChatMessage.Broadcast(TEXT("After restart"),TEXT(""),6);
+    TestEqual(TEXT("History opt-out still delivers new messages"),H->CompanionSnapshot(*P)->GetArrayField(TEXT("chat_events")).Num(),1);
+    P->ChatHistory=true;
     for(int I=0;I<140;++I)C->OnChatMessage.Broadcast(TEXT("quest line"),TEXT(""),ACEChatMessageType::System);
     Snapshot=H->CompanionSnapshot(*P);TestEqual(TEXT("Lua batch stays bounded"),Snapshot->GetArrayField(TEXT("chat_events")).Num(),128);
     TestFalse(TEXT("140-line burst no longer overflows"),Snapshot->GetBoolField(TEXT("chat_gap")));
@@ -295,6 +306,16 @@ bool FACEPluginCompanionTest::RunTest(const FString&)
     TestFalse(TEXT("Old unread pages are not reported as overflow on relog"),Snapshot->GetBoolField(TEXT("chat_gap")));
     TestEqual(TEXT("New login receives only its own chat"),Snapshot->GetArrayField(TEXT("chat_events")).Num(),1);
     if(!Snapshot->GetArrayField(TEXT("chat_events")).IsEmpty())TestEqual(TEXT("New login chat preserved"),Snapshot->GetArrayField(TEXT("chat_events"))[0]->AsObject()->GetStringField(TEXT("raw_text")),FString(TEXT("New login quest")));
+    const FString TrackerId=P->Id;const uint64 DeliveredCursor=P->ChatCursor;
+    H->Discover();P=H->Find(TrackerId);
+    TestTrue(TEXT("Refresh preserves the delivered chat cursor"),P&&P->ChatCursor==DeliveredCursor);
+    if(P)
+    {
+        TestTrue(TEXT("Refreshed tracker starts"),H->Start(P->Id));
+        TestTrue(TEXT("Refresh does not replay previously delivered login chat"),H->CompanionSnapshot(*P)->GetArrayField(TEXT("chat_events")).IsEmpty());
+        C->OnChatMessage.Broadcast(TEXT("After refresh"),TEXT(""),ACEChatMessageType::System);
+        TestEqual(TEXT("Refreshed tracker receives new chat immediately"),H->CompanionSnapshot(*P)->GetArrayField(TEXT("chat_events")).Num(),1);
+    }
     return true;
 }
 #endif

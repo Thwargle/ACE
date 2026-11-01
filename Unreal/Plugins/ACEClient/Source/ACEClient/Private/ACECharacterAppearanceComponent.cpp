@@ -1195,14 +1195,11 @@ bool UACECharacterAppearanceComponent::IsMovementLockedByAction() const
 
 bool UACECharacterAppearanceComponent::HasPendingCombatForwardMotion() const
 {
-	// CMotionTable::GetObjectSequence removes cyclic animations, retaining
-	// unfinished links/actions. Human walk/run displacement comes from the
-	// position frames of that cycle, so it cannot run underneath a cast, draw,
-	// reload, swing or stance change. Sidestep/turn remain separate modifiers.
+	// Keep missile links and physical combat actions in control of forward
+	// travel. Spell gestures and PowerUp actions deliberately allow movement
+	// during their animation, restoring the more responsive casting controls.
 	if (AnimMode != EACEAnimMode::ActionOneShot || bHoldActionFinal) return false;
-	const bool bPowerUp = (ActionCommand >= 0x1000006Fu && ActionCommand <= 0x10000078u)
-		|| (ActionCommand >= 0x1000012Bu && ActionCommand <= 0x10000134u);
-	return bPowerUp || ACEIsMagicCastCommand(ActionCommand) || ACEIsMissileSubstate(ActionCommand)
+	return ACEIsMissileSubstate(ActionCommand)
 		|| (bActionUsesStateTransition && ACEIsMissileSubstate(ActionFromCommand))
 		|| IsMovementLockedByAction();
 }
@@ -2394,6 +2391,15 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 			}
 			else
 			{
+				// Falling->Run/Walk already enters the requested cyclic motion.
+				// Keep that direction when handing back to locomotion; treating it
+				// as Ready queues another entry link, briefly braking held movement.
+				if (bActionUsesStateTransition && ActionFromCommand == 0x40000015u)
+				{
+					WalkingMotion.Reset();
+					WalkingMotion.Direction = ActionCommand == 0x44000007u ? 2
+						: ActionCommand == 0x45000005u ? 1 : ActionCommand == 0x45000006u ? -1 : 0;
+				}
 				BeginPoseBlendFromCurrent(ACEAttackMotion::IsAttack(ActionCommand) ? 0.f : bActionUsesStateTransition ? .06f : StanceBlendDuration);
 				ActionCommand = 0;
 				ActionFromCommand = ACEMotion::Ready;

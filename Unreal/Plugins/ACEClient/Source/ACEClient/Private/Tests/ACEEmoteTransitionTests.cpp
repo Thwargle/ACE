@@ -370,6 +370,12 @@ bool FACEEmoteTransitionTest::RunTest(const FString&)
    TestTrue(TEXT("Grounded refresh preserves the unfinished recovery"),App->ActionCommand==Destination && App->bActionUsesStateTransition);
   }
   TestTrue(TEXT("Landing recovery completes and resumes locomotion"),Completed && App->ActionCommand==0);
+  App->SetWalkingTransitionsEnabled(true);
+  App->SetLocomotionInput(Forward,0,Run,1);
+  TestFalse(TEXT("Held movement after landing does not replay Ready-to-walk/run"),App->HasWalkingTransition());
+  float CycleSeconds=0;
+  App->AdvanceWalkingMotion(Dt,CycleSeconds);
+  TestEqual(TEXT("Held movement receives the entire next frame after landing"),CycleSeconds,Dt);
  }
  // The state-link path must not interfere with the separate scarab/cast queue,
  // immediate airborne motions or the final death hold.

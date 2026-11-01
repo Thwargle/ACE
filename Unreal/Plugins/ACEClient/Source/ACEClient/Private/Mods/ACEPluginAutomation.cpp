@@ -362,6 +362,7 @@ void UACEPluginSubsystem::CompletePendingAction(uint32 Error)
     if(Error&&PendingSpell)OffensiveCasts.RemoveAll([this](const auto& E){return E.Spell==PendingSpell&&E.Target==PendingSpellTarget;});
     if(Error&&PendingSpell)PendingDebuffCasts.RemoveAll([this](const auto& E){return N(E->AsObject(),TEXT("spell"))==PendingSpell&&N(E->AsObject(),TEXT("target"))==uint32(PendingSpellTarget);});
     LastActionError=Error;LastCompletedSpell=PendingSpell;LastSpellConfirmed=PendingSpellConfirmed&&!PendingSpellFizzled&&!Error;++ActionSerial;
+    if(ObservedAction){auto Event=MakeShared<FJsonObject>(*ObservedAction);Event->SetStringField(TEXT("stage"),TEXT("completed"));Event->SetNumberField(TEXT("action_serial"),ActionSerial);Event->SetNumberField(TEXT("error"),Error);EmitPluginAction(Event);ObservedAction.Reset();}
     if(PendingManaRefresh&&!Error)
     {
         auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
@@ -523,7 +524,8 @@ void UACEPluginSubsystem::RefreshAutomationData()
         SaveItemBuffTimers();
         UnbindCombatEvents();CombatTarget=0;DefeatedTargets.Empty();LastCombatDeath.Reset();LastCombatVitals=FIntVector(-1,-1,-1);
         ConfirmedBuffAckAt=BuffRetryAt=0;ConfirmedBuffOwner.Empty();DeferredBuffIntent.Reset();DeferredBuffOwner.Empty();PendingBuffResultDriven=false;
-        if(auto Old=ObservedSession.Pin()){Old->OnUseDone.Remove(UseDoneHandle);Old->OnSpellCastRequested.Remove(SpellCastHandle);Old->OnPlayerTell.Remove(TellHandle);Old->OnChatMessage.Remove(MetaChatHandle);Old->OnCombatFeedback.Remove(CombatFeedbackHandle);}
+        if(auto Old=ObservedSession.Pin()){Old->OnItemUseRequested.Remove(ItemUseHandle);Old->OnUseDone.Remove(UseDoneHandle);Old->OnSpellCastRequested.Remove(SpellCastHandle);Old->OnPlayerTell.Remove(TellHandle);Old->OnChatMessage.Remove(MetaChatHandle);Old->OnCombatFeedback.Remove(CombatFeedbackHandle);}
+        ObservedAction.Reset();ItemUseHandle=Session->OnItemUseRequested.AddUObject(this,&UACEPluginSubsystem::ObserveItemUse);
         ObservedSession=Session;UseDoneHandle=Session->OnUseDone.AddUObject(this,&UACEPluginSubsystem::ObserveUseDone);
         SpellCastHandle=Session->OnSpellCastRequested.AddUObject(this,&UACEPluginSubsystem::ObserveTargetSpellCast);
         MetaChatHandle=Session->OnChatMessage.AddUObject(this,&UACEPluginSubsystem::ObserveMetaChat);MetaChatEvents.Empty();MetaPortalEvents.Empty();MetaPortalSpace=false;
@@ -906,31 +908,8 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
     Out->SetObjectField(TEXT("skills"),SkillStats);
     Out->SetArrayField(TEXT("trained_skills"),Skills);
     Out->SetArrayField(TEXT("usable_skills"),UsableSkills);
+    ExtendInventorySnapshot(Out);
     auto ItemJson=[this](const FACEWorldObject& Item){return PluginItemSnapshot(Item);};
-    // Keep immutable rows across background assessments. A one-item reply used
-    // to reconstruct every item's property/spell tables on the game thread.
-    uint32 Eligibility=GetTypeHash(V.Level);
-    for(int32 Id=1;Id<=6;++Id){Eligibility=HashCombine(Eligibility,GetTypeHash(V.GetAttributeBase(Id)));Eligibility=HashCombine(Eligibility,GetTypeHash(V.GetAttributeCurrent(Id)));}
-    for(const auto& Skill:V.Skills){Eligibility=HashCombine(Eligibility,GetTypeHash(Skill.Base));Eligibility=HashCombine(Eligibility,GetTypeHash(Skill.Current));Eligibility=HashCombine(Eligibility,GetTypeHash(Skill.AdvancementClass));}
-    Eligibility=HashCombine(Eligibility,GetTypeHash(V.MaxHealth));Eligibility=HashCombine(Eligibility,GetTypeHash(V.MaxStamina));Eligibility=HashCombine(Eligibility,GetTypeHash(V.MaxMana));
-    for(const auto& Pair:V.StatQualityInts)Eligibility=HashCombine(Eligibility,HashCombine(GetTypeHash(Pair.Key),GetTypeHash(Pair.Value)));
-    if(InventoryRevision!=Session->GetInventoryDataRevision() || InventoryEligibility!=Eligibility
-        || (InventoryAppraisalRevision!=DataRevision && DirtyInventoryAppraisals.IsEmpty()))
-    {
-        CachedInventory.Empty();CachedInventoryIndices.Empty();
-        for(const auto& Pair:Session->GetWorldObjects())
-            if(IsOwnedPluginItem(Pair.Value) && CachedInventory.Num()<1024)
-            {CachedInventoryIndices.Add(Pair.Key,CachedInventory.Num());CachedInventory.Add(ItemJson(Pair.Value));}
-        InventoryRevision=Session->GetInventoryDataRevision();InventoryEligibility=Eligibility;
-    }
-    else if(InventoryAppraisalRevision!=DataRevision)
-        for(int32 Id:DirtyInventoryAppraisals)
-            if(const auto* Index=CachedInventoryIndices.Find(Id))
-                if(const auto* Item=Session->GetWorldObjects().Find(Id))CachedInventory[*Index]=ItemJson(*Item);
-    InventoryAppraisalRevision=DataRevision;DirtyInventoryAppraisals.Reset();
-    Out->SetArrayField(TEXT("inventory"),CachedInventory);
-    Out->SetNumberField(TEXT("inventory_revision"),double(InventoryRevision));
-    Out->SetNumberField(TEXT("appraisal_revision"),double(InventoryAppraisalRevision));
     bool AcceptOthers=false;if(auto Plugin=PolicyPlugin())Plugin->Profile->TryGetBoolField(TEXT("buff_others"),AcceptOthers);
     if(!AcceptOthers)ClearBuffRequests();
     if(BuffRequests.Num())
@@ -1621,6 +1600,7 @@ void UACEPluginSubsystem::ForgetTargetEffects(int32 Target)
 
 void UACEPluginSubsystem::ObserveTargetSpellCast(int32 Spell,int32 Target)
 {
+    ObservedAction=MakeShared<FJsonObject>();ObservedAction->SetStringField(TEXT("type"),TEXT("cast"));ObservedAction->SetStringField(TEXT("stage"),TEXT("requested"));ObservedAction->SetNumberField(TEXT("spell"),Spell);ObservedAction->SetNumberField(TEXT("target"),uint32(Target));EmitPluginAction(ObservedAction);
     LastTargetEffectSpell=Spell;LastTargetEffectTarget=Target;
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     auto* Dat=GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
@@ -1757,4 +1737,51 @@ void UACEPluginSubsystem::ObserveMetaChat(const FString& Text,const FString& Sen
     else if(Type==ACEChatMessageType::Emote&&!Sender.IsEmpty())Line=Sender+TEXT(" ")+Text;
     auto E=MakeShared<FJsonObject>();E->SetNumberField(TEXT("serial"),++MetaChatSerial);E->SetStringField(TEXT("text"),Line.Left(4096));E->SetNumberField(TEXT("color"),Type);E->SetStringField(TEXT("sender"),Sender);
     MetaChatEvents.Add(MakeShared<FJsonValueObject>(E));if(MetaChatEvents.Num()>128)MetaChatEvents.RemoveAt(0);
+}
+
+void UACEPluginSubsystem::ExtendInventorySnapshot(const TSharedPtr<FJsonObject>& Out)
+{
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Session=C->GetSession();if(!Session)return;
+    const auto& V=C->GetPlayerVitalsView();
+    auto ItemJson=[this](const FACEWorldObject& Item){return PluginItemSnapshot(Item);};
+    // Keep immutable rows across background assessments. A one-item reply used
+    // to reconstruct every item's property/spell tables on the game thread.
+    uint32 Eligibility=GetTypeHash(V.Level);
+    for(int32 Id=1;Id<=6;++Id){Eligibility=HashCombine(Eligibility,GetTypeHash(V.GetAttributeBase(Id)));Eligibility=HashCombine(Eligibility,GetTypeHash(V.GetAttributeCurrent(Id)));}
+    for(const auto& Skill:V.Skills){Eligibility=HashCombine(Eligibility,GetTypeHash(Skill.Base));Eligibility=HashCombine(Eligibility,GetTypeHash(Skill.Current));Eligibility=HashCombine(Eligibility,GetTypeHash(Skill.AdvancementClass));}
+    Eligibility=HashCombine(Eligibility,GetTypeHash(V.MaxHealth));Eligibility=HashCombine(Eligibility,GetTypeHash(V.MaxStamina));Eligibility=HashCombine(Eligibility,GetTypeHash(V.MaxMana));
+    for(const auto& Pair:V.StatQualityInts)Eligibility=HashCombine(Eligibility,HashCombine(GetTypeHash(Pair.Key),GetTypeHash(Pair.Value)));
+    if(InventoryRevision!=Session->GetInventoryDataRevision() || InventoryEligibility!=Eligibility
+        || (InventoryAppraisalRevision!=DataRevision && DirtyInventoryAppraisals.IsEmpty()))
+    {
+        CachedInventory.Empty();CachedInventoryIndices.Empty();
+        for(const auto& Pair:Session->GetWorldObjects())
+            if(IsOwnedPluginItem(Pair.Value) && CachedInventory.Num()<1024)
+            {CachedInventoryIndices.Add(Pair.Key,CachedInventory.Num());CachedInventory.Add(ItemJson(Pair.Value));}
+        InventoryRevision=Session->GetInventoryDataRevision();InventoryEligibility=Eligibility;
+    }
+    else if(InventoryAppraisalRevision!=DataRevision)
+        for(int32 Id:DirtyInventoryAppraisals)
+            if(const auto* Index=CachedInventoryIndices.Find(Id))
+                if(const auto* Item=Session->GetWorldObjects().Find(Id))CachedInventory[*Index]=ItemJson(*Item);
+    InventoryAppraisalRevision=DataRevision;DirtyInventoryAppraisals.Reset();
+    Out->SetArrayField(TEXT("inventory"),CachedInventory);
+    Out->SetNumberField(TEXT("inventory_revision"),double(InventoryRevision));
+    Out->SetNumberField(TEXT("appraisal_revision"),double(InventoryAppraisalRevision));
+}
+
+void UACEPluginSubsystem::ObserveItemUse(int32 Source,int32 Target)
+{
+    ObservedAction=MakeShared<FJsonObject>();auto& Event=ObservedAction;
+    Event->SetStringField(TEXT("type"),TEXT("use"));Event->SetStringField(TEXT("stage"),TEXT("requested"));
+    Event->SetNumberField(TEXT("source"),uint32(Source));Event->SetNumberField(TEXT("target"),uint32(Target?Target:Source));
+    FACEWorldObject Item;auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    if(C->GetWorldObject(Source,Item))Event->SetNumberField(TEXT("wcid"),Item.WeenieClassId);
+    if(Target&&C->GetWorldObject(Target,Item))Event->SetNumberField(TEXT("target_wcid"),Item.WeenieClassId);
+    EmitPluginAction(Event);
+}
+void UACEPluginSubsystem::EmitPluginAction(const TSharedPtr<FJsonObject>& Event)
+{
+    Event->SetNumberField(TEXT("time"),FPlatformTime::Seconds());
+    for(const auto& P:Plugins)if(P->Running&&P->Enabled&&P->HasPresentation()&&P->Permissions.Contains(TEXT("data")))QueuePluginEvent(*P,MakeShared<FJsonObject>(*Event));
 }

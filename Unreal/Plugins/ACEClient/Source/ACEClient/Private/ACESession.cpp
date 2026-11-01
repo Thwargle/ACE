@@ -6738,6 +6738,7 @@ void FACESession::BeginPendingUse(int32 Source, int32 Target)
 	UseStartedAt = FPlatformTime::Seconds();
 	UseSourceGuid = Source;
 	UseTargetGuid = Target;
+	OnItemUseRequested.Broadcast(Source,Target);
 }
 
 void FACESession::ClearPendingUse()

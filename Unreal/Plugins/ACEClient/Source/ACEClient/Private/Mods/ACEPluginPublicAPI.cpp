@@ -8,6 +8,11 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonSerializer.h"
+#include "Audio.h"
+#include "Sound/SoundWaveProcedural.h"
+#include "Kismet/GameplayStatics.h"
+#include "Components/AudioComponent.h"
+#include "TimerManager.h"
 
 namespace
 {
@@ -66,7 +71,7 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::PublicSnapshot(FACEClientPlugin& P)
     // Character-only observers should never build inventory, spell tables,
     // navigation visibility, or vendor transaction data just to discard it.
     static const TSet<FString> Lightweight={TEXT("char_strings"),TEXT("char_ints"),TEXT("char_quads"),TEXT("char_doubles"),TEXT("char_bools"),
-        TEXT("level"),TEXT("character_name"),TEXT("action_serial"),TEXT("action_error"),TEXT("last_spell"),TEXT("last_spell_confirmed"),
+        TEXT("inventory"),TEXT("inventory_revision"),TEXT("appraisal_revision"),TEXT("window_chrome_hidden"),TEXT("level"),TEXT("character_name"),TEXT("action_serial"),TEXT("action_error"),TEXT("last_spell"),TEXT("last_spell_confirmed"),
         TEXT("profile_name"),TEXT("waiting_action"),TEXT("log"),TEXT("panel"),TEXT("activity_failure"),TEXT("capabilities"),TEXT("automation_owner"),
         TEXT("objects"),TEXT("objects_truncated"),TEXT("selection"),TEXT("tracked_targets"),TEXT("target_effects")};
     bool FullData=!P.SelectiveSnapshot;
@@ -87,6 +92,7 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::PublicSnapshot(FACEClientPlugin& P)
             auto J=MakeShared<FJsonObject>();for(const auto& Pair:V.QualityStrings)J->SetStringField(FString::FromInt(Pair.Key),Pair.Value);
             if(!J->HasField(TEXT("1"))&&C->GetSession())J->SetStringField(TEXT("1"),C->GetSession()->GetPlayerName());Result->SetObjectField(TEXT("char_strings"),J);
         }
+        if(P.WantsSnapshotField(TEXT("inventory"))||P.WantsSnapshotField(TEXT("inventory_revision"))||P.WantsSnapshotField(TEXT("appraisal_revision")))ExtendItemInventorySnapshot(Result);
         Result->SetNumberField(TEXT("level"),V.Level);Result->SetNumberField(TEXT("action_serial"),ActionSerial);
         Result->SetNumberField(TEXT("action_error"),LastActionError);Result->SetNumberField(TEXT("last_spell"),LastCompletedSpell);
         Result->SetBoolField(TEXT("last_spell_confirmed"),LastSpellConfirmed);
@@ -96,6 +102,7 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::PublicSnapshot(FACEClientPlugin& P)
     // Preserve the extended position (global coordinates) and merge observer data.
     for(const auto& Pair:Common->Values)if(Pair.Key!=TEXT("position")||!Result->HasField(Pair.Key))Result->SetField(Pair.Key,Pair.Value);
     if(!P.Permissions.Contains(TEXT("chat")))Result->RemoveField(TEXT("meta_chat"));
+    Result->SetBoolField(TEXT("window_chrome_hidden"),IsPluginWindowChromeHidden(P.Id));
     Result->SetArrayField(TEXT("log"),P.LogEntries);
     Result->SetStringField(TEXT("profile_name"),P.ProfileName);
     Result->SetStringField(TEXT("waiting_action"),P.WaitAction);
@@ -163,11 +170,22 @@ bool UACEPluginSubsystem::ValidatePluginUI(const TArray<TSharedPtr<FJsonValue>>&
             auto R=V->AsObject();const FString Id=S(R,TEXT("id")),Type=S(R,TEXT("type"),S(R,TEXT("action")).IsEmpty()?TEXT("text"):TEXT("button"));
             if(Id.IsEmpty()||Id.Len()>64||Ids.Contains(Id)||S(R,TEXT("text")).Len()>4096||S(R,TEXT("tooltip")).Len()>1024)
             {Error=TEXT("UI controls need unique IDs and bounded text");return false;}Ids.Add(Id);
-            if(!TArray<FString>{TEXT("text"),TEXT("button"),TEXT("checkbox"),TEXT("slider"),TEXT("number"),TEXT("input"),TEXT("select"),TEXT("progress"),TEXT("icon"),TEXT("item_icon"),TEXT("image"),TEXT("row"),TEXT("column"),TEXT("section"),TEXT("tabs")}.Contains(Type))
+            if(!TArray<FString>{TEXT("text"),TEXT("button"),TEXT("checkbox"),TEXT("slider"),TEXT("number"),TEXT("input"),TEXT("select"),TEXT("progress"),TEXT("icon"),TEXT("item_icon"),TEXT("image"),TEXT("row"),TEXT("column"),TEXT("section"),TEXT("tabs"),TEXT("overlay"),TEXT("frame")}.Contains(Type))
             {Error=TEXT("Unknown UI control: ")+Type;return false;}
-            for(const TCHAR* Field:{TEXT("compact"),TEXT("auto_width"),TEXT("wrap")})
+            for(const TCHAR* Field:{TEXT("compact"),TEXT("auto_width"),TEXT("wrap"),TEXT("clickable"),TEXT("hide_when_pinned")})
                 if(R->HasField(Field)&&!R->HasTypedField<EJson::Boolean>(Field))
                 {Error=FString(Field)+TEXT(" must be a boolean");return false;}
+            for(const TCHAR* Field:{TEXT("width"),TEXT("height"),TEXT("opacity"),TEXT("min_opacity"),TEXT("period"),TEXT("rotation"),TEXT("outline"),TEXT("glow")})
+            {
+                if(!R->HasField(Field))continue;
+                double Value=0;const FString Key(Field);
+                const double Min=Key==TEXT("period")?.1:Key==TEXT("rotation")?-360.:0.;
+                const double Max=Key==TEXT("opacity")||Key==TEXT("min_opacity")?1.:Key==TEXT("period")?60.:Key==TEXT("outline")||Key==TEXT("glow")?8.:Key==TEXT("rotation")?360.:2048.;
+                if(!R->HasTypedField<EJson::Number>(Field)||!R->TryGetNumberField(Field,Value)||!FMath::IsFinite(Value)||Value<Min||Value>Max)
+                {Error=TEXT("Invalid visual field: ")+Key;return false;}
+            }
+            if(!TArray<FString>{TEXT(""),TEXT("blink"),TEXT("pulse"),TEXT("rotate")}.Contains(S(R,TEXT("effect")))){Error=TEXT("Unknown visual effect");return false;}
+            if(!TArray<FString>{TEXT(""),TEXT("left"),TEXT("center"),TEXT("right")}.Contains(S(R,TEXT("align")))){Error=TEXT("Unknown text alignment");return false;}
             const FString Action=S(R,TEXT("action"));
             if(!Action.IsEmpty()&&!TArray<FString>{TEXT("event"),TEXT("select"),TEXT("waypoint"),TEXT("command"),TEXT("content_folder")}.Contains(Action))
             {Error=TEXT("Unknown UI button action");return false;}
@@ -199,7 +217,7 @@ bool UACEPluginSubsystem::ValidatePluginUI(const TArray<TSharedPtr<FJsonValue>>&
             const TArray<TSharedPtr<FJsonValue>>* Nested=nullptr;
             if(R->HasField(TEXT("children")))
             {
-                if(!TArray<FString>{TEXT("row"),TEXT("column"),TEXT("section"),TEXT("tabs")}.Contains(Type)||!R->TryGetArrayField(TEXT("children"),Nested)||!Visit(*Nested,Depth+1))return false;
+                if(!TArray<FString>{TEXT("row"),TEXT("column"),TEXT("section"),TEXT("tabs"),TEXT("overlay"),TEXT("frame")}.Contains(Type)||!R->TryGetArrayField(TEXT("children"),Nested)||!Visit(*Nested,Depth+1))return false;
             }
         }
         return true;
@@ -213,7 +231,8 @@ bool UACEPluginSubsystem::ClickPluginRow(const FString& Plugin,const FString& Id
     auto P=Find(Plugin);if(!P||!P->Running||!P->Enabled||!P->HasPresentation()||!P->Permissions.Contains(TEXT("ui")))return false;
     auto R=Control(P->PanelRows,Id);if(!R||!B(R,TEXT("enabled")))return false;
     const FString Type=S(R,TEXT("type"),S(R,TEXT("action")).IsEmpty()?TEXT("text"):TEXT("button"));
-    if(Type!=TEXT("button"))return false;
+    if(Type!=TEXT("button")&&!B(R,TEXT("clickable"),false)&&!R->HasField(TEXT("action")))return false;
+    if(B(R,TEXT("hide_when_pinned"),false)&&IsPluginWindowChromeHidden(Plugin))return false;
     FString Error;bool Ok=true;const FString Action=S(R,TEXT("action"),TEXT("event"));
     if(Action==TEXT("content_folder"))Ok=ChooseContentFolder(*P,Error);
     else if(Action!=TEXT("event"))
@@ -266,12 +285,36 @@ bool UACEPluginSubsystem::ApplyPluginServices(FACEClientPlugin& P,const TSharedP
     {
         auto R=V->AsObject();auto Reply=MakeShared<FJsonObject>();const FString Service=S(R,TEXT("service")),Op=S(R,TEXT("operation")),Key=S(R,TEXT("name"));
         Reply->SetStringField(TEXT("type"),TEXT("result"));Reply->SetStringField(TEXT("id"),S(R,TEXT("id")));bool Ok=false;FString Failure;
-        const FString Permission=Service==TEXT("content")?TEXT("admin_content"):Service==TEXT("profiles")||Service==TEXT("import")?TEXT("profiles"):
+        const FString Permission=Service==TEXT("sound")?TEXT("sound"):Service==TEXT("content")?TEXT("admin_content"):Service==TEXT("profiles")||Service==TEXT("import")?TEXT("profiles"):
             Service==TEXT("waypoint")?TEXT("waypoint"):Service==TEXT("route")?TEXT("navigation"):
             Service==TEXT("force_buff")?TEXT("cast"):(Service==TEXT("window")||Service==TEXT("notice"))?TEXT("ui"):Service==TEXT("policy")?TEXT("commands"):Service==TEXT("chat")?TEXT("say"):FString();
         if(Limited)Failure=TEXT("Service rate limit; retry after 0.5 seconds");
         else if(!Permission.IsEmpty()&&!P.Permissions.Contains(Permission))Failure=TEXT("Missing permission: ")+Permission;
         else if(Service==TEXT("content"))Ok=ContentService(P,R,Reply,Failure);
+        else if(Service==TEXT("sound")&&Op==TEXT("play"))
+        {
+            const FString Asset=S(R,TEXT("asset"));const FString Path=P.Directory/TEXT("sounds")/Asset;
+            const int64 Bytes=IFileManager::Get().FileSize(*Path);TArray<uint8> Data;FWaveModInfo Wave;
+            if(Asset.IsEmpty()||Asset.Len()>128||Asset!=FPaths::GetCleanFilename(Asset)||Asset.Contains(TEXT(":"))||!Asset.EndsWith(TEXT(".wav"))
+                ||Bytes<=0||Bytes>1024*1024||!FFileHelper::LoadFileToArray(Data,*Path)||!Wave.ReadWaveInfo(Data.GetData(),Data.Num())
+                ||!Wave.pFormatTag||*Wave.pFormatTag!=1||!Wave.pChannels||*Wave.pChannels<1||*Wave.pChannels>2
+                ||!Wave.pBitsPerSample||*Wave.pBitsPerSample!=16||!Wave.pSamplesPerSec||*Wave.pSamplesPerSec<8000||*Wave.pSamplesPerSec>48000
+                ||!Wave.SampleDataSize||Wave.SampleDataSize%(*Wave.pChannels*2u)!=0
+                ||Wave.SampleDataSize>10u*(*Wave.pSamplesPerSec)*(*Wave.pChannels)*2u)
+                Failure=TEXT("Sound must be a bundled PCM16 mono/stereo WAV, 8-48 kHz, at most 10 seconds and 1 MiB");
+            else
+            {
+                auto* Sound=NewObject<USoundWaveProcedural>(this);Sound->SetSampleRate(*Wave.pSamplesPerSec);Sound->NumChannels=*Wave.pChannels;
+                Sound->Duration=float(Wave.SampleDataSize)/(*Wave.pSamplesPerSec*Sound->NumChannels*2);Sound->bLooping=false;
+                Sound->QueueAudio(Wave.SampleDataStart,Wave.SampleDataSize);
+                if(auto* Audio=UGameplayStatics::SpawnSound2D(GetWorld(),Sound,FMath::Clamp(N(R,TEXT("volume"),1),0.,1.)))
+                {
+                    // Procedural sources otherwise remain alive generating silence.
+                    FTimerHandle Stop;GetWorld()->GetTimerManager().SetTimer(Stop,FTimerDelegate::CreateWeakLambda(Audio,[Audio](){Audio->Stop();}),Sound->Duration+.1f,false);
+                }
+                Ok=true;
+            }
+        }
         else if(Service==TEXT("profiles"))
         {
             const FString Group=S(R,TEXT("group"),TEXT("Default"));
@@ -350,10 +393,18 @@ bool UACEPluginSubsystem::ApplyPluginServices(FACEClientPlugin& P,const TSharedP
             const FString Text=S(R,TEXT("text"));
             if(!Text.IsEmpty()&&Text.Len()<=500&&!Text.Contains(TEXT("\n"))&&!Text.Contains(TEXT("\r")))
             {
+                auto Rule=MakeShared<FJsonObject>();Rule->SetStringField(TEXT("id"),TEXT("notice"));Rule->SetStringField(TEXT("exact"),Text);
+                Rule->SetStringField(TEXT("action"),TEXT("show"));
+                if(R->HasField(TEXT("window")))Rule->SetField(TEXT("window"),R->TryGetField(TEXT("window")));
+                if(R->HasField(TEXT("color")))Rule->SetField(TEXT("color"),R->TryGetField(TEXT("color")));
+                TArray<FACEPluginChatFilter> Parsed;
+                if(!ValidatePluginChatFilters({MakeShared<FJsonValueObject>(Rule)},Parsed,Failure))
+                {Reply->SetBoolField(TEXT("ok"),false);Reply->SetStringField(TEXT("error"),Failure);QueuePluginEvent(P,Reply);continue;}
                 // Display-only notification. Never use the server chat path or
                 // the host's shared Notice string for plugin-owned messages.
                 auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
-                C->ReceiveChatMessage(TEXT("[")+P.Name.Left(80)+TEXT("] ")+Text,TEXT(""),ACEChatMessageType::Broadcast,ACEChatMessageType::Plugin);
+                C->ReceiveChatMessage(TEXT("[")+P.Name.Left(80)+TEXT("] ")+Text,TEXT(""),ACEChatMessageType::Broadcast,ACEChatMessageType::Plugin,
+                    R->HasField(TEXT("window"))?Parsed[0].Windows:0,Parsed[0].Color);
                 Ok=true;
             }
             else Failure=TEXT("A local notice requires one line, 1-500 characters");

@@ -517,7 +517,11 @@ void UACEUIGameplayBinder::Initialize(UACEClientSubsystem* InClient, UACEUIEleme
 	EnsureOverlays();
 	RefreshStatusIndicators();
 	if (Client) for (const auto& Message : Client->GetChatHistory())
+	{
+		TGuardValue<uint8> WindowsScope(Client->CurrentChatWindows, Message.ForcedWindows);
+		TGuardValue<TOptional<FLinearColor>> ColorScope(Client->CurrentChatColor, Message.Color);
 		HandleChatMessage(Message.Text, Message.Sender, Message.Type, Message.FilterType);
+	}
 }
 
 void UACEUIGameplayBinder::Shutdown()
@@ -6565,10 +6569,11 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 	// own 64-bit type filters. Visibility only controls presentation: closed
 	// windows must retain matching messages for when the player opens them again.
 	const auto* Plugins = Client ? Client->GetGameInstance()->GetSubsystem<UACEPluginSubsystem>() : nullptr;
-	const uint8 PluginHidden = Plugins ? Plugins->FilterPluginChatWindows(Text, Sender, ChatType) : 0;
-	if (!(PluginHidden & 1) && PassesChatFilter(FilterType) && (MainChatTypeFilter & (1ull << (static_cast<uint32>(FilterType) & 63))) != 0)
+	const auto Presentation = Plugins ? Plugins->PresentPluginChat(Text, Sender, ChatType) : FACEPluginChatPresentation();
+	const uint8 PluginHidden = Presentation.Hidden;
+	if (!(PluginHidden & 1) && ((Presentation.Forced&1) || (PassesChatFilter(FilterType) && (MainChatTypeFilter & (1ull << (static_cast<uint32>(FilterType) & 63))) != 0)))
 	{
-		AppendChatLineToLog(0, Line, Color, ClickSender);
+		AppendChatLineToLog(0, Line, Presentation.Colors.Contains(0)?Presentation.Colors[0]:Color, ClickSender);
 	}
 	else if (!bChatStickToBottom)
 	{
@@ -6579,12 +6584,12 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 		for (int32 W = 1; W <= NumFloatyChats; ++W)
 		{
 			if (PluginHidden & (1u << W)) continue;
-			if (FloatyChatFilters.IsValidIndex(W - 1)
+			if (!(Presentation.Forced&(1u<<W)) && FloatyChatFilters.IsValidIndex(W - 1)
 				&& (FloatyChatFilters[W - 1] & (1ull << (static_cast<uint32>(FilterType) & 63))) == 0)
 			{
 				continue;
 			}
-			AppendChatLineToLog(W, Line, Color, ClickSender);
+			AppendChatLineToLog(W, Line, Presentation.Colors.Contains(W)?Presentation.Colors[W]:Color, ClickSender);
 		}
 	}
 }

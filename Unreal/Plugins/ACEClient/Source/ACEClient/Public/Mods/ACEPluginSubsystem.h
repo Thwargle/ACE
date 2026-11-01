@@ -36,11 +36,17 @@ struct FACEPluginChatEvent
 
 struct FACEPluginChatFilter
 {
-    FString Id, Contains, Prefix, Exact, Sender;
+    FString Id, Contains, Prefix, Exact, Sender, SenderType, Pattern, Action=TEXT("hide");
+    TOptional<FLinearColor> Color;
     int32 ChatType=INDEX_NONE;
     uint8 Windows=0x1f;
     bool HasSender=false, CaseSensitive=false;
     double Expires=0;
+};
+struct FACEPluginChatPresentation
+{
+    uint8 Hidden=0, Forced=0;
+    TMap<int32,FLinearColor> Colors;
 };
 
 struct FACEClientPlugin
@@ -88,6 +94,11 @@ struct FACEClientPlugin
     uint32 WorldPlateRevision=0;
     uint64 ChatCursor=0;
     TArray<FACEPluginChatFilter> ChatFilters;
+    bool ChatHistory=true, SelectiveChat=false;
+    TArray<FACEPluginChatFilter> ChatSubscriptions;
+    TDeque<FACEPluginChatEvent> ChatInbox;
+    int32 ChatInboxBytes=0;
+    uint64 ChatInboxDropped=0;
     uint32 PanelRevision=0;
     FVector2D PanelSize=FVector2D::ZeroVector;
     double NextStateSave=0, NextCommand=0;
@@ -177,6 +188,10 @@ public:
     // Display-only mask: raw chat still reaches every reader and the chat log file.
     uint8 FilterPluginChatWindows(const FString& Text, const FString& Sender, int32 Type) const;
     bool ValidatePluginChatFilters(const TArray<TSharedPtr<FJsonValue>>& Values, TArray<FACEPluginChatFilter>& Filters, FString& Error) const;
+    FString PluginChatSenderType(const FString& Sender) const;
+    static bool MatchesPluginChat(const FACEPluginChatFilter& Filter,const FString& Text,const FString& Sender,int32 Type,const FString& SenderType);
+    static void DeliverPluginChat(FACEClientPlugin& Plugin,const FACEPluginChatEvent& Event);
+    FACEPluginChatPresentation PresentPluginChat(const FString& Text,const FString& Sender,int32 Type) const;
     TSharedRef<SWidget> MakeCompanionPanel(const FString& Id);
     TArray<FACEPluginMarker> GetPluginMarkers() const;
     void ToggleUCM();
@@ -297,6 +312,12 @@ public:
     uint64 DataRevision = 0;
     UFUNCTION() void ObserveAppraisal(const FACEAppraisalInfo& Info);
     void ObserveUseDone(uint32 Error);
+    void ObserveItemUse(int32 Source,int32 Target);
+    void EmitPluginAction(const TSharedPtr<FJsonObject>& Event);
+    TSharedPtr<FJsonObject> ObservedAction;
+    FDelegateHandle ItemUseHandle;
+    void ExtendInventorySnapshot(const TSharedPtr<FJsonObject>& Out);
+    void ExtendItemInventorySnapshot(const TSharedPtr<FJsonObject>& Out);
     void ExtendSnapshot(const TSharedPtr<FJsonObject>& Out);
     TSharedPtr<FJsonValue> PluginItemSnapshot(const FACEWorldObject& Item);
     void QueueLootMatch(int32 Guid);

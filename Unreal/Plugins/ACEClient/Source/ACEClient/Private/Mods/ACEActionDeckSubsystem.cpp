@@ -190,6 +190,7 @@ bool UACEActionDeckSubsystem::SetFourthRowEnabled(bool Enabled)
 {
     EnsureCharacter();
     if(Enabled==FourthRowEnabled)return true;
+    int32 Conflicts=0;
     if(Enabled)
     {
         TArray<FInputChord> Seen;
@@ -197,11 +198,16 @@ bool UACEActionDeckSubsystem::SetFourthRowEnabled(bool Enabled)
         {
             const auto K=EffectiveKey(I);if(!K.Key.IsValid())continue;
             if(Seen.Contains(K))
-            {Notice=TEXT("The extra row shares a shortcut with another row. Change its modifier or the conflicting slot key first.");return false;}
+            {
+                if(I<DefaultRows*Columns)continue;
+                // Showing a row is independent of binding keys. Keep existing
+                // shortcuts and leave only conflicting new slots unbound.
+                Slots[I].CustomKey=true;Slots[I].Key=FInputChord();++Conflicts;continue;
+            }
             Seen.Add(K);
         }
     }
-    FourthRowEnabled=Enabled;Notice.Empty();Save();Refresh(true);return true;
+    FourthRowEnabled=Enabled;Notice=Conflicts?FString::Printf(TEXT("Fourth row shown. %d shortcuts already belong to other slots; select those new slots and assign a Key."),Conflicts):FString();Save();Refresh(true);return true;
 }
 FInputChord UACEActionDeckSubsystem::EffectiveKey(int32 Index) const
 {

@@ -876,6 +876,25 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
         Video->ResetVideo();TestEqual(TEXT("Reset retains applied Tahoma"),Face->GetSelectedIndex(),3);
         TestEqual(TEXT("Reset retains applied extra large size"),FontSize->GetSelectedIndex(),4);
         Binder->GetChatEntryWidget(0)->SetText(FText::FromString(TEXT("Larger chat entry text stays clear of Send.")));
+        const auto MainChat=Manager->FindElementByName(TEXT("RootGameplay_FloatyMainChat_Field"));
+        const int32 SavedW=MainChat->UserResizeW,SavedH=MainChat->UserResizeH;
+        MainChat->UserResizeW+=420;MainChat->UserResizeH+=260;
+        UACEUIElementManager::ApplyFloatyResizeLayout(MainChat);
+        for(int32 Pass=0;Pass<3;++Pass)
+        {
+            Binder->RefreshChatRowLayout(0);
+            const auto LogEl=Manager->FindElementUnder(MainChat->ElementName,TEXT("ChatLog"));
+            const auto Send=Manager->FindElementUnder(MainChat->ElementName,TEXT("SendButton"));
+            const auto Entry=Manager->FindElementUnder(MainChat->ElementName,TEXT("ChatPanelTextEntry"));
+            TestTrue(TEXT("Resized chat log uses the enlarged window width"),LogEl->Width>MainChat->Width-70);
+            TestTrue(TEXT("Resized chat log uses the enlarged window height"),LogEl->Height>MainChat->Height-100);
+            TestTrue(TEXT("Send stays at the resized right edge"),FMath::Abs(Send->GetScreenOrigin().X+Send->Width-(MainChat->GetScreenOrigin().X+MainChat->Width))<20);
+            TestTrue(TEXT("Entry grows with the resized frame"),Entry->Width>MainChat->Width-300);
+            UACEUIElementManager::ApplyFloatyResizeLayout(MainChat);
+        }
+        Draw(TEXT("ChatFontExtraLargeResized"));
+        MainChat->UserResizeW=SavedW;MainChat->UserResizeH=SavedH;
+        UACEUIElementManager::ApplyFloatyResizeLayout(MainChat);
         TestEqual(TEXT("Chat sizing does not change plugin sizing"),ACERuntimeOptions::PluginTextScale(),2.f);
         Draw(TEXT("ChatFontExtraLarge"));
         Video->DefaultsVideo();Video->ApplyInterfaceOptions();Binder->RefreshChatRowLayout(0);

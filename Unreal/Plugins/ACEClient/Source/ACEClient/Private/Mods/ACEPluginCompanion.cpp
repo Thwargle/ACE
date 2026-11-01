@@ -61,7 +61,7 @@ void UACEPluginSubsystem::UpdateCompanionChatContext()
         PluginChatEvents.Reset();PluginChatTextBytes=0;PluginChatContextStartSerial=PluginChatSerial;
         // Logging back into the same character can reuse the session object.
         // Abandoned pages belong to the old login, not this reader's backlog.
-        for(const auto& P:Plugins){P->ChatCursor=PluginChatContextStartSerial;P->ChatFilters.Reset();}
+        for(const auto& P:Plugins){P->ChatCursor=PluginChatContextStartSerial;P->ChatFilters.Reset();P->ChatInbox.Empty();P->ChatInboxBytes=0;P->ChatInboxDropped=0;}
         PluginChatSession=C->GetSession();PluginChatPlayer=Player;PluginChatServer=C->GetServerName();
     }
 }
@@ -81,6 +81,7 @@ void UACEPluginSubsystem::ObservePluginChat(const FString& Text,const FString& S
     const int32 Bytes=FTCHARToUTF8(*Line).Length()+FTCHARToUTF8(*Raw).Length()+FTCHARToUTF8(*Speaker).Length();
     auto E=MakeShared<FJsonObject>();E->SetNumberField(TEXT("serial"),++PluginChatSerial);E->SetStringField(TEXT("text"),Line);
     E->SetStringField(TEXT("raw_text"),Raw);E->SetStringField(TEXT("sender"),Speaker);E->SetNumberField(TEXT("color"),Type);E->SetNumberField(TEXT("time"),FPlatformTime::Seconds());
+    E->SetStringField(TEXT("sender_type"),PluginChatSenderType(Sender));E->SetNumberField(TEXT("chat_type"),Type);
     // Receive bursts independently of Lua's callback budget. A deque avoids
     // shifting thousands of JSON references on every message once full.
     while(!PluginChatEvents.IsEmpty()&&(PluginChatEvents.Num()>=ACEPluginChatLimits::RetainedEvents
@@ -88,6 +89,16 @@ void UACEPluginSubsystem::ObservePluginChat(const FString& Text,const FString& S
     {PluginChatTextBytes-=PluginChatEvents.First().TextBytes;PluginChatEvents.PopFirst();}
     PluginChatEvents.EmplaceLast(FACEPluginChatEvent{PluginChatSerial,Bytes,MakeShared<FJsonValueObject>(E)});
     PluginChatTextBytes+=Bytes;
+    for(const auto& P:Plugins)if(P->Enabled&&P->Running&&P->SelectiveChat&&P->Permissions.Contains(TEXT("chat")))DeliverPluginChat(*P,PluginChatEvents.Last());
+}
+
+void UACEPluginSubsystem::DeliverPluginChat(FACEClientPlugin& P,const FACEPluginChatEvent& Event)
+{
+    const auto E=Event.Value->AsObject();
+    if(!P.ChatSubscriptions.ContainsByPredicate([&](const auto& F){return MatchesPluginChat(F,E->GetStringField(TEXT("raw_text")),E->GetStringField(TEXT("sender")),int32(E->GetNumberField(TEXT("color"))),E->GetStringField(TEXT("sender_type")));}))return;
+    while(!P.ChatInbox.IsEmpty()&&(P.ChatInbox.Num()>=2048||P.ChatInboxBytes+Event.TextBytes>2*1024*1024))
+    {P.ChatInboxBytes-=P.ChatInbox.First().TextBytes;P.ChatInbox.PopFirst();++P.ChatInboxDropped;}
+    P.ChatInbox.EmplaceLast(Event);P.ChatInboxBytes+=Event.TextBytes;
 }
 
 bool UACEPluginSubsystem::StartCompanion(FACEClientPlugin& P)
@@ -125,7 +136,13 @@ bool UACEPluginSubsystem::InitializePluginState(FACEClientPlugin& P)
         {P.Status=TEXT("Cannot read saved state; original file preserved");return false;}
         P.SavedState=Loaded;
     }
-    if(NewCharacter){P.ChatCursor=PluginChatContextStartSerial;P.Presentation.Reset();P.ChatFilters.Reset();}
+    if(NewCharacter){P.ChatCursor=FMath::Max(P.ChatCursor,P.ChatHistory?PluginChatContextStartSerial:PluginChatSerial);P.Presentation.Reset();P.ChatFilters.Reset();}
+    if(!P.ChatHistory)P.ChatCursor=PluginChatSerial;
+    if(P.SelectiveChat)
+    {
+        P.ChatInbox.Empty();P.ChatInboxBytes=0;P.ChatInboxDropped=0;
+        if(P.ChatHistory)for(const auto& E:PluginChatEvents)if(E.Serial>P.ChatCursor)DeliverPluginChat(P,E);
+    }
     P.NextStateSave=FPlatformTime::Seconds()+5;
     return true;
 }
@@ -145,6 +162,7 @@ void UACEPluginSubsystem::StopCompanion(FACEClientPlugin& P,const FString& Reaso
 {
     using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     FlushPluginState(P);P.Running=false;P.CompanionStopped=true;P.VM.Reset();
+    P.ChatInbox.Empty();P.ChatInboxBytes=0;P.ChatInboxDropped=0;
     P.Terrain={};P.Markers.Reset();P.WorldPlates.Reset();++P.WorldPlateRevision;P.PanelRows.Reset();P.PluginEvents.Reset();P.ChatFilters.Reset();++P.PanelRevision;P.Status=Reason+(P.StateDirty?TEXT("; ")+P.CompanionError:FString());
     // Observational plugin lifecycle never cancels UCM movement, casts or attacks.
 }
@@ -165,7 +183,18 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::CompanionSnapshot(FACEClientPlugin&
     if(P.Permissions.Contains(TEXT("chat")))
     {
         uint64 Dropped=0;int32 Bytes=0;
-        if(!PluginChatEvents.IsEmpty())
+        if(P.SelectiveChat)
+        {
+            Dropped=P.ChatInboxDropped;P.ChatInboxDropped=0;
+            while(!P.ChatInbox.IsEmpty()&&Chat.Num()<ACEPluginChatLimits::BatchEvents)
+            {
+                const auto E=P.ChatInbox.First();
+                if(!Chat.IsEmpty()&&Bytes+E.TextBytes>ACEPluginChatLimits::BatchTextBytes)break;
+                Chat.Add(E.Value);Bytes+=E.TextBytes;P.ChatCursor=E.Serial;P.ChatInboxBytes-=E.TextBytes;P.ChatInbox.PopFirst();
+            }
+            if(P.ChatInbox.IsEmpty())P.ChatCursor=PluginChatSerial;
+        }
+        else if(!PluginChatEvents.IsEmpty())
         {
             const uint64 First=PluginChatEvents.First().Serial;
             if(First>P.ChatCursor+1)Dropped=First-P.ChatCursor-1;
@@ -179,7 +208,7 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::CompanionSnapshot(FACEClientPlugin&
                 Chat.Add(E.Value);Bytes+=E.TextBytes;P.ChatCursor=E.Serial;
             }
         }
-        const uint64 Pending=PluginChatSerial>P.ChatCursor?PluginChatSerial-P.ChatCursor:0;
+        const uint64 Pending=P.SelectiveChat?P.ChatInbox.Num():PluginChatSerial>P.ChatCursor?PluginChatSerial-P.ChatCursor:0;
         Out->SetBoolField(TEXT("chat_gap"),Dropped>0);Out->SetNumberField(TEXT("chat_dropped"),Dropped);
         Out->SetNumberField(TEXT("chat_serial"),P.ChatCursor);Out->SetNumberField(TEXT("chat_latest_serial"),PluginChatSerial);
         Out->SetNumberField(TEXT("chat_pending"),Pending);Out->SetBoolField(TEXT("chat_more"),Pending>0);
@@ -234,8 +263,21 @@ bool UACEPluginSubsystem::CompanionAction(FACEClientPlugin& P,const TSharedPtr<F
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     if(!P.Enabled||!P.Running||C->GetSessionState()!=EACESessionState::InWorld||C->GetPlayerGuid()!=P.Player||C->GetServerName()!=P.Server)
     {Error=TEXT("Plugin is not active on this character");return false;}
-    const FString Permission=Kind==TEXT("select")?TEXT("ui"):Kind==TEXT("waypoint")?TEXT("waypoint"):Kind==TEXT("command")?TEXT("commands"):FString();
+    const FString Permission=Kind==TEXT("identify")?TEXT("identify"):Kind==TEXT("select")?TEXT("ui"):Kind==TEXT("waypoint")?TEXT("waypoint"):Kind==TEXT("command")?TEXT("commands"):FString();
     if(Permission.IsEmpty()||!P.Permissions.Contains(Permission)){Error=TEXT("Companion action not permitted: ")+Kind;return false;}
+    if(Kind==TEXT("identify"))
+    {
+        FACEWorldObject Item;const double Now=FPlatformTime::Seconds();
+        if(Now<P.NextCommand){Error=TEXT("Identify rate limit (one per second)");return false;}
+        if(!C->GetWorldObject(Id(A,TEXT("target")),Item)||(!C->IsOwnedInventoryItem(Item)
+            &&(!Item.IsSelectableWorldObject()||!SameArea(C->GetPlayerPosition(),Item.Position)
+                ||FVector::DistSquared(C->GetPlayerPosition().ToUnrealLocation(),Item.Position.ToUnrealLocation())>FMath::Square(24000.))))
+        {Error=TEXT("Identify target is no longer nearby or owned");return false;}
+        P.NextCommand=Now+1;
+        // Observers request one appraisal without taking UCM's action ownership
+        // or changing the player's selection/examination panel.
+        C->GetSession()->SendIdentifyObject(Item.Guid,true);return true;
+    }
     if(Kind==TEXT("select")||Kind==TEXT("waypoint"))
     {
         FACEWorldObject O;
@@ -284,6 +326,13 @@ bool UACEPluginSubsystem::ApplyCompanionOutput(FACEClientPlugin& P,const TShared
     }
     const TArray<TSharedPtr<FJsonValue>>* ChatFilters=nullptr;
     TArray<FACEPluginChatFilter> ParsedFilters;
+    const TArray<TSharedPtr<FJsonValue>>* Subscriptions=nullptr;TArray<FACEPluginChatFilter> ParsedSubscriptions;
+    if(O->HasField(TEXT("chat_subscriptions")))
+    {
+        if(!P.Permissions.Contains(TEXT("chat"))||!List(O,TEXT("chat_subscriptions"),32,Subscriptions))
+        {Error=TEXT("chat_subscriptions requires chat permission and at most 32 rules");return false;}
+        if(!ValidatePluginChatFilters(*Subscriptions,ParsedSubscriptions,Error))return false;
+    }
     if(O->HasField(TEXT("chat_filters")))
     {
         if(!P.Permissions.Contains(TEXT("chat_filter"))||!List(O,TEXT("chat_filters"),32,ChatFilters))
@@ -326,6 +375,21 @@ bool UACEPluginSubsystem::ApplyCompanionOutput(FACEClientPlugin& P,const TShared
     if(O->HasField(TEXT("terrain_overlay")))P.Terrain=ParsedTerrain;
     if(Presentation)P.Presentation=*Presentation;
     if(ChatFilters)P.ChatFilters=MoveTemp(ParsedFilters);
+    if(Subscriptions)
+    {
+        const bool Same=P.SelectiveChat&&P.ChatSubscriptions.Num()==ParsedSubscriptions.Num()&&[&]()
+        {
+            for(int32 I=0;I<ParsedSubscriptions.Num();++I)
+            {
+                const auto& A=P.ChatSubscriptions[I];const auto& B=ParsedSubscriptions[I];
+                if(A.Id!=B.Id||A.Contains!=B.Contains||A.Prefix!=B.Prefix||A.Exact!=B.Exact||A.Pattern!=B.Pattern
+                    ||A.Sender!=B.Sender||A.HasSender!=B.HasSender||A.SenderType!=B.SenderType||A.ChatType!=B.ChatType||A.CaseSensitive!=B.CaseSensitive)return false;
+            }
+            return true;
+        }();
+        P.ChatSubscriptions=MoveTemp(ParsedSubscriptions);P.SelectiveChat=true;
+        if(!Same){P.ChatInbox.Empty();P.ChatInboxBytes=0;P.ChatInboxDropped=0;P.ChatCursor=PluginChatSerial;}
+    }
     if(State&&(!P.SavedState||!FJsonValue::CompareEqual(FJsonValueObject(P.SavedState),FJsonValueObject(*State)))){P.SavedState=*State;P.StateDirty=true;}
     if(Rows&&!FJsonValue::CompareEqual(FJsonValueArray(P.PanelRows),FJsonValueArray(*Rows))){P.PanelRows=*Rows;++P.PanelRevision;}
     if(Markers)P.Markers=MoveTemp(Parsed);

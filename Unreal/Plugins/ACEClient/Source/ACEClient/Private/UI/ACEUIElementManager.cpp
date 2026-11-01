@@ -787,7 +787,7 @@ void UACEUIElementManager::ApplyFloatyResizeLayout(const TSharedPtr<FACEUIElemen
 				int32 Extra=FMath::Max(0,Floaty->ChatEntryLineHeight+6-OldH);
 				for(const auto& Child:Floaty->Children)if(Child->ElementName==TEXT("ChatLogField"))Extra=FMath::Min(Extra,FMath::Max(0,Child->Height-16));
 				Entry->Height+=Extra;Entry->EdgeAnchorY-=Extra;Entry->RecomputeLayoutOffset();
-				for(const auto& Child:Entry->Children)FRetailReflow::Reflow(Child,Entry->Width,OldH,Entry->Width,Entry->Height,true);
+				for(const auto& Child:Entry->Children)FRetailReflow::Reflow(Child,Entry->LayoutAuthoredW,Entry->LayoutAuthoredH,Entry->Width,Entry->Height,true);
 				const float Scale=FMath::Max(1.f,Floaty->ChatEntryLineHeight/12.f);
 				int32 LeftExtra=0,RightExtra=0;
 				for(const auto& Child:Entry->Children)
@@ -797,13 +797,13 @@ void UACEUIElementManager::ApplyFloatyResizeLayout(const TSharedPtr<FACEUIElemen
 					Child->Width=FMath::RoundToInt(OldW*Scale);
 					if(Child->ElementName==TEXT("ChatTarget"))LeftExtra=Child->Width-OldW;
 					else {RightExtra=Child->Width-OldW;Child->EdgeAnchorX-=RightExtra;Child->RecomputeLayoutOffset();}
-					for(const auto& Label:Child->Children)FRetailReflow::Reflow(Label,OldW,Child->Height,Child->Width,Child->Height,true);
+					for(const auto& Label:Child->Children)FRetailReflow::Reflow(Label,Child->LayoutAuthoredW,Child->LayoutAuthoredH,Child->Width,Child->Height,true);
 				}
 				for(const auto& Child:Entry->Children)if(Child->ElementName==TEXT("ChatPanelTextEntry"))
 				{
 					const int32 OldW=Child->Width;
 					Child->Width=FMath::Max(16,OldW-LeftExtra-RightExtra);Child->EdgeAnchorX+=LeftExtra;Child->RecomputeLayoutOffset();
-					for(const auto& Cap:Child->Children)FRetailReflow::Reflow(Cap,OldW,Child->Height,Child->Width,Child->Height,true);
+					for(const auto& Cap:Child->Children)FRetailReflow::Reflow(Cap,Child->LayoutAuthoredW,Child->LayoutAuthoredH,Child->Width,Child->Height,true);
 				}
 				// These authored row controls and end caps have fixed 17/18px
 				// maximum heights. They must grow with the font, not clamp back.
@@ -815,8 +815,11 @@ void UACEUIElementManager::ApplyFloatyResizeLayout(const TSharedPtr<FACEUIElemen
 				for(const auto& Child:Entry->Children)FitRow(Child);
 				for(const auto& Child:Floaty->Children)if(Child->ElementName==TEXT("ChatLogField")||Child->ElementName==TEXT("ChatLogScrollbar"))
 				{
-					const int32 LogH=Child->Height;Child->Height-=Extra;
-					for(const auto& Part:Child->Children)FRetailReflow::Reflow(Part,Child->Width,LogH,Child->Width,Child->Height,true);
+					Child->Height-=Extra;
+					// Reflow always starts from the authored box. Using the already
+					// resized parent as the baseline collapsed the log and scrollbar
+					// back to DAT size whenever chat text scaling was applied.
+					for(const auto& Part:Child->Children)FRetailReflow::Reflow(Part,Child->LayoutAuthoredW,Child->LayoutAuthoredH,Child->Width,Child->Height,true);
 				}
 			}
 		}

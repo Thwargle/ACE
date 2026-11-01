@@ -3,6 +3,8 @@
   "companion_manifest_options": {
     "update_interval": {"type":"number","minimum":0.5,"maximum":60,"default":0.5,"units":"seconds"},
     "snapshot_fields": {"api":2,"type":"array","items":"top-level snapshot field name","max_items":128,"default":"all permitted fields"},
+    "chat_history": {"type":"boolean","default":true,"false":"start/restart at newest received line"},
+    "chat_subscriptions": {"type":"array","max_items":32,"permission":"chat","rules":"same matching predicates as chat_filters; native filtered delivery"},
     "callbacks_per_frame": 1
   },
   "services": {
@@ -81,6 +83,8 @@
     "permissions": [
       "chat",
       "chat_filter",
+      "identify",
+      "sound",
       "state",
       "ui",
       "markers",
@@ -93,6 +97,7 @@
     "features": [
       "chat_events",
       "chat_filters",
+      "chat_subscriptions",
       "chat_pagination",
       "character_state",
       "clickable_rows",
@@ -112,6 +117,8 @@
       "state_bytes": 65536,
       "chat_events": 128,
       "chat_batch_text_bytes": 65536,
+      "chat_subscription_events": 2048,
+      "chat_subscription_text_bytes": 2097152,
       "chat_retained_events": 32768,
       "chat_retained_text_bytes": 8388608,
       "ui_rows": 128,
@@ -144,6 +151,8 @@
       "confirm",
       "chat",
       "chat_filter",
+      "identify",
+      "sound",
       "state",
       "ui",
       "markers",
@@ -165,6 +174,7 @@
       "state",
       "ui",
       "chat_filters",
+      "chat_subscriptions",
       "markers",
       "world_plates",
       "terrain_overlay",
@@ -218,9 +228,19 @@
       "row",
       "column",
       "section",
-      "tabs"
+      "tabs",
+      "overlay",
+      "frame"
     ],
     "ui_layout": {
+      "width_height": "optional fixed logical dimensions 0..2048; image aspect ratio is preserved",
+      "align": "text justification: left, center or right",
+      "progress_colors": "color sets bar fill; text_color sets overlaid label, light by default",
+      "hide_when_pinned": "boolean, native immediate visibility using window_chrome_hidden (includes Quick-show)",
+      "clickable": "boolean on graphics, frames and gauges; emits a normal click event",
+      "effects": "opacity/min_opacity 0..1, rotation -360..360, effect blink/pulse/rotate, period 0.1..60 seconds; native frame animation",
+      "outline_glow": "outline/glow 0..8; outline_color/glow_color; image glow is a simple tinted halo",
+      "colors": "named colors, #RRGGBB or #RRGGBBAA",
       "compact": "boolean on rows; all children use natural width; default false",
       "auto_width": "boolean on row children; natural width instead of equal fill; default false",
       "wrap": "boolean for control labels; false clips to one line; default true",
@@ -266,6 +286,7 @@
       "notice": [
         "show"
       ],
+      "sound": ["play"],
       "log": [
         "append",
         "clear"
@@ -801,11 +822,20 @@
     "permission": "chat_filter",
     "output": "chat_filters",
     "limit": 32,
-    "fields": {"id":"unique string, 1..64 characters", "contains":"literal substring, max 256", "prefix":"literal prefix, max 256", "exact":"literal complete raw_text, max 256", "sender":"optional exact sender; empty matches server output", "chat_type":"optional integer 0..63", "window":"-1/all or 0/main or 1..4/extra", "case_sensitive":"boolean; default false", "seconds":"optional expiration, >0 and <=300"},
-    "matching": "All supplied fields must match; at least one nonempty contains/prefix/exact is required",
+    "fields": {"id":"unique string, 1..64 characters", "pattern":"bounded regular expression, max 256", "sender_type":"player/npc/vendor/server/unknown", "action":"hide (default), show or color", "color":"red/green/blue/yellow/white or #RRGGBB; implies color action when action omitted", "contains":"literal substring, max 256", "prefix":"literal prefix, max 256", "exact":"literal complete raw_text, max 256", "sender":"optional exact sender; empty matches server output", "chat_type":"optional integer 0..63", "window":"-1/all or 0/main or 1..4/extra", "case_sensitive":"boolean; default false", "seconds":"optional expiration, >0 and <=300"},
+    "matching": "All supplied predicates must match; at least one text, sender or chat_type predicate is required; rules are ORed",
     "lifetime": "Omitted retains; empty array clears; stop/disable/reload/logout/character change clears",
-    "scope": "Incoming display only; raw plugin chat_events and chat log files remain intact"
+    "scope": "Incoming display only; show bypasses per-window categories; hide wins conflicts; global filters and squelches apply; raw plugin chat_events and chat log files remain intact"
   },
+  "chat_subscriptions": {
+    "permission":"chat", "output":"chat_subscriptions", "manifest":true, "limit":32,
+    "matching":"chat_filters predicates; display actions/window/color do not affect delivery",
+    "delivery":"only matching messages enter a bounded per-plugin inbox; changing rules starts at newest; repeated registration preserves pending lines"
+  },
+  "sound": {"permission":"sound","service":"sound","operation":"play","asset":"filename in plugin sounds folder","volume":"0..1","format":"PCM16 WAV mono/stereo, 8..48 kHz, 10 seconds, 1 MiB"},
+  "notice_style": {"window":"0/main, 1..4/extra, -1/all; explicit routing bypasses window category filters","color":"named color or #RRGGBB; retained with history"},
+  "companion_identify": {"permission":"identify","action":"identify","target":"owned or nearby GUID","rate":"one per second shared with commands","behavior":"background appraisal, preserves selection and automation ownership"},
+  "action_events": {"permission":"data","types":["use","cast"],"stages":["requested","completed"],"fields":["time","target","source","wcid","target_wcid","spell","action_serial","error"],"unknown":"source/wcid apply to item use; spell applies to cast; serial/error apply to completion"},
   "item_icon": {
     "fields": ["icon", "overlay", "underlay", "effects", "item_type", "size", "text"],
     "appearance": "Unsigned 32-bit values; complete texture DIDs; same compositors as inventory/Supply Ledger",

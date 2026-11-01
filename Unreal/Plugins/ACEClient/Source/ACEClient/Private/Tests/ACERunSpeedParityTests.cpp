@@ -212,17 +212,18 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
    TestTrue(TEXT("Pending cast does not repeatedly send a release"),Session->CachedC2SPackets.IsEmpty());
    Session->bUseBusy=false;
   }
-  // Forward input is still reported immediately even though the unfinished
-  // cast blocks forward prediction. Include a cast arriving after held input.
-  for(int32 Rate:{30,144}) for(bool Late:{false,true})
+  // Casting retains the responsive forward/backward movement from before
+  // the combat-link restriction, including late server motion updates.
+  for(int32 Rate:{30,144}) for(bool Late:{false,true}) for(bool Back:{false,true})
   {
    App->ClearActionMotion();App->ResetWalkingMotion();
    PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;
    Session->SetLocalPosition(Pose);Pawn->SetActorLocationAndRotation(StartFeet+FVector(0,0,88),Pose.ToUnrealQuat());
    FACEObjectMotionState Cast;Cast.CurrentStyle=ACEMotion::StanceMagic;Cast.ActionCommand=0x40000034;
-   if(Late){Key(EKeys::W,true);PC->PlayerTick(1.f/Rate);}
+   const FKey MoveKey=Back?EKeys::X:EKeys::W;
+   if(Late){Key(MoveKey,true);PC->PlayerTick(1.f/Rate);}
    ++Session->ServerControlSeq;PC->HandleMotionUpdate(Self.Guid,Cast);
-   if(!Late)Key(EKeys::W,true);
+   if(!Late)Key(MoveKey,true);
    Session->CachedC2SPackets.Reset();const FVector Before=Pawn->GetActorLocation();
    PC->PlayerTick(1.f/Rate);
    if(TestEqual(TEXT("Casting forward handoff sends one movement packet"),Session->CachedC2SPackets.Num(),1))
@@ -232,9 +233,19 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
     TestTrue(TEXT("Raw forward intent is preserved on the wire"),(Wire.ReadUInt32()&ACERawMotionFlags::ForwardCommand)!=0);
    }
    for(int32 I=0;I<4;++I)PC->PlayerTick(1.f/Rate);
-   TestTrue(TEXT("Raw forward input never predicts full running during the cast"),FVector::Dist2D(Before,Pawn->GetActorLocation())<.01);
+   const float ExpectedSpeed=Back?Client->GetLocomotionSpeed(false)*Client->GetRunRate()*.65f:Client->GetLocomotionSpeed(true);
+   TestTrue(TEXT("Casting movement travels at the normal requested speed"),
+    FMath::IsNearlyEqual(Pawn->GetActorLocation().X-Before.X,(Back?-1.f:1.f)*ExpectedSpeed*100.f*5.f/Rate,.05));
+   TestEqual(TEXT("Walking during casting retains its animation"),App->ActionCommand,Cast.ActionCommand);
    TestFalse(TEXT("Reapplied held forward does not latch the cast's cyclic tail"),App->bHoldActionFinalAfterFinish);
-   Key(EKeys::W,false);PC->PlayerTick(1.f/Rate);App->ClearActionMotion();
+   Session->CachedC2SPackets.Reset();PC->PlayerTick(1.f/Rate);
+   TestTrue(TEXT("Held casting movement does not spam movement packets"),Session->CachedC2SPackets.IsEmpty());
+   const FVector ReleasePosition=Pawn->GetActorLocation();
+   Key(MoveKey,false);Session->CachedC2SPackets.Reset();PC->PlayerTick(1.f/Rate);
+   CheckMovement(false,false);
+   TestFalse(TEXT("Releasing forward/backward stops network movement during casting"),Session->bMoving);
+   TestTrue(TEXT("Releasing forward/backward stops local casting movement"),FVector::Dist2D(ReleasePosition,Pawn->GetActorLocation())<.01);
+   App->ClearActionMotion();
   }
   // Strafe alone must not discard locally controlled emotes. Reclaiming
   // movement control must also preserve unfinished authored actions.

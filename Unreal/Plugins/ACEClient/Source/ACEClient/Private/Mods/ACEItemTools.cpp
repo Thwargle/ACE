@@ -123,21 +123,9 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::ItemToolsSnapshot(FACEClientPlugin*
     S->SetNumberField(TEXT("it_failure_serial"),Session->GetInventoryFailureSerial());
     S->SetNumberField(TEXT("it_failure_item"),uint32(Session->GetInventoryFailureItem()));
     S->SetNumberField(TEXT("it_failure_error"),Session->GetInventoryFailureError());
-    TArray<TSharedPtr<FJsonValue>> Targets,Inventory;
+    TArray<TSharedPtr<FJsonValue>> Targets;
     FACEPosition Here=C->GetPlayerPosition();if(PC)PC->TryGetLocallyPredictedPosition(Here);
-    for(const auto& V:S->GetArrayField(TEXT("inventory")))
-    {
-        auto J=MakeShared<FJsonObject>(*V->AsObject());FACEWorldObject Item;
-        if(C->GetWorldObject(Guid(J,TEXT("id")),Item))
-        {
-            const bool Allowed=Transferable(C,Item);J->SetBoolField(TEXT("transferable"),Allowed);J->SetBoolField(TEXT("attuned"),Item.Attuned!=0);
-            J->SetBoolField(TEXT("can_sell"),Allowed&&Session->CanVendorBuyItem(Item));
-            J->SetBoolField(TEXT("trade_note"),Item.ItemType==ACEItemType::PromissoryNote);
-            J->SetNumberField(TEXT("sell_unit"),ACEVendorPricing::VendorBuyPayout(Item,1,C->GetVendorBuyRate()));
-        }
-        Inventory.Add(MakeShared<FJsonValueObject>(J));
-    }
-    S->SetArrayField(TEXT("inventory"),Inventory);
+    ExtendItemInventorySnapshot(S);
     for(const auto& Pair:Session->GetWorldObjects())
     {
         const auto& Item=Pair.Value;if(!Item.IsSelectableWorldObject()||Item.bDying)continue;
@@ -248,4 +236,23 @@ bool UACEPluginSubsystem::ExecuteItemTools(FACEClientPlugin& P,const TSharedPtr<
     }
     else return Fail(TEXT("Unknown Item Tools action."));
     P.NextAction=FPlatformTime::Seconds()+.1;return true;
+}
+
+void UACEPluginSubsystem::ExtendItemInventorySnapshot(const TSharedPtr<FJsonObject>& S)
+{
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Session=C->GetSession();if(!Session)return;
+    ExtendInventorySnapshot(S);TArray<TSharedPtr<FJsonValue>> Inventory;
+    for(const auto& V:S->GetArrayField(TEXT("inventory")))
+    {
+        auto J=MakeShared<FJsonObject>(*V->AsObject());FACEWorldObject Item;
+        if(C->GetWorldObject(Guid(J,TEXT("id")),Item))
+        {
+            const bool Allowed=Transferable(C,Item);J->SetBoolField(TEXT("transferable"),Allowed);J->SetBoolField(TEXT("attuned"),Item.Attuned!=0);
+            J->SetBoolField(TEXT("can_sell"),Allowed&&Session->CanVendorBuyItem(Item));
+            J->SetBoolField(TEXT("trade_note"),Item.ItemType==ACEItemType::PromissoryNote);
+            J->SetNumberField(TEXT("sell_unit"),ACEVendorPricing::VendorBuyPayout(Item,1,C->GetVendorBuyRate()));
+        }
+        Inventory.Add(MakeShared<FJsonValueObject>(J));
+    }
+    S->SetArrayField(TEXT("inventory"),Inventory);
 }

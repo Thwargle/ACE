@@ -292,7 +292,7 @@ void UACEPluginSubsystem::Deinitialize()
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnAppraisalObserved.RemoveDynamic(this,&UACEPluginSubsystem::ObserveAppraisal);
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnChatMessage.RemoveDynamic(this,&UACEPluginSubsystem::ObservePluginChat);
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnVitalsUpdated.RemoveDynamic(this,&UACEPluginSubsystem::ObserveLedgerVitals);
-    if(auto S=ObservedSession.Pin()){S->OnUseDone.Remove(UseDoneHandle);S->OnSpellCastRequested.Remove(SpellCastHandle);S->OnPlayerTell.Remove(TellHandle);S->OnChatMessage.Remove(MetaChatHandle);S->OnCombatFeedback.Remove(CombatFeedbackHandle);}
+    if(auto S=ObservedSession.Pin()){S->OnItemUseRequested.Remove(ItemUseHandle);S->OnUseDone.Remove(UseDoneHandle);S->OnSpellCastRequested.Remove(SpellCastHandle);S->OnPlayerTell.Remove(TellHandle);S->OnChatMessage.Remove(MetaChatHandle);S->OnCombatFeedback.Remove(CombatFeedbackHandle);}
     StopAll(TEXT("Client closing")); ReleaseLocalCosmetics(); FTSTicker::GetCoreTicker().RemoveTicker(Ticker);
     FlushUCMLog();
     FTSTicker::GetCoreTicker().RemoveTicker(DecisionWakeTicker);DecisionWakeTicker.Reset();
@@ -399,6 +399,8 @@ void UACEPluginSubsystem::Discover()
 {
     ++PluginOrderRevision;
     RemoveDesktopDock();
+    TMap<FString,uint64> ChatResume;
+    for(const auto& P:Plugins)ChatResume.Add(P->Id,P->ChatCursor);
     StopAll(TEXT("Reloading plugins")); ReleaseLocalCosmetics(); Plugins.Reset(); Notice.Empty();
     AutoCraft.Reset();
     CompanionSession.Reset();CompanionPlayer=0;CompanionServer.Empty();
@@ -423,16 +425,17 @@ void UACEPluginSubsystem::Discover()
             P->Description = String(M, TEXT("description")); P->Directory = Root / Dir;
             P->LocalService = String(M,TEXT("mode"))==TEXT("local");
             P->Companion = String(M,TEXT("mode"))==TEXT("companion");
+            P->ChatCursor=ChatResume.FindRef(Id);
             const TArray<TSharedPtr<FJsonValue>>* Permissions = nullptr;
             bool Valid = TArray<FString>{TEXT(""),TEXT("automation"),TEXT("companion"),TEXT("local")}.Contains(String(M,TEXT("mode"))) && M->TryGetArrayField(TEXT("permissions"), Permissions);
             if (Permissions) for (const auto& V : *Permissions)
             {
                 const FString Permission = V->AsString();
-                if (Permission != TEXT("admin_content") && Permission != TEXT("terrain") && Permission != TEXT("profiles") && Permission != TEXT("data") && Permission != TEXT("chat") && Permission != TEXT("chat_filter") && Permission != TEXT("state") && Permission != TEXT("ui") && Permission != TEXT("markers") && Permission != TEXT("waypoint") && Permission != TEXT("messaging") && Permission != TEXT("commands") && Permission != TEXT("local_tools") && Permission != TEXT("local_cosmetics") && Permission != TEXT("cast") && Permission != TEXT("combat") && Permission != TEXT("navigation") && Permission != TEXT("inventory") && Permission != TEXT("loot") && Permission != TEXT("say") && Permission != TEXT("fellowship") && Permission != TEXT("confirm")) Valid = false;
+                if (Permission != TEXT("identify") && Permission != TEXT("sound") && Permission != TEXT("admin_content") && Permission != TEXT("terrain") && Permission != TEXT("profiles") && Permission != TEXT("data") && Permission != TEXT("chat") && Permission != TEXT("chat_filter") && Permission != TEXT("state") && Permission != TEXT("ui") && Permission != TEXT("markers") && Permission != TEXT("waypoint") && Permission != TEXT("messaging") && Permission != TEXT("commands") && Permission != TEXT("local_tools") && Permission != TEXT("local_cosmetics") && Permission != TEXT("cast") && Permission != TEXT("combat") && Permission != TEXT("navigation") && Permission != TEXT("inventory") && Permission != TEXT("loot") && Permission != TEXT("say") && Permission != TEXT("fellowship") && Permission != TEXT("confirm")) Valid = false;
                 else P->Permissions.AddUnique(Permission);
             }
             if(P->Companion)for(const auto& Permission:P->Permissions)
-                if(!TArray<FString>{TEXT("admin_content"),TEXT("terrain"),TEXT("chat"),TEXT("chat_filter"),TEXT("state"),TEXT("ui"),TEXT("markers"),TEXT("waypoint"),TEXT("messaging"),TEXT("commands"),TEXT("profiles"),TEXT("data"),TEXT("say")}.Contains(Permission))Valid=false;
+                if(!TArray<FString>{TEXT("identify"),TEXT("sound"),TEXT("admin_content"),TEXT("terrain"),TEXT("chat"),TEXT("chat_filter"),TEXT("state"),TEXT("ui"),TEXT("markers"),TEXT("waypoint"),TEXT("messaging"),TEXT("commands"),TEXT("profiles"),TEXT("data"),TEXT("say")}.Contains(Permission))Valid=false;
             if(P->LocalService)
             {
                 if(Number(M,TEXT("service_api"))!=1 || !P->Permissions.Contains(TEXT("local_cosmetics"))) Valid=false;
@@ -459,7 +462,14 @@ void UACEPluginSubsystem::Discover()
                     P->SnapshotFields.Add(Key);
                 }
             }
-            if (!Valid) { Notice += TEXT("Unsupported permissions, snapshot fields, update interval or local service API: ") + Id + TEXT("\n"); continue; }
+            if(M->HasField(TEXT("chat_history")))Valid&=M->HasTypedField<EJson::Boolean>(TEXT("chat_history"))&&M->TryGetBoolField(TEXT("chat_history"),P->ChatHistory);
+            if(M->HasField(TEXT("chat_subscriptions")))
+            {
+                const TArray<TSharedPtr<FJsonValue>>* Rules=nullptr;FString Error;
+                P->SelectiveChat=true;
+                Valid&=P->Permissions.Contains(TEXT("chat"))&&M->TryGetArrayField(TEXT("chat_subscriptions"),Rules)&&ValidatePluginChatFilters(*Rules,P->ChatSubscriptions,Error);
+            }
+            if (!Valid) { Notice += TEXT("Unsupported permissions, snapshot fields, chat subscriptions, update interval or local service API: ") + Id + TEXT("\n"); continue; }
             // Bind consent to the actual capability set, including after plugin upgrades.
             P->Permissions.Sort();
             const FString Grant = FString::Join(P->Permissions, TEXT(","));
@@ -621,6 +631,7 @@ void UACEPluginSubsystem::Stop(const FString& Id, const FString& Reason, bool Pr
     if (auto P = Find(Id))
     {
         P->ChatFilters.Reset();
+        P->ChatInbox.Empty();P->ChatInboxBytes=0;P->ChatInboxDropped=0;
         const bool OwnsPolicy=P->IsPolicy()&&(P->Running||PolicyPlugin()==P);
         if(OwnsPolicy){RestoreWorldRendering();bTrackRouteMovement=false;RouteMovementSamples.Reset();bRouteMovementOverflow=false;
             FollowMovementSamples.Reset();FollowMovementTarget=0;bFollowMovementOverflow=false;}
