@@ -743,24 +743,41 @@ meta_expression=function(e,s)
  error('Unsupported expression operator: '..op)
 end
 local function monster_rule(t,p)
- local rule={}
+ local rule,defaults={},{}
+ for _,r in ipairs(p.monsters or {}) do if r.default then defaults=r;break end end
+ rule=defaults
  for _,r in ipairs(p.monsters or {}) do
   local matches
   if r.expression then
    local value=meta_expression(r.expression,{monster=t,profile=p})
    matches=type(value)=='string' and string.lower(t.name)==string.lower(value) or (type(value)~='string' and truth(value))
   end
-  if r.default then rule=r
-  elseif matches or (not r.expression and ((r.exact and string.lower(t.name)==string.lower(r.name or '')) or (not r.exact and string.lower(t.name):sub(1,#(r.name or ''))==string.lower(r.name or '')))) then rule=r;break end
+  if not r.default and (matches or (not r.expression and ((r.exact and string.lower(t.name)==string.lower(r.name or '')) or (not r.exact and string.lower(t.name):sub(1,#(r.name or ''))==string.lower(r.name or ''))))) then rule=r;break end
  end
  -- Inherit without mutating saved rules; an explicit zero priority is valid.
- local effective={};for k,v in pairs(rule) do effective[k]=v end
+ local effective={}
+ -- New native rows inherit the live default; imported rows retain their full,
+ -- independent settings. Never change a saved rule while resolving a target.
+ if rule.inherit_default then for k,v in pairs(defaults) do effective[k]=v end end
+ for k,v in pairs(rule) do effective[k]=v end
+ -- Older USD imports encoded disabled attack families as Ignore. That must not
+ -- exclude those monsters from essence summoning. Explicit Ignore still does.
+ if effective.ignore and effective.combat~='ignore' and effective.bolt==false and effective.streak==false and effective.ring==false then effective.ignore=false end
  if effective.priority==nil then effective.priority=p.monster_default_priority or 0 end
  -- VT f7 rejects a negative priority before equipment/attack evaluation.
  -- Apply at runtime too so already imported profiles gain the same behavior.
  if effective.priority<0 then effective.ignore=true end
  if (effective.range or 0)<=0 then effective.range=p.monster_default_range or 0 end
  return effective
+end
+local function monster_attacks(rule,p)
+ if rule.ignore or rule.combat=='ignore' or rule.combat=='off' then return false end
+ if rule.bolt~=false or rule.streak~=false then return true end
+ for _,key in ipairs({'ring','debuff_corruption','debuff_destructive','debuff_corrosion'}) do
+  local value=rule[key];if value==nil then value=p[key] end
+  if value then return true end
+ end
+ return false
 end
 local function meta_condition(c,s,p)
  local t,v,q=c.type,c.value,c.properties or {}
@@ -1378,12 +1395,17 @@ local function tick(s,p)
  end
  for _,t in ipairs(s.targets or {}) do if not monster_blacklist[t.id] and t.line_of_sight~=false and t.distance>=option('minimum_range',0) and t.distance<=acquisition and not contains(p.ignore_monsters,t.name) then
   local rule=monster_rule(t,p)
-  if not rule.ignore and ring_enabled(rule) and t.distance<option('ring_range',5) then ring_count=ring_count+1 end
+  local attacks=monster_attacks(rule,p)
+  if attacks and ring_enabled(rule) and t.distance<option('ring_range',5) then ring_count=ring_count+1 end
   local rank=rule.priority or 0
-  if not rule.ignore then target_candidates[#target_candidates+1]={target=t,rule=rule,rank=rank} end
-  if not rule.ignore and (rank>priority or (rank==priority and nearer(t,target))) then target=t;target_rule=rule;priority=rank end
+  if attacks then target_candidates[#target_candidates+1]={target=t,rule=rule,rank=rank} end
+  if attacks and (rank>priority or (rank==priority and nearer(t,target))) then target=t;target_rule=rule;priority=rank end
  end end
- if not target and s.nearest~=0 and s.targets==nil then target={id=s.nearest,distance=s.distance or 0,resists={}} end
+ if not target and s.nearest~=0 and s.targets==nil then
+  local candidate={id=s.nearest,name='',distance=s.distance or 0,resists={}}
+  local rule=monster_rule(candidate,p)
+  if monster_attacks(rule,p) then target=candidate;target_rule=rule end
+ end
  targeting_status=string.format('Search: %.0f m. %s',acquisition,target and string.format('%s: %.1f m.',target.name or 'Target',target.distance) or 'No visible eligible monsters.')
  if not option('approach',true) then targeting_status=targeting_status..' Pursuit is off; only attacks within range.' end
  if option('nav_priority',false) and option('navigation',false) then targeting_status=targeting_status..' Route has priority over combat.' end
@@ -2682,6 +2704,7 @@ local function tick(s,p)
     if not explicit and main_hand>0 and not strict_damage then allowed=v.id==main_hand end
     if v.auto_wield_left then allowed=false end
    end
+   if not caster and target_rule and target_rule.bolt==false then allowed=false end
    if caster and allowed and v.identified and v.can_wield then usable_caster=true end
    if not v.identified and allowed and (melee or missile or caster) then unassessed=v end
    if v.identified and v.can_wield and allowed and ((explicit and v.id==explicit.id) or (target_combat=='auto' and (melee or missile or (caster and casting_attack))) or (target_combat=='melee' and melee) or (target_combat=='missile' and missile) or (target_combat=='magic' and caster)) then

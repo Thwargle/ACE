@@ -1,5 +1,44 @@
 # Virindi compatibility review
 
+## Compact monster controls and pet-only operation (2026-11-01)
+
+Checked the supplied `utank2_decompiled/uTank2/PluginCore.cs` monster-column
+tooltips at 1686–1700, `h1.cs` summoning gate, `ga.cs` pet selection at 1033–1080,
+and `f7.cs` target admission. VT's pet selector uses admission (`o`), independent
+of the subsequent attack-valid result (`n`). Turning attack families off must
+therefore not exclude a monster from pet selection. The old USD adapter had
+translated all three disabled families into Ignore; new imports no longer do
+that, and the runtime recognizes the old encoding. Explicit Ignore and negative
+priority still exclude pets. UCM additionally supports Summoning with Combat off.
+
+The native Mobs editor provides a compact default/mob matrix with
+immediate attack/debuff switches, combat mode and damage/pet selectors. Extended
+columns cover all spell modes in the reference, with tooltips and full-size hit
+targets. Details shares all attack/debuff, mode, damage and pet controls with
+the table and adds weapon, offhand, secondary vulnerability, priority, range and
+native name matching. New native rows opt into live default inheritance; existing imported
+rows keep independent settings and matching expressions. Editing a switch does
+not stop UCM. No-attacks rules skip combat assessment, pursuit and equipment
+changes while remaining available to the independent summoning activity.
+
+The follow-up UI review removes the above-chart Combat/Summoning switches and
+pet-only shortcut and duplicated spell/damage switches in Combat. Details is a
+complete editor of the same saved row; its controls cannot diverge from the table.
+Activity switches are centralized in Overview with Micro as
+the quick-control surface. Loot notifications are configured in Loot only.
+The chart preserves legacy Character fallbacks without changing run/pause state.
+All abbreviated columns have retail-styled header and switch tooltips with full
+names and descriptions; switches also explain inherited values. Their header hit
+areas participate in Slate hover testing, including padding around the letters.
+The Mobs selector shows the selected name alone, including **Default**. Saved
+`Monsters` section keys and filenames remain compatible with existing imports.
+
+Regression coverage exercises pet-only operation with Combat on/off, previous
+USD encoding, repeated summons, per-monster attack overrides, cancellation of
+an existing target, Ignore, actual matrix buttons, save/reload, search, and
+normal/enlarged text at narrow/wide widths. These are offline automation checks,
+not a live-server hunt or a change to VT's full streak-chain optimizer.
+
 ## Combat weapon elements and selection (2026-10-30)
 
 Reviewed the supplied `utank2_decompiled/ga.cs`: appraisal extraction at lines

@@ -8,6 +8,8 @@
 namespace ACEUCMProfiles
 {
     inline FString ActiveName() { return TEXT("__active"); }
+    // Keep persisted section keys compatible with existing profiles and imports.
+    inline FString DisplaySection(const FString& Section) { return Section==TEXT("Monsters")?TEXT("Mobs"):Section; }
     bool SaveSelection(const FString& Root, const TSharedPtr<FJsonObject>& Profile,
         const TSharedPtr<FJsonObject>& Links, FString& Error);
     const TArray<FString>& Sections();

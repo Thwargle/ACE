@@ -15,6 +15,7 @@
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
+#include "Widgets/Layout/SScrollBar.h"
 #include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/Layout/SUniformWrapPanel.h"
 #include "Widgets/Layout/SExpandableArea.h"
@@ -42,6 +43,7 @@ namespace ACEUCMPanelPrivate
     const FSlateBrush* White(){return FCoreStyle::Get().GetBrush("WhiteBrush");}
     const FButtonStyle& Style() {return FACEPluginStyle::Current()->Button;}
     const FSliderStyle& SliderStyle() {return FACEPluginStyle::Current()->Slider;}
+    FString SectionLabel(const FString& Section){return ACEUCMProfiles::DisplaySection(Section);}
     TSharedRef<STextBlock> Text(const FString& S,int Size=16,FLinearColor Color=Ink,bool Wrap=true)
     {return SNew(SACEPluginText).Text(FText::FromString(S)).Font(FACEPluginStyle::NativeFont("Regular",Size)).ColorAndOpacity(Color).AutoWrapText(Wrap);}
     TSharedRef<STextBlock> LiveText(TFunction<FString()> Value)
@@ -79,7 +81,7 @@ namespace ACEUCMPanelPrivate
         {
             Host=A._Host;ShowTitle=A._ShowTitle;FACEPluginStyle::Use(A._Host,A._InitialPage==TEXT("Standalone loot")?TEXT("looteditor"):TEXT("ucm"));if(!A._InitialPage.IsEmpty())Page=A._InitialPage;for(auto P:Host->Plugins)if(P->Id==TEXT("ucm"))Plugin=P;
             if(!Plugin)return;
-            if(Page==TEXT("Rules"))Page=TEXT("Monsters");
+            if(Page==TEXT("Rules")||Page==TEXT("Mobs")||Page==TEXT("Mob"))Page=TEXT("Monsters");
             if(Page==TEXT("Profiles"))Page=TEXT("Import");
             LegacyFolder=Host->GetProfileFolder();RefreshLibrary();
             EditorOnly=Page==TEXT("Standalone loot");if(EditorOnly)Page=TEXT("Loot");
@@ -108,6 +110,7 @@ namespace ACEUCMPanelPrivate
             const bool Narrow=Geometry.GetLocalSize().X<700;
             if(Narrow!=LootNarrow){LootNarrow=Narrow;if((Page==TEXT("Loot")&&!EditingSalvage)||Page==TEXT("Route")||Page==TEXT("Overview"))Rebuild();}
             if(RenderedProfile.Pin()!=P())Rebuild();
+            if(Page==TEXT("Monsters")&&MonsterFontSize!=FACEPluginStyle::ScaleFont(FACEPluginStyle::NativeFont("Regular",16)).Size)Rebuild();
         }
     private:
         TWeakObjectPtr<UACEPluginSubsystem> Host;TSharedPtr<FACEClientPlugin> Plugin;
@@ -163,7 +166,7 @@ namespace ACEUCMPanelPrivate
         FString CreatingSection,CreationError,DeletingSection,DeletingName,MonsterSearch,MonsterFilter;
         int32 RoutePage=0;
         static constexpr int32 RoutePageSize=8;
-        void ResetProfileEditors(){LootDraft.Reset();ConditionDraft.Reset();StateIndex=0;ExpandedMonster=INDEX_NONE;RoutePage=0;}
+        void ResetProfileEditors(){LootDraft.Reset();ConditionDraft.Reset();StateIndex=0;ExpandedMonster=INDEX_NONE;MonsterPage=0;RoutePage=0;}
         void CreateSection(const FString& Section)
         {
             if(!CanLeaveLootRule())return;
@@ -176,10 +179,10 @@ namespace ACEUCMPanelPrivate
         TSharedRef<SWidget> ProfileChoice(const FString& Section)
         {
             return SNew(SACEPluginComboButton).Tag(FName(*(TEXT("UCMProfile.")+Section))).ComboButtonStyle(&FACEPluginStyle::Current()->Combo)
-                .ButtonContent()[SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",16)).ColorAndOpacity(Accent)
+                .ButtonContent()[SNew(SACEPluginText).Tag(FName(*(TEXT("UCMProfileLabel.")+Section))).Font(FACEPluginStyle::NativeFont("Regular",16)).ColorAndOpacity(Accent)
                     .OverflowPolicy(ETextOverflowPolicy::Ellipsis).ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([this,Section](){return FText::FromString(Host->UCMSectionName(Section));})))
                     .Text_Lambda([this,Section](){const FString Name=Host->UCMSectionName(Section);
-                        return FText::FromString(Section+TEXT(": ")+(Name.IsEmpty()?TEXT("Unsaved"):Name));})]
+                        return FText::FromString((Section==TEXT("Monsters")?FString():SectionLabel(Section)+TEXT(": "))+(Name.IsEmpty()?TEXT("Unsaved"):Name));})]
                 .OnGetMenuContent_Lambda([this,Section]()->TSharedRef<SWidget>{
                     auto List=SNew(SVerticalBox);
                     for(const auto& Name:Host->UCMSectionProfiles(Section))List->AddSlot().AutoHeight()[MenuButton(Name,[this,Section,Name](){
@@ -228,15 +231,17 @@ namespace ACEUCMPanelPrivate
                 Add(SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",14)).ColorAndOpacity(Accent).AutoWrapText(true)
                     .Text_Lambda([this](){const TArray<TSharedPtr<FJsonValue>>* Points=nullptr;const int32 Count=P()->TryGetArrayField(TEXT("route"),Points)?Points->Num():0;
                         return FText::FromString(FString::Printf(TEXT("Editing %s.json\n%d saved points | Auto-save on"),*Host->UCMSectionName(TEXT("Routes")),Count));}));
-            else if(Manage)Add(Text(TEXT("Changes save to this shared ")+Section+TEXT(" profile."),13,Muted));
+            else if(Manage)Add(Text(TEXT("Changes save to this shared ")+SectionLabel(Section)+TEXT(" profile."),13,Muted));
         }
         void Configuration()
         {
-            Heading(TEXT("Configuration"),TEXT("Choose independent profiles for your current activities. Changes save automatically. Manage each profile in its own tab."));
+            Heading(TEXT("Configuration"),TEXT("Start or pause activities here or in UCM Micro. Configure each activity in its own tab; use the Mobs chart for attacks, debuffs and pet choices. Changes save automatically."));
             if(!Plugin->Enabled)Add(Button(TEXT("Enable UCM capabilities"),[this](){Host->SetEnabled(Plugin->Id,true);Rebuild();}));
             auto Activities=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(12,4));
             Activities->AddSlot()[CombatToggle(TEXT("Enable Combat"))];
+            Activities->AddSlot()[Toggle(TEXT("summon_pets"),TEXT("Enable Summoning"),TEXT("Summon eligible essences from the Equipment Pool for mobs allowed by the chart. Works independently of Combat; keeps an existing pet active."),false,false)];
             Activities->AddSlot()[Toggle(TEXT("buffing"),TEXT("Enable Buffs"),TEXT("Maintain buffs."),true,false)];
+            Activities->AddSlot()[Toggle(TEXT("buff_others"),TEXT("Accept buff requests"),TEXT("Accept role-based buff requests by tell while UCM and Buffs are running."),false,false)];
             Activities->AddSlot()[Toggle(TEXT("recovery"),TEXT("Enable Recovery"),TEXT("Maintain vitals."),true,false)];Add(Activities);
             auto Grid=SNew(SUniformGridPanel).SlotPadding(FMargin(4,6));int32 Index=0;
             for(const auto& Section:TArray<FString>{TEXT("Character"),TEXT("Routes"),TEXT("Loot"),TEXT("Vendors"),TEXT("Metas"),TEXT("Monsters")})
@@ -247,17 +252,15 @@ namespace ACEUCMPanelPrivate
                 const FString Label=Section==TEXT("Routes")?TEXT("Enable Route Navigation"):Section==TEXT("Loot")?TEXT("Enable Looting"):
                     Section==TEXT("Vendors")?TEXT("Enable Vendor Restocking"):TEXT("Enable Metas");
                 CardBox->AddSlot().AutoHeight().Padding(0,0,0,6)[SNew(SBox).MinDesiredHeight(30).VAlign(VAlign_Center)
-                    [Key?Toggle(Key,Label,TEXT("Use the selected profile while UCM runs."),Section==TEXT("Metas")):Text(Section)]];
+                    [Key?Toggle(Key,Label,TEXT("Use the selected profile while UCM runs."),Section==TEXT("Metas")):Text(SectionLabel(Section))]];
                 CardBox->AddSlot().AutoHeight()[ProfileChoice(Section)];
                 Grid->AddSlot(LootNarrow?0:Index%2,LootNarrow?Index:Index/2)[Tile(CardBox)];++Index;
             }
             Add(Grid);
             Add(Toggle(TEXT("loot_priority"),TEXT("Prioritize loot"),TEXT("Finish nearby corpses before selecting another combat target.")));
             Add(Toggle(TEXT("nav_priority"),TEXT("Prioritize navigation"),TEXT("Prefer route navigation over combat. Recovery, buffs and prioritized looting still take precedence.")));
-            Add(Toggle(TEXT("idle_peace"),TEXT("Peace mode when idle"),TEXT("Enter peace mode when no nearby monsters need attention.")));
+            Add(Toggle(TEXT("idle_peace"),TEXT("Peace mode when idle"),TEXT("Enter peace mode when no nearby mobs need attention.")));
             Add(Toggle(TEXT("suspend_world_rendering"),TEXT("Suspend 3D view while UCM runs"),TEXT("Desktop only. Keeps UCM, networking and the interface active.")));
-            Heading(TEXT("Chat notifications"),TEXT("Choose which loot-rule results UCM announces in local chat. These settings also apply while UCM is stopped."));
-            LootNotificationSettings();
         }
         TSharedRef<SWidget> Header()
         {
@@ -276,16 +279,17 @@ namespace ACEUCMPanelPrivate
         }
         TSharedRef<SWidget> Tabs()
         {
-            auto Row=SNew(SUniformWrapPanel).SlotPadding(FMargin(2)).MinDesiredSlotWidth(92).MinDesiredSlotHeight(38).MaxDesiredSlotHeight(38).HAlign(HAlign_Fill).EvenRowDistribution(true);
+            auto Row=SNew(SUniformWrapPanel).SlotPadding(FMargin(2)).MinDesiredSlotWidth(92).MinDesiredSlotHeight(38)
+                .MaxDesiredSlotHeight_Lambda([](){return 38.f*FMath::Max(1.f,FACEPluginStyle::ScaleFont(FACEPluginStyle::NativeFont("Regular",15)).Size/15.f);}).HAlign(HAlign_Fill).EvenRowDistribution(true);
             const TArray<FString> Names=EditorOnly?TArray<FString>{TEXT("Vendors"),TEXT("Loot rules"),TEXT("Import")}
                 :TArray<FString>{TEXT("Overview"),TEXT("Buffs"),TEXT("Buff others"),TEXT("Combat"),TEXT("Recovery"),TEXT("Route"),TEXT("Loot"),TEXT("Vendors"),TEXT("Monsters"),TEXT("Metas"),TEXT("Import"),TEXT("Log")};
             if(EditorOnly)Row->SetNumColumnsOverride(3);
             for(const auto& Name:Names)
             {
                 const FString TargetPage=EditorOnly&&Name==TEXT("Loot rules")?TEXT("Loot"):EditorOnly&&Name==TEXT("Import")?TEXT("Import tools"):Name;
-                Row->AddSlot()[SNew(SACEPluginTab).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).Tag(TEXT("UCMTab")).Text(FText::FromString(Name))
+                Row->AddSlot()[SNew(SACEPluginTab).ContentPadding(FMargin(FACEPluginStyle::CompactButtonPadding)).Tag(TEXT("UCMTab")).Text(FText::FromString(SectionLabel(Name)))
                     .Selected_Lambda([this,TargetPage,Name](){return Page==TargetPage||(Name==TEXT("Import")&&(Page==TEXT("Files")||Page.StartsWith(TEXT("Import "))||Page==TEXT("Legacy loot")));})
-                    .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Name==TEXT("Import")?TEXT("Import / compatibility"):Name)))
+                    .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Name==TEXT("Import")?TEXT("Import / compatibility"):SectionLabel(Name))))
                     .OnClicked_Lambda([this,TargetPage](){Page=TargetPage;BodyScroll->ScrollToStart();Rebuild();return FReply::Handled();})];
             }
             return Row;
@@ -293,6 +297,7 @@ namespace ACEUCMPanelPrivate
         TSharedRef<SWidget> CombatToggle(const FString& Caption=TEXT("Combat (automatic skill and equipment selection)"))
         {
             return SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).IsChecked_Lambda([this](){return Str(P(),TEXT("combat"),TEXT("off"))!=TEXT("off")?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+                .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Run automatic attacks allowed by the Mobs chart. Turning this off pauses all automatic attacks without changing mob rules or summoning."))))
                 .OnCheckStateChanged_Lambda([this](ECheckBoxState State){P()->SetStringField(TEXT("combat"),State==ECheckBoxState::Checked?TEXT("auto"):TEXT("off"));P()->SetBoolField(TEXT("manual_combat"),false);Save();})
                 [Text(Caption,16)];
         }
@@ -369,12 +374,6 @@ namespace ACEUCMPanelPrivate
                     }
                     return SNew(SBox).MaxDesiredHeight(350)[SNew(SScrollBox)+SScrollBox::Slot()[List]];
                 }));
-            Heading(TEXT("Void curses"),TEXT("Cast the highest usable learned tier before direct attacks. Each curse is refreshed when it expires; monster rules can override these choices."));
-            Add(Toggle(TEXT("debuff_corruption"),TEXT("Corruption"),TEXT("Nether damage over time.")));
-            Add(Toggle(TEXT("debuff_destructive"),TEXT("Destructive Curse"),TEXT("Nether damage over time.")));
-            Add(Toggle(TEXT("debuff_corrosion"),TEXT("Corrosion"),TEXT("Nether damage over time.")));
-            Add(Toggle(TEXT("debuff_weakening"),TEXT("Weakening Curse"),TEXT("Lower the target's damage rating.")));
-            Add(Toggle(TEXT("debuff_festering"),TEXT("Festering Curse"),TEXT("Reduce the target's healing.")));
         }
         void Inventory(bool Consumables)
         {
@@ -406,11 +405,12 @@ namespace ACEUCMPanelPrivate
         void MonsterEquipment(const TSharedPtr<FJsonObject>& Rule,bool Offhand,bool DefaultMelee=false)
         {
             const TCHAR* Key=DefaultMelee?(Offhand?TEXT("melee_secondary_equip"):TEXT("melee_weapon")):(Offhand?TEXT("secondary_equip"):TEXT("weapon"));
-            const double Selected=Num(Rule,Key,Offhand?0:-1);
+            const auto Display=DefaultMelee?Rule:EffectiveMonster(Rule);
+            const double Selected=Num(Display,Key,Offhand?0:-1);
             const TArray<FString> Modes=Offhand?TArray<FString>{TEXT("Automatic"),TEXT("Shield"),TEXT("Dual wield"),TEXT("Empty hand")}:DefaultMelee?TArray<FString>{TEXT("Automatic")}:TArray<FString>{TEXT("Automatic"),TEXT("Casting device")};
             FString Caption=TEXT("Missing item — choose another");
             for(int32 I=0;I<Modes.Num();++I)if(Selected==(Offhand?I:I-1))Caption=Modes[I];
-            if(Offhand&&!Rule->HasField(Key))Caption=DefaultMelee?TEXT("Left-hand Tether / keep current"):TEXT("Use default hand settings");
+            if(Offhand&&!Display->HasField(Key))Caption=DefaultMelee?TEXT("Left-hand Tether / keep current"):TEXT("Use default hand settings");
             auto* C=Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
             TArray<FACEWorldObject> Items;
             for(const auto& O:C->GetWorldObjects())if(Host->IsOwnedPluginItem(O))
@@ -422,11 +422,12 @@ namespace ACEUCMPanelPrivate
                 if(Offhand?(Melee||Shield):Primary&&(!DefaultMelee||(O.ItemType&ACEItemType::MeleeWeapon))&&!(O.ObjectDescriptionFlags&ACEObjectDescFlag::WieldLeft))Items.Add(O);
             }
             Items.Sort([](const auto& A,const auto& B){return ACERetailObjectNames::Name(A)<ACERetailObjectNames::Name(B);});
-            Add(SNew(SACEPluginComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[Text((Offhand?TEXT("Offhand: "):DefaultMelee?TEXT("Main hand: "):TEXT("Weapon: "))+Caption)]
+            Add(SNew(SACEPluginComboButton).Tag(FName(*(DefaultMelee?FString(TEXT("UCMEquipment."))+Key:FString(TEXT("UCMMobDetail."))+Str(Rule,TEXT("name"))+TEXT(".")+Key)))
+                .ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonContent()[Text((Offhand?TEXT("Offhand: "):DefaultMelee?TEXT("Main hand: "):TEXT("Weapon: "))+Caption)]
                 .OnGetMenuContent_Lambda([this,Rule,Key,Offhand,Modes,Items](){
                     auto List=SNew(SVerticalBox);
                     auto Select=[this,Rule,Key](double Value){Rule->SetNumberField(Key,Value);FSlateApplication::Get().DismissAllMenus();Save(true);Rebuild();};
-                    if(Offhand)List->AddSlot().AutoHeight()[MenuButton(TEXT("Use default / Left-hand Tether"),[this,Rule,Key](){Rule->RemoveField(Key);FSlateApplication::Get().DismissAllMenus();Save(true);Rebuild();})];
+                    if(Offhand||Bool(Rule,TEXT("inherit_default")))List->AddSlot().AutoHeight()[MenuButton(TEXT("Use default / Left-hand Tether"),[this,Rule,Key](){Rule->RemoveField(Key);FSlateApplication::Get().DismissAllMenus();Save(true);Rebuild();})];
                     for(int32 I=0;I<Modes.Num();++I)List->AddSlot().AutoHeight()[MenuButton(Modes[I],[Select,I,Offhand](){Select(Offhand?I:I-1);})];
                     for(const auto& O:Items)List->AddSlot().AutoHeight()[MenuButton(ACERetailObjectNames::Name(O)+((O.ObjectDescriptionFlags&ACEObjectDescFlag::WieldLeft)?TEXT(" (Left-hand Tether)"):TEXT("")),[Select,Id=uint32(O.Guid)](){Select(Id);})];
                     return SNew(SBox).MaxDesiredHeight(400)[SNew(SScrollBox)+SScrollBox::Slot()[List]];
@@ -435,15 +436,16 @@ namespace ACEUCMPanelPrivate
         void IntegerSetting(const TSharedPtr<FJsonObject>& Object,const TCHAR* Key,const FString& Caption,int32 Min,int32 Max,const FString& Unit,const FString& DefaultKey=FString())
         {
             auto Current=[this,Object,Root=Object==P()](){return Root?P():Object;};
+            auto Fallback=[this,Object,Key,DefaultKey](){return Bool(Object,TEXT("inherit_default"))?Num(MonsterDefaults(),Key,Num(P(),*DefaultKey)):Num(P(),*DefaultKey);};
             const bool Override=Object->HasField(Key)&&(FString(Key)!=TEXT("range")||Num(Object,Key)>0);
             if(!DefaultKey.IsEmpty())Add(SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check)
                 .IsChecked(Override?ECheckBoxState::Unchecked:ECheckBoxState::Checked)
-                .OnCheckStateChanged_Lambda([this,Object,Key,DefaultKey](ECheckBoxState State){
+                .OnCheckStateChanged_Lambda([this,Object,Key,Fallback](ECheckBoxState State){
                     if(State==ECheckBoxState::Checked)Object->RemoveField(Key);
-                    else Object->SetNumberField(Key,FString(Key)==TEXT("range")?FMath::Max(1,FMath::RoundToInt(Num(P(),*DefaultKey))):FMath::RoundToInt(Num(P(),*DefaultKey)));Save();Rebuild();})
-                [Text(Caption+TEXT(": use Combat default"),14,Muted)]);
-            auto Value=[this,Current,Key,DefaultKey](){const double N=Num(Current(),Key,DefaultKey.IsEmpty()?0:Num(P(),*DefaultKey));
-                return float(!DefaultKey.IsEmpty()&&FString(Key)==TEXT("range")&&N<=0?Num(P(),*DefaultKey):N);};
+                    else Object->SetNumberField(Key,FString(Key)==TEXT("range")?FMath::Max(1,FMath::RoundToInt(Fallback())):FMath::RoundToInt(Fallback()));Save();Rebuild();})
+                [Text(Caption+TEXT(": use default"),14,Muted)]);
+            auto Value=[Current,Key,DefaultKey,Fallback](){const double N=Num(Current(),Key,DefaultKey.IsEmpty()?0:Fallback());
+                return float(!DefaultKey.IsEmpty()&&FString(Key)==TEXT("range")&&N<=0?Fallback():N);};
             auto Box=SNew(SVerticalBox);
             Box->AddSlot().AutoHeight()[SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1)[Text(Caption,16)]
                 +SHorizontalBox::Slot().AutoWidth()[SNew(SACEPluginText).ColorAndOpacity(Accent)
@@ -455,50 +457,58 @@ namespace ACEUCMPanelPrivate
         }
         void MonsterDetails(const TSharedPtr<FJsonObject>& Rule)
         {
-            Add(Text(TEXT("Monster name begins with"),14,Muted));
-            Add(SNew(SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Text(FText::FromString(Str(Rule,TEXT("name"))))
+            if(!Bool(Rule,TEXT("default")))
+            {
+            Add(Text(Rule->HasField(TEXT("expression"))?TEXT("Imported expression (preserved)"):TEXT("Mob name"),14,Muted));
+            Add(SNew(SACEPluginEditableTextBox).Tag(TEXT("UCMMobDetail.Name")).Style(&FACEPluginStyle::Current()->Edit).Text(FText::FromString(Str(Rule,TEXT("name"))))
+                .IsReadOnly(Rule->HasField(TEXT("expression")))
                 .OnTextCommitted_Lambda([this,Rule](const FText& Value,ETextCommit::Type){const FString Name=Value.ToString().TrimStartAndEnd();if(!Name.IsEmpty()&&Name.Len()<=256){Rule->SetStringField(TEXT("name"),Name);Save();Rebuild();}}));
+            if(!Rule->HasField(TEXT("expression")))Add(SNew(SCheckBox).Tag(TEXT("UCMMobDetail.Exact")).Style(&FACEPluginStyle::Current()->Check)
+                .IsChecked_Lambda([Rule](){return Bool(Rule,TEXT("exact"))?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+                .OnCheckStateChanged_Lambda([this,Rule](ECheckBoxState State){Rule->SetBoolField(TEXT("exact"),State==ECheckBoxState::Checked);SaveMonster(Rule);})
+                .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Match the entire name when checked; otherwise match names beginning with this text."))))[Text(TEXT("Match exact name"),16)]);
+            }
+            Add(Text(TEXT("Attack profile"),18,Accent));
+            for(const auto& Field:TArray<TPair<FString,FString>>{{TEXT("combat"),TEXT("Combat mode")},{TEXT("damage_type"),TEXT("Attack damage type")},{TEXT("pet_damage_type"),TEXT("Pet damage type")}})
+            {
+                Add(Text(Field.Value,14,Muted));
+                Add(MonsterChoice(Rule,Field.Key,MonsterOptions(Field.Key),Field.Key!=TEXT("combat"),true));
+            }
+            MonsterDetailFlags(Rule);
+            Add(Text(TEXT("Secondary vulnerability"),14,Muted));
+            Add(MonsterChoice(Rule,TEXT("secondary_vuln"),MonsterOptions(TEXT("secondary_vuln")),true,true));
+            Add(Text(TEXT("Equipment"),18,Accent));
+            MonsterEquipment(Rule,false);MonsterEquipment(Rule,true);
+            Add(Text(TEXT("Targeting"),18,Accent));
             IntegerSetting(Rule,TEXT("priority"),TEXT("Priority"),-1,10,TEXT(""),TEXT("monster_default_priority"));
             IntegerSetting(Rule,TEXT("range"),TEXT("Attack Range"),0,100,TEXT(" m"),TEXT("monster_default_range"));
-            Add(Text(TEXT("Combat mode"),14,Muted));
-            auto Modes=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
-            for(const FString Mode:{TEXT("auto"),TEXT("melee"),TEXT("missile"),TEXT("magic"),TEXT("ignore")})
-                Modes->AddSlot()[ChoiceButton(Mode,[Rule,Mode](){return Str(Rule,TEXT("combat"),TEXT("auto"))==Mode;},[this,Rule,Mode](){Rule->SetStringField(TEXT("combat"),Mode);Rule->SetBoolField(TEXT("ignore"),Mode==TEXT("ignore"));Save();})];
-            Add(Modes);Add(Text(TEXT("Damage type"),14,Muted));
-            auto Damage=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
-            const TCHAR* DamageNames[]={TEXT("Auto"),TEXT("Slash"),TEXT("Pierce"),TEXT("Blunt"),TEXT("Cold"),TEXT("Fire"),TEXT("Acid"),TEXT("Electric"),TEXT("Nether")};
-            for(int32 I=0;I<9;++I){const int32 Element=I==8?1024:I?1<<(I-1):0;
-                Damage->AddSlot()[ChoiceButton(DamageNames[I],[Rule,Element](){return Num(Rule,TEXT("damage_type"))==Element;},[this,Rule,Element](){Rule->SetNumberField(TEXT("damage_type"),Element);Save();})];}
-            Add(Damage);
-            MonsterEquipment(Rule,false);MonsterEquipment(Rule,true);
-            auto Toggles=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
-            for(const auto& Pair:TArray<TPair<FString,FString>>{{TEXT("debuff_yield"),TEXT("Yield")},{TEXT("debuff_imperil"),TEXT("Imperil")},{TEXT("debuff_vuln"),TEXT("Vulnerability")},{TEXT("ring"),TEXT("Ring spells")},{TEXT("debuff_gravity"),TEXT("Gravity Well")},{TEXT("debuff_broadside"),TEXT("Broadside")},{TEXT("debuff_fester"),TEXT("Fester")},{TEXT("debuff_weakening"),TEXT("Weakening Curse")},{TEXT("debuff_festering"),TEXT("Festering Curse")},{TEXT("debuff_corruption"),TEXT("Corruption")},{TEXT("debuff_destructive"),TEXT("Destructive Curse")},{TEXT("debuff_corrosion"),TEXT("Corrosion")}})
-            {
-                Toggles->AddSlot()[ChoiceButton(Pair.Value,[this,Rule,Key=Pair.Key](){return Bool(Rule,*Key,Bool(P(),*Key));},[this,Rule,Key=Pair.Key](){Rule->SetBoolField(Key,!Bool(Rule,*Key,Bool(P(),*Key)));Save(true);})];
-            }
-            Add(Toggles);Add(Text(TEXT("Secondary vulnerability"),14,Muted));
-            auto Elements=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
-            const TCHAR* Names[]={TEXT("None"),TEXT("Slash"),TEXT("Pierce"),TEXT("Blunt"),TEXT("Cold"),TEXT("Fire"),TEXT("Acid"),TEXT("Electric")};
-            for(int32 I=0;I<8;++I){const int32 Element=I?1<<(I-1):0;Elements->AddSlot()[ChoiceButton(Names[I],[Rule,Element](){return Num(Rule,TEXT("secondary_vuln"))==Element;},[this,Rule,Element](){Rule->SetNumberField(TEXT("secondary_vuln"),Element);Save(true);})];}
-            Add(Elements);
+            Add(Text(TEXT("Higher priority is attacked first; negative priority ignores the mob. Range 0 uses the shared attack distance. Power, spell selection and timing are shared settings in Combat."),14,Muted));
         }
         void AddMonster(const FString& Value)
         {
-            const FString Name=Value.TrimStartAndEnd();if(Name.IsEmpty()||Name.Len()>256){Host->Notice=TEXT("Enter a monster name prefix (maximum 256 characters).");return;}
+            const FString Name=Value.TrimStartAndEnd();if(Name.IsEmpty()||Name.Len()>256){Host->Notice=TEXT("Enter a mob name prefix (maximum 256 characters).");return;}
             const TArray<TSharedPtr<FJsonValue>>* Old=nullptr;TArray<TSharedPtr<FJsonValue>> Rules;if(P()->TryGetArrayField(TEXT("monsters"),Old))Rules=*Old;
             MonsterSearch.Empty();MonsterFilter.Empty();CollapsedSections.Add(TEXT("Monsters/")+Name,false);
-            for(int32 I=0;I<Rules.Num();++I)if(Str(Rules[I]->AsObject(),TEXT("name")).Equals(Name,ESearchCase::IgnoreCase)){ExpandedMonster=I;CollapsedSections.Add(TEXT("Monsters/")+Str(Rules[I]->AsObject(),TEXT("name")),false);Host->Notice=TEXT("This monster already has a rule.");Rebuild();return;}
-            auto Rule=MakeShared<FJsonObject>();Rule->SetStringField(TEXT("name"),Name);Rule->SetStringField(TEXT("combat"),TEXT("auto"));
-            Rule->SetNumberField(TEXT("damage_type"),0);Rule->SetBoolField(TEXT("ignore"),false);
-            Rules.Add(MakeShared<FJsonValueObject>(Rule));P()->SetArrayField(TEXT("monsters"),Rules);ExpandedMonster=Rules.Num()-1;Save();Rebuild();
+            int32 CustomCount=0;bool HasDefault=false;
+            for(int32 I=0;I<Rules.Num();++I)
+            {
+                const auto Existing=Rules[I]->AsObject();const bool Default=Bool(Existing,TEXT("default"));HasDefault|=Default;
+                if(Str(Existing,TEXT("name")).Equals(Name,ESearchCase::IgnoreCase))
+                {ExpandedMonster=I;MonsterPage=CustomCount/25;Host->Notice=TEXT("This mob already has a rule.");Rebuild();return;}
+                if(!Default)++CustomCount;
+            }
+            if(Rules.Num()>=(HasDefault?512:511)){Host->Notice=TEXT("This profile has reached its limit of 511 mob rules plus Default.");return;}
+            auto Rule=MakeShared<FJsonObject>();Rule->SetStringField(TEXT("name"),Name);Rule->SetBoolField(TEXT("inherit_default"),true);
+            Rules.Add(MakeShared<FJsonValueObject>(Rule));P()->SetArrayField(TEXT("monsters"),Rules);ExpandedMonster=INDEX_NONE;MonsterPage=CustomCount/25;Save();Rebuild();
         }
         void AddSelectedMonster()
         {
             auto* C=Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();FACEWorldObject Monster;
             if(!C||!C->GetWorldObject(C->GetSelectedObject().Guid,Monster)||!Monster.IsAttackable()||Monster.bIsPlayer||Monster.PetOwnerId||!(Monster.ItemType&ACEItemType::Creature))
-            {Host->Notice=TEXT("Select a monster in the game first.");return;}
+            {Host->Notice=TEXT("Select a mob in the game first.");return;}
             AddMonster(Monster.Name);
         }
+        #include "ACEUCMMonsterPanel.inl"
         void ProtectionControls()
         {
             Heading(TEXT("Protections and banes"),TEXT("Choose damage protections and equipment banes. Saved in the active Character profile."));
@@ -604,7 +614,6 @@ namespace ACEUCMPanelPrivate
             {
                 SectionSelector(TEXT("Character"));
                 Heading(TEXT("Automatic buffing"),TEXT("Uses your highest usable sustained buffs for attributes, trained skills, protections and equipment."));
-                Add(Toggle(TEXT("buffing"),TEXT("Enable Buffs"),TEXT("Maintains buffs while UCM is running."),true));
                 ForceBuffControls();
                 Add(Toggle(TEXT("fast_cast_buffs"),TEXT("Fast buff movement"),TEXT("Shorten eligible buff recoil with a backward press-and-release in one update. The tap does not move your character or wait for a server reply to release."),true));
                 Add(Toggle(TEXT("auto_buffs"),TEXT("Choose buffs automatically"),TEXT("Turn off only when using a manually authored buff list."),true));
@@ -642,7 +651,6 @@ namespace ACEUCMPanelPrivate
             {
                 SectionSelector(TEXT("Character"));
                 Heading(TEXT("Buff requests by tell"),TEXT("Players can request role-based buffs by tell while UCM and Buff are running."));
-                Add(Toggle(TEXT("buff_others"),TEXT("Accept buff requests"),TEXT("One request per player, up to eight queued. Your recovery and self buffs take priority.")));
                 Slider(TEXT("buff_other_range"),TEXT("Requester distance"),3,30,20,Accent,TEXT(" m"));
                 Add(SNew(SACEPluginText).AutoWrapText(true).ColorAndOpacity(Accent).Text_Lambda([H=Host](){return FText::FromString(H.IsValid()?FString::Printf(TEXT("%d queued  •  %s"),H->QueuedBuffRequests(),*H->BuffRequestStatus):FString());}));
                 Add(Button(TEXT("Clear request queue"),[this](){Host->ClearBuffRequests();}));
@@ -670,66 +678,56 @@ namespace ACEUCMPanelPrivate
             {
                 SectionSelector(TEXT("Character"));
                 Heading(TEXT("Automatic Combat"),TEXT("Automatically ranks usable equipment and known attack spells based on assessed resistances. Unknown resistances use neutral values; select an element override if needed. Make sure you have a weapon or wand configured in your Equipment Pool for automatic equipment selection to work."));
-                Add(CombatToggle(TEXT("Enable Combat")));
-                Add(Text(TEXT("Automatically chooses your highest usable trained combat skill, then the best available weapon or spell. Monster-rule overrides are retained."),15,Muted));
-                Add(Toggle(TEXT("idle_peace"),TEXT("Peace mode when idle"),TEXT("Enter peace mode when no eligible monsters are nearby, including while following a route. Return to the configured combat mode when attacking. Buffing, recovery and looting finish first.")));
+                Add(Text(TEXT("Choose default and per-mob attacks, debuffs, damage and pet types in the Mobs chart. Start or pause activities in Overview / Micro."),15,Muted));
                 const int32 Selection=FMath::Clamp(int32(Num(P(),TEXT("target_select"),1)),1,3);
                 const TCHAR* SelectionNames[]={TEXT(""),TEXT("Distance"),TEXT("Angle"),TEXT("Angle nearby, distance farther away")};
                 Add(LiveButton([this,SelectionNames](){return FString(TEXT("Target preference: "))+SelectionNames[FMath::Clamp(int(Num(P(),TEXT("target_select"),1)),1,3)];},[this](){P()->SetNumberField(TEXT("target_select"),int(Num(P(),TEXT("target_select"),1))%3+1);Save();}));
                 Slider(TEXT("target_angle_range"),TEXT("Nearby angle preference range"),1,30,5,Accent,TEXT(" m"));
                 Slider(TEXT("minimum_range"),TEXT("Minimum target distance"),0,50,0,Accent,TEXT(" m"));
                 Slider(TEXT("approach_range"),TEXT("Target acquisition range"),0,150,60,Accent,TEXT(" m"));
-                Add(Toggle(TEXT("approach"),TEXT("Pursue targets outside attack range"),TEXT("Leave the route to approach visible monsters inside acquisition range, then return after combat. When off, UCM only attacks monsters already within attack range."),true));
+                Add(Toggle(TEXT("approach"),TEXT("Pursue targets outside attack range"),TEXT("Leave the route to approach visible mobs inside acquisition range, then return after combat. When off, UCM only attacks mobs already within attack range."),true));
                 Slider(TEXT("radius"),TEXT("Missile / spell attack range"),5,100,30,Accent,TEXT(" m"));
                 Slider(TEXT("melee_range"),TEXT("Melee approach distance"),1,5,2,Accent,TEXT(" m"));
                 Add(SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",15)).ColorAndOpacity(Accent).AutoWrapText(true)
                     .Text_Lambda([P=Plugin](){return FText::FromString(P->Running?P->TargetingStatus:FString());}));
                 Slider(TEXT("monster_attempts"),TEXT("Environment misses before skipping target"),0,20,4);
                 Slider(TEXT("monster_blacklist_seconds"),TEXT("Skip unreachable target for"),0,600,120,Accent,TEXT(" s"));
-                Add(Text(TEXT("Acquisition is the maximum search distance; 0 uses attack range for imported stationary profiles. Enable pursuit to approach a visible monster before firing. Walls and closed doors exclude targets. Route priority and meta/state settings can override normal combat; the live search status above shows the settings in effect."),15,Muted));
+                Add(Text(TEXT("Acquisition is the maximum search distance; 0 uses attack range for imported stationary profiles. Enable pursuit to approach a visible mob before firing. Walls and closed doors exclude targets. Route priority and meta/state settings can override normal combat; the live search status above shows the settings in effect."),15,Muted));
                 Slider(TEXT("power_percent"),TEXT("Attack power / accuracy"),0,100,50);
                 Add(Toggle(TEXT("auto_attack_power"),TEXT("Automatic attack power"),TEXT("Chooses power for the weapon's attack pattern and damage element."),true));
                 Add(Toggle(TEXT("use_recklessness"),TEXT("Use Recklessness"),TEXT("Keeps automatic power in the Recklessness range when the skill is usable.")));
-                Heading(TEXT("Melee hands"),TEXT("Choose a default main hand and offhand. Monster rules can override these choices. Left-hand Tether reserves a weapon for the offhand; two-handed weapons cannot use a second weapon."));
+                Heading(TEXT("Melee hands"),TEXT("Choose a default main hand and offhand. Mob rules can override these choices. Left-hand Tether reserves a weapon for the offhand; two-handed weapons cannot use a second weapon."));
                 MonsterEquipment(P(),false,true);MonsterEquipment(P(),true,true);
-                Heading(TEXT("Spellcasting"),TEXT("Configure attack spells, rings, arcs and debuffs."));
-                Add(Toggle(TEXT("ring"),TEXT("Use ring spells"),TEXT("For nearby groups. Imported monster rules keep their individual ring choices.")));
+                Heading(TEXT("Spellcasting"),TEXT("Tune the spells enabled in the Mobs chart: ring conditions, arc preference and debuff order."));
                 Slider(TEXT("ring_range"),TEXT("Ring target distance"),1,15,5,Accent,TEXT(" m"));
                 Slider(TEXT("ring_min_targets"),TEXT("Minimum ring targets"),1,10,4,Accent,TEXT(""));
                 const int32 Arcs=FMath::Clamp(int32(Num(P(),TEXT("use_arcs"),1)),1,3);
                 const TCHAR* ArcNames[]={TEXT(""),TEXT("Prefer bolts"),TEXT("Prefer arcs at range"),TEXT("Prefer arcs")};
                 Add(LiveButton([this,ArcNames](){return FString(ArcNames[FMath::Clamp(int(Num(P(),TEXT("use_arcs"),1)),1,3)]);},[this](){P()->SetNumberField(TEXT("use_arcs"),int(Num(P(),TEXT("use_arcs"),1))%3+1);Save();}));
                 Slider(TEXT("arc_range"),TEXT("Arc preference distance"),0,100,5,Accent,TEXT(" m"));
-                Add(Toggle(TEXT("debuff_yield"),TEXT("Magic Yield"),TEXT("Lower magic defense before other debuffs and attacks.")));
                 Add(Toggle(TEXT("switch_debuff_wand"),TEXT("Use attack wand for debuffs"),TEXT("Use the chosen attack wand for magic loadouts. When off, keep the current usable wand.")));
-                Add(Toggle(TEXT("debuff_imperil"),TEXT("Imperil"),TEXT("Lower the target's armor before attacking.")));
-                Add(Toggle(TEXT("debuff_vuln"),TEXT("Elemental vulnerability"),TEXT("Match the selected attack element. Imported monster rules keep their choices.")));
                 const int32 DebuffMode=FMath::Clamp(int32(Num(P(),TEXT("debuff_each_first"),1)),1,3);
                 const TCHAR* DebuffNames[]={TEXT(""),TEXT("Debuff one target"),TEXT("Debuff same-priority targets first"),TEXT("Debuff all targets first")};
                 Add(LiveButton([this,DebuffNames](){return FString(DebuffNames[FMath::Clamp(int(Num(P(),TEXT("debuff_each_first"),1)),1,3)]);},[this](){P()->SetNumberField(TEXT("debuff_each_first"),int(Num(P(),TEXT("debuff_each_first"),1))%3+1);Save();}));
                 Add(Toggle(TEXT("debuff_fallback"),TEXT("Allow debuff fallback"),TEXT("Continue attacking if a required debuff is unavailable or fails three times.")));
-                auto Elements=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
-                const TCHAR* Names[]={TEXT("Auto"),TEXT("Slash"),TEXT("Pierce"),TEXT("Blunt"),TEXT("Cold"),TEXT("Fire"),TEXT("Acid"),TEXT("Electric"),TEXT("Nether")};
-                for(int I=0;I<9;++I)Elements->AddSlot()[ChoiceButton(Names[I],[this,I](){return Num(P(),TEXT("damage_type"))==(I==8?1024:I?1<<(I-1):0)||(I==8&&Num(P(),TEXT("damage_type"))==128);},[this,I](){P()->SetNumberField(TEXT("damage_type"),I==8?1024:I?1<<(I-1):0);Save();})];Add(Elements);
                 AttackSpellControls();
                 Heading(TEXT("Summoned pets"),TEXT("Add essences to the equipment list below. Uses server requirements, remaining charges and cooldowns."));
-                Add(Toggle(TEXT("summon_pets"),TEXT("Enable Summoning"),TEXT("Summon an eligible essence for nearby monsters when its cooldown expires. Works with Combat disabled; keeps an existing pet active.")));
+                Add(Text(TEXT("For pets only, use Mode: No attacks and Pet: Auto in the Mobs chart. Enable the Summoning activity in Overview / Micro."),15,Accent));
                 Add(Toggle(TEXT("refill_summons"),TEXT("Refill summon essences"),TEXT("Use Encapsulated Spirit from your inventory to refill low-charge essences in the equipment pool. Works independently of automatic summoning.")));
                 Slider(TEXT("summon_refill_charges"),TEXT("Refill at or below remaining charges"),0,50,5,Accent,TEXT(" charges"));
                 Add(LiveButton([this](){return Num(P(),TEXT("pet_range_mode"))==1?TEXT("Pet range: custom"):TEXT("Pet range: attack distance");},[this](){P()->SetNumberField(TEXT("pet_range_mode"),Num(P(),TEXT("pet_range_mode"))==1?0:1);Save();}));
                 Slider(TEXT("pet_range"),TEXT("Custom pet distance"),1,240,5,Accent,TEXT(" m"));
-                Slider(TEXT("pet_min_targets"),TEXT("Minimum nearby monsters"),1,20,1);
-                Heading(TEXT("Monster defaults"),TEXT("Fallbacks for monsters without an explicit rule override. Higher priority is attacked first; negative priority ignores a monster. Leave range at 0 to use the melee or missile / spell attack distance."));
-                IntegerSetting(P(),TEXT("monster_default_priority"),TEXT("Default monster priority"),-1,10,TEXT(""));
-                IntegerSetting(P(),TEXT("monster_default_range"),TEXT("Default monster attack range"),0,100,TEXT(" m"));
-                Add(Text(TEXT("Monster rules inherit these defaults unless overridden. Range 0 uses the melee or missile / spell distance above."),14,Muted));
+                Slider(TEXT("pet_min_targets"),TEXT("Minimum nearby mobs"),1,20,1);
+                Heading(TEXT("Mob defaults"),TEXT("Fallbacks for mobs without an explicit rule override. Higher priority is attacked first; negative priority ignores a mob. Leave range at 0 to use the melee or missile / spell attack distance."));
+                IntegerSetting(P(),TEXT("monster_default_priority"),TEXT("Default mob priority"),-1,10,TEXT(""));
+                IntegerSetting(P(),TEXT("monster_default_range"),TEXT("Default mob attack range"),0,100,TEXT(" m"));
+                Add(Text(TEXT("Mob rules inherit these defaults unless overridden. Range 0 uses the melee or missile / spell distance above."),14,Muted));
                 Inventory(false);
             }
             else if(Page==TEXT("Recovery"))
             {
                 SectionSelector(TEXT("Character"));
                 Heading(TEXT("Maintain your vitals"),TEXT("Recover when a vital falls below its percentage. Prefer the highest eligible Life Magic spell, with supplies as fallback; unknown recovery supplies are inspected automatically. Imported profiles retain their ordered recovery methods."));
-                Add(Toggle(TEXT("recovery"),TEXT("Enable Recovery"),TEXT("Active while UCM is running."),true));
                 Add(Text(FString::Printf(TEXT("Recovery spells use your current magic skill minus the %.0f-point skill buffer. Components are required unless the server grants an exemption."),Num(P(),TEXT("skill_margin"),30)),14,Muted));
                 if(P()->HasField(TEXT("recharge_handlers")))Add(Toggle(TEXT("use_imported_recovery_order"),TEXT("Use imported recovery order"),TEXT("On: preserve this profile's ordered recovery handlers. Turn off to use the spell/consumable preference below."),true));
                 Add(SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check)
@@ -784,7 +782,6 @@ namespace ACEUCMPanelPrivate
                 Heading(TEXT("Route points"),TEXT("Walk to your starting spot and add a waypoint. Move along the path and add another at each turn. Every point saves immediately to the file above."));
                 Add(Button(TEXT("+ Add waypoint at my position"),[this](){AddRoutePoint(TEXT("walk"));}));
                 Add(Toggle(TEXT("route_preview"),TEXT("Show route in world"),TEXT("Blue lines connect saved points; amber marks jumps."),true));
-                Add(Toggle(TEXT("navigation"),TEXT("Enable Route Navigation"),TEXT("Press Start to follow the selected route. Editing stops the current run.")));
                 const TArray<TSharedPtr<FJsonValue>>* Route=nullptr;
                 const int32 Count=P()->TryGetArrayField(TEXT("route"),Route)?Route->Num():0;
                 RoutePage=FMath::Clamp(RoutePage,0,FMath::Max(0,(Count-1)/RoutePageSize));
@@ -847,31 +844,7 @@ namespace ACEUCMPanelPrivate
             }
             else if(Page==TEXT("Monsters"))
             {
-                SectionSelector(TEXT("Monsters"));
-                Heading(TEXT("New Monster"),TEXT("First matching name or expression wins. Higher priority targets are chosen first. New monsters inherit the defaults on Combat."));
-                Add(SAssignNew(MonsterName,SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).HintText(FText::FromString(TEXT("Monster name begins with…"))));
-                auto Actions=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6,6));
-                Actions->AddSlot()[Button(TEXT("Add monster by name"),[this](){AddMonster(MonsterName->GetText().ToString());})];
-                Actions->AddSlot()[Button(TEXT("Add selected monster"),[this](){AddSelectedMonster();})];Add(Actions);
-                SectionBody.Reset();
-                Add(SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1)[SNew(SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit)
-                    .Font(FACEPluginStyle::NativeFont("Regular",16))
-                    .HintText(FText::FromString(TEXT("Find a monster..."))).Text(FText::FromString(MonsterSearch))
-                    .OnTextChanged_Lambda([this](const FText& Value){MonsterSearch=Value.ToString();})
-                    .OnTextCommitted_Lambda([this](const FText&,ETextCommit::Type How){if(How==ETextCommit::OnEnter){MonsterFilter=MonsterSearch.TrimStartAndEnd();Rebuild();}})]
-                    +SHorizontalBox::Slot().AutoWidth().Padding(6,0)[Button(TEXT("Search"),[this](){MonsterFilter=MonsterSearch.TrimStartAndEnd();Rebuild();})]);
-                int32 Matches=0;
-                const TArray<TSharedPtr<FJsonValue>>* Rules=nullptr;
-                if(P()->TryGetArrayField(TEXT("monsters"),Rules))for(int Index=0;Index<Rules->Num();++Index)
-                {
-                    auto Rule=(*Rules)[Index]->AsObject();const FString Name=Str(Rule,TEXT("name"));
-                    if(!MonsterFilter.IsEmpty()&&!Name.Contains(MonsterFilter,ESearchCase::IgnoreCase))continue;
-                    ++Matches;const FString Key=Page+TEXT("/")+Name;
-                    if(!CollapsedSections.Contains(Key))CollapsedSections.Add(Key,ExpandedMonster!=Index);
-                    Heading(Name,TEXT(""));MonsterDetails(Rule);
-                    Add(Button(TEXT("Remove"),[this,Index](){auto Copy=P()->GetArrayField(TEXT("monsters"));Copy.RemoveAt(Index);P()->SetArrayField(TEXT("monsters"),Copy);ExpandedMonster=INDEX_NONE;Save();Rebuild();}));
-                }
-                if(!Matches){SectionBody.Reset();Add(Text(TEXT("No matching monsters."),14,Muted));}
+                MonsterMatrix();
             }
             else if(Page==TEXT("Metas"))
             {
@@ -880,8 +853,7 @@ namespace ACEUCMPanelPrivate
                 const TArray<TSharedPtr<FJsonValue>>* ImportedRules=nullptr;
                 if(P()->TryGetArrayField(TEXT("vt_meta"),ImportedRules))
                 {
-                    Heading(TEXT("Imported Virindi meta"),TEXT("The meta loads its referenced character, monster, loot and route profiles when their actions run. Some metas wait for a chat command or required items before choosing a route. Start/Stop resumes the current run."));
-                    Add(Toggle(TEXT("meta_enabled"),TEXT("Run imported meta"),TEXT("Meta rules can change activity settings and replace the active navigation route."),true));
+                    Heading(TEXT("Imported Virindi meta"),TEXT("The meta loads its referenced character, mob, loot and route profiles when their actions run. Some metas wait for a chat command or required items before choosing a route. Start/Stop resumes the current run."));
                     Add(SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Bold",18)).Text_Lambda([this](){return FText::FromString(TEXT("Current state: ")+(Plugin->MetaState.IsEmpty()?TEXT("Default"):Plugin->MetaState)+(Plugin->Running?TEXT(""):TEXT(" (stopped)")));}));
                     Add(SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",15)).ColorAndOpacity(Ink).AutoWrapText(true)
                         .Text_Lambda([this](){return FText::FromString(Plugin->MetaStatus);}));
@@ -987,9 +959,12 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMPanel(const FString& InitialPage
 #include "Misc/ScopeExit.h"
 #include "Misc/FileHelper.h"
 #include "Slate/WidgetRenderer.h"
+#include "Widgets/SVirtualWindow.h"
+#include "Layout/WidgetPath.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "ImageUtils.h"
 #include "RenderingThread.h"
+#include "ACERuntimeOptions.h"
 namespace ACEUCMPanelPrivate
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMLootEditorTest,"ACE.Plugins.LootEditor",EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
@@ -1191,16 +1166,6 @@ bool FACEUCMImportUITest::RunTest(const FString&)
     };
     auto Clear=FindButton(Panel,TEXT("Clear"));if(TestTrue(TEXT("Clear button available"),Clear.IsValid()))Clear->SimulateClick();
     TestTrue(TEXT("Clear removes both import output and notice"),Panel->ImportLog.IsEmpty()&&Host->Notice.IsEmpty());
-    Panel->Page=TEXT("Combat");Panel->CollapsedSections.Add(TEXT("Combat/Spellcasting"),false);Panel->Rebuild();
-    auto Fire=FindButton(Panel,TEXT("Fire"));if(!TestTrue(TEXT("Damage type button found"),Fire.IsValid()))return false;
-    Panel->SlatePrepass();const auto BeforeSize=Fire->GetDesiredSize();const auto FirstChild=Panel->Body->GetChildren()->GetChildAt(0);
-    Fire->SimulateClick();Panel->SlatePrepass();
-    TestEqual(TEXT("Damage selection saves immediately"),Plugin->Profile->GetNumberField(TEXT("damage_type")),16.);
-    TestTrue(TEXT("Damage selection preserves button instance"),FindButton(Panel,TEXT("Fire"))==Fire);
-    TestTrue(TEXT("Saving settings does not rebuild tab"),Panel->Body->GetChildren()->GetChildAt(0)==FirstChild);
-    TestTrue(TEXT("Selection indicator does not resize button"),BeforeSize.Equals(Fire->GetDesiredSize(),.01f));
-    auto Cold=FindButton(Panel,TEXT("Cold"));Cold->SimulateClick();Fire->SimulateClick();
-    TestEqual(TEXT("Repeated changes use live profile bindings"),Plugin->Profile->GetNumberField(TEXT("damage_type")),16.);
     auto Rule=MakeShared<FJsonObject>();Rule->SetStringField(TEXT("state"),TEXT("Default"));
     auto Condition=MakeShared<FJsonObject>();Condition->SetNumberField(TEXT("type"),1);
     auto Action=MakeShared<FJsonObject>();Action->SetNumberField(TEXT("type"),0);
@@ -1213,6 +1178,7 @@ bool FACEUCMImportUITest::RunTest(const FString&)
     TestFalse(TEXT("Restarting a stopped meta does not unexpectedly start UCM"),Plugin->Running);
     TestTrue(TEXT("Restart keeps meta execution enabled for the next Start"),Plugin->Profile->GetBoolField(TEXT("meta_enabled")));
     TestTrue(TEXT("Restart clears prior state diagnostics"),Plugin->MetaState.IsEmpty()&&Plugin->MetaStatus.IsEmpty());
+    #include "ACEUCMMonsterPanelTests.inl"
     auto FindTabs=[](const TSharedRef<SWidget>& Root,FName Tag)
     {
         TArray<TSharedRef<SACEPluginTab>> Result;TFunction<void(TSharedRef<SWidget>)> Visit;

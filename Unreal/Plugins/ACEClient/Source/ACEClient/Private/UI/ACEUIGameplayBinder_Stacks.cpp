@@ -19,8 +19,17 @@ bool UACEUIGameplayBinder::CanMoveInventoryAmountToContainer(int32 Guid, int32 C
 	Amount = Amount > 0 ? FMath::Min(Amount, FMath::Max(1, Item.StackSize)) : FMath::Max(1, Item.StackSize);
 	const bool bPack = ACEInventoryRules::IsContainer(Item) || (Item.ItemType & ACEItemType::Container)
 		|| (Item.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot);
-	// Retail's side-pack list is separate from ordinary inventory slots.
-	if (bPack && Container != Client->GetPlayerGuid()) return false;
+	// Retail permits packs in any container with container slots (including
+	// chests). Ordinary backpacks have none. Never allow a containment cycle.
+	TSet<int32> Parents;
+	for (int32 Parent = Container; Parent;)
+	{
+		if (Parent == Guid || Parents.Contains(Parent)) return false;
+		Parents.Add(Parent);
+		FACEWorldObject Ancestor;
+		if (!Client->GetWorldObject(Parent, Ancestor)) break;
+		Parent = Ancestor.ContainerId;
+	}
 	if (MergeTarget)
 	{
 		FACEWorldObject Target;
@@ -31,9 +40,18 @@ bool UACEUIGameplayBinder::CanMoveInventoryAmountToContainer(int32 Guid, int32 C
 	// A full move within the same pack simply reorders its existing slot.
 	if (Item.ContainerId == Container && Amount == FMath::Max(1, Item.StackSize)) return true;
 	if (const auto Session=Client->GetSession();Session && Session->FindContainerMergeTarget(Guid,Container,Amount)) return true;
-	const int32 Capacity = bPack ? Destination.ContainersCapacity : Destination.ItemsCapacity;
+	// Match the inventory's seven default side slots when a player descriptor
+	// omits capacity. Zero on an ordinary bag still means no nested packs.
+	const int32 Capacity = bPack ? (Container == Client->GetPlayerGuid() && Destination.ContainersCapacity == 0
+		? 7 : Destination.ContainersCapacity) : Destination.ItemsCapacity;
 	if (Capacity == -1) return true;
-	return Capacity > (bPack ? Client->GetPlayerPacks().Num() : Client->GetPackItems(Container).Num());
+	if (bPack)
+	{
+		TArray<int32> Packs;
+		if (const auto Session = Client->GetSession()) Session->GetContainerPackGuids(Container, Packs);
+		return Capacity > Packs.Num();
+	}
+	return Capacity > Client->GetPackItems(Container).Num();
 }
 
 void UACEUIGameplayBinder::UpdateInventoryContainerDropFeedback(FVector2D CanvasLocalPos)
@@ -127,18 +145,24 @@ void UACEUIGameplayBinder::UpdateInventoryContainerDropFeedback(FVector2D Canvas
         && ((DragItem.ItemType & ACEItemType::Container) || (DragItem.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot));
 	if (OpenLootContainerGuid)
 	{
-		for (int32 I=0; I<ExtPackSlotBgs.Num() && I<ExtPackGuids.Num(); ++I)
+		// Icons include the root at index zero; background slots do not.
+		for (int32 I=0; I<ExtPackSlots.Num() && I<ExtPackGuids.Num(); ++I)
 		{
-			auto* Cell=ExtPackSlotBgs[I].Get();
+			auto* Cell=ExtPackSlots[I].Get();
 			if (!Cell || !Cell->IsVisible() || !Canvas->IsWidgetExposedAt(Cell,Absolute)) continue;
-			Mark(Cell, CanMoveInventoryAmountToContainer(InvDragGuid,ExtPackGuids[I],Amount),
-				true, TEXT("RootGameplay_FloatyEnvPanel_Field"));
+			FACEWorldObject Target;
+			const bool DropIn = ExtPackGuids[I] && Client->GetWorldObject(ExtPackGuids[I],Target)
+				&& (!DragIsPack || Target.ContainersCapacity != 0);
+			const int32 Container = DropIn ? ExtPackGuids[I] : DragIsPack && I > 0 ? OpenLootContainerGuid : 0;
+			Mark(Cell, InvDragGuid != ExtPackGuids[I] && CanMoveInventoryAmountToContainer(InvDragGuid,Container,Amount),
+				DropIn, TEXT("RootGameplay_FloatyEnvPanel_Field"));
 			return;
 		}
 		const int32 Container=OpenLootSelectedPackGuid ? OpenLootSelectedPackGuid : OpenLootContainerGuid;
-		for (int32 I=0; I<ExtItemSlotBgs.Num(); ++I)
+		// Item backgrounds reserve index zero for the root container icon.
+		for (int32 I=0; I<ExtItemSlots.Num(); ++I)
 		{
-			auto* Cell=ExtItemSlotBgs[I].Get();
+			auto* Cell=ExtItemSlots[I].Get();
 			if (!Cell || !Cell->IsVisible() || !Canvas->IsWidgetExposedAt(Cell,Absolute)) continue;
 			const int32 Target=ExtItemGuids.IsValidIndex(I) ? ExtItemGuids[I] : 0;
 			Mark(Cell, !DragIsPack && CanMoveInventoryAmountToContainer(InvDragGuid,Container,Amount,Target),
@@ -185,6 +209,8 @@ bool UACEUIGameplayBinder::TryDropInExternalContainer(int32 Guid, int32 Amount, 
 	FACEWorldObject SourceObject, ContainerObject;
 	const int32 Destination=OpenLootSelectedPackGuid ? OpenLootSelectedPackGuid : OpenLootContainerGuid;
 	if (!Client->GetWorldObject(Guid,SourceObject) || !Client->GetWorldObject(Destination,ContainerObject)) return false;
+	const bool IsPack = ACEInventoryRules::IsContainer(SourceObject) || (SourceObject.ItemType & ACEItemType::Container)
+		|| (SourceObject.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot);
 	// The same hook rule drives both drag feedback and the eventual drop.
 	if (!ACEInventoryRules::CheckHookStatus(SourceObject,ContainerObject))
 	{
@@ -194,16 +220,27 @@ bool UACEUIGameplayBinder::TryDropInExternalContainer(int32 Guid, int32 Amount, 
 	for (int32 I = 0; I < ExtPackSlots.Num() && I < ExtPackGuids.Num(); ++I)
 		if (ExtPackSlots[I] && ExtPackSlots[I]->IsVisible() && Canvas->IsWidgetExposedAt(ExtPackSlots[I], Absolute))
 		{
-			if (ExtPackGuids[I]) MoveInventoryAmount(Guid, ExtPackGuids[I], 0, Amount);
-			else
+			if (ExtPackGuids[I] == Guid) return true;
+			FACEWorldObject Target;
+			if (ExtPackGuids[I] && Client->GetWorldObject(ExtPackGuids[I],Target)
+				&& (!IsPack || Target.ContainersCapacity != 0))
+				MoveInventoryAmount(Guid, ExtPackGuids[I], 0, Amount);
+			else if (IsPack && I > 0)
 			{
-				FACEWorldObject Item;
-				if (Client->GetWorldObject(Guid, Item) && ((Item.ItemType & ACEItemType::Container)
-					|| (Item.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot)))
-					MoveInventoryAmount(Guid, OpenLootContainerGuid, I - 1 + ExtPackScrollOffset, Amount);
+				TArray<int32> Packs;
+				if (const auto Session = Client->GetSession()) Session->GetContainerPackGuids(OpenLootContainerGuid, Packs);
+				const int32 Place = ACEInventoryRules::DropInsertionIndex(Packs, Guid, ExtPackGuids[I], true);
+				if (Place != INDEX_NONE) MoveInventoryAmount(Guid, OpenLootContainerGuid, Place, Amount);
 			}
 			return true;
 		}
+	if (IsPack)
+	{
+		const auto List = Manager->FindElementUnder(TEXT("ExternalContainer"), TEXT("Ext_Container_ItemList"));
+		if (!List || !Canvas->IsElementExposedAt(List,Canvas->GetCachedGeometry().AbsoluteToLocal(Absolute))) return false;
+		PostInventorySystemMessage(TEXT("Cannot place container in item list."));
+		return true;
+	}
 	const int32 Container = OpenLootSelectedPackGuid ? OpenLootSelectedPackGuid : OpenLootContainerGuid;
 	for (int32 I = 0; I < ExtItemSlots.Num() && I < ExtItemGuids.Num(); ++I)
 		if (ExtItemSlots[I] && ExtItemSlots[I]->IsVisible() && Canvas->IsWidgetExposedAt(ExtItemSlots[I], Absolute))
@@ -242,6 +279,13 @@ void UACEUIGameplayBinder::MoveInventoryAmount(int32 Guid, int32 Container, int3
 {
 	FACEWorldObject Item;
 	if (!Client || !Container || Amount <= 0 || !Client->GetWorldObject(Guid, Item)) return;
+	if ((ACEInventoryRules::IsContainer(Item) || (Item.ItemType & ACEItemType::Container)
+		|| (Item.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot))
+		&& !CanMoveInventoryAmountToContainer(Guid, Container, Amount))
+	{
+		PostInventorySystemMessage(TEXT("That container cannot accept this pack."));
+		return;
+	}
 	if (Client->GetTradeSelfItems().Contains(Guid))
 	{
 		PostInventorySystemMessage(TEXT("Remove that item from the trade before moving it."));

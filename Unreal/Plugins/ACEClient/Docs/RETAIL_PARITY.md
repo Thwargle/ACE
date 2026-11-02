@@ -8,6 +8,44 @@ button exists, its opcode has a constant, or a focused regression test passes.
 This is the working acceptance record, most recently reviewed on 2026-10-13. The client
 is **not yet a feature-complete retail replacement**.
 
+## Backpack drag pickup and return transfers: 2026-11-01
+
+Compared local retail `UIElement_SmartBoxWrapper` world drag handling,
+`gmExternalContainerUI::PostInit`, `UIElement_ItemList::ItemList_BeginDrag` /
+`PlaceItem`, and `ItemHolder::WillItemFitInContainer`. The previous chest-pack
+fix covered installed packs but skipped the external root icon. Desktop world
+presses also selected/used items without ever starting an inventory drag.
+
+Portable world items now enter the captured inventory gesture in peace mode.
+Click/release selects, double-click uses (opens a backpack), and movement starts
+the drag; a pending item gesture takes priority over camera orbit. Capture loss
+cancels it, and releasing an unowned ground item onto empty ground does not send
+a DropItem request. Fixed containers and combat-mode world clicks keep their
+existing selection/use/camera behavior. The open ground backpack's root icon
+also supports dragging, while repeated clicks continue browsing its contents.
+
+Container capacity and slot lists now drive pack drop feedback and submission.
+Chests can receive packs, occupied chest pack slots permit insertion/reordering,
+and empty chest pack slots accept packs. Feedback uses the icon arrays whose
+indices match their GUID arrays; external pack backgrounds omit the root, while
+external item backgrounds reserve index zero for it. Ordinary item grids reject
+packs as in retail. Self/descendant containment, full containers, ordinary bags
+without nested-pack slots, and traded items are rejected. Player records that
+omit capacity retain the inventory UI's seven default side slots. Ownership and
+contents change only after authoritative server updates.
+
+Regression coverage includes actual world picking and mouse capture, root and
+nested pack drags, repeated opening clicks, inspection, pickup-key destinations,
+empty/occupied pack slots, chest return transfers, exact feedback textures,
+cancellation, capacity/cycle checks, and contents retention at 1x/1.5x UI scale
+with a window offset. The Windows Development Editor build and all nine suites
+passed: DesktopHighlights, TouchAndMenus, InteractionRecovery,
+ClosedContainerLifetime, InventoryOrder, SelectionToolbar, UIInteractions,
+UIScreens, and RigAndMenus. Evidence: `TestOutput/BackpackParity-20261101/`
+(final automation under `final/`).
+This comparison uses retail source and automated rendered input/protocol
+fixtures; live retail/server testing is still separate.
+
 ## Removing packs from chests: 2026-10-29
 
 Retail `gmExternalContainerUI::PostInit` uses `UIElement_ItemList` for both the

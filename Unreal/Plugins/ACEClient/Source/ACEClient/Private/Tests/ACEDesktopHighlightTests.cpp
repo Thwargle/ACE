@@ -143,6 +143,40 @@ bool FACEDesktopHighlightTest::RunTest(const FString&)
     TestEqual(TEXT("Self clears a previous off-screen selection arrow"),Binder->SelectionDirectionArrow->GetVisibility(),ESlateVisibility::Collapsed);
     Presenter->Spawned.Remove(Self.Guid);Client->SelectObject(0);
    }
+   {
+    // Enter through the actual world mouse handler and viewport ray, not by
+    // manually setting drag flags. A ground bag uses the same captured drag
+    // as inventory, while fixed objects keep the world/camera click path.
+    auto GroundPack=Object;GroundPack.ItemType=ACEItemType::Container;GroundPack.ItemsCapacity=24;
+    GroundPack.ObjectDescriptionFlags=ACEObjectDescFlag::Openable;
+    Session->WorldObjects[Object.Guid]=GroundPack;
+    const bool SavedCursorVisible=PC->bShowMouseCursor;
+    Canvas->SetGameplayBinder(Binder);PC->DatGameplayBinder=Binder;PC->bShowMouseCursor=true;
+    const auto& Geometry=Canvas->GetCachedGeometry();
+    const FVector2D From(800,450),To(1350,700);
+    const auto Press=FPointerEvent(0,From,From,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState());
+    Session->CachedC2SPackets.Reset();
+    TestTrue(TEXT("World bag press is captured by the inventory UI"),Canvas->NativeOnMouseButtonDown(Geometry,Press).IsEventHandled());
+    TestEqual(TEXT("World ray starts dragging the picked bag"),Binder->InvDragGuid,GroundPack.Guid);
+    TestFalse(TEXT("Press alone does not move a bag"),Binder->IsInventoryDragActive());
+    Canvas->NativeOnMouseMove(Geometry,FPointerEvent(0,To,From,{EKeys::LeftMouseButton},EKeys::Invalid,0,FModifierKeysState()));
+    TestTrue(TEXT("Moving the captured pointer activates the world bag drag"),Binder->IsInventoryDragActive());
+    Session->CachedC2SPackets.Reset();
+    Canvas->NativeOnMouseButtonUp(Geometry,FPointerEvent(0,To,To,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
+    TestFalse(TEXT("World release ends the captured item gesture"),Binder->IsInventoryInteractionActive());
+    TestTrue(TEXT("Releasing a ground bag onto empty ground cancels without a network action"),Session->CachedC2SPackets.IsEmpty());
+    TestEqual(TEXT("Cancelled world drag leaves the bag on the ground"),Session->WorldObjects[GroundPack.Guid].ContainerId,0);
+    Session->WorldObjects[Object.Guid].ObjectDescriptionFlags|=ACEObjectDescFlag::Stuck;
+    TestFalse(TEXT("Fixed world containers do not start item drags"),Binder->TryBeginWorldInventoryDrag(From));
+    Session->WorldObjects[Object.Guid]=GroundPack;Binder->CombatMode=int32(ACECombatMode::Missile);
+    TestFalse(TEXT("Combat world clicks do not start item drags"),Binder->TryBeginWorldInventoryDrag(From));
+    Binder->CombatMode=int32(ACECombatMode::NonCombat);
+    TestTrue(TEXT("A new world drag can begin after cancelling"),Binder->TryBeginWorldInventoryDrag(From));
+    Canvas->CancelPointerGestures();
+    TestFalse(TEXT("Capture loss cancels a pending world drag"),Binder->IsInventoryInteractionActive());
+    Canvas->SetGameplayBinder(nullptr);PC->DatGameplayBinder=nullptr;Session->WorldObjects[Object.Guid]=Object;
+    PC->bShowMouseCursor=SavedCursorVisible;Client->SelectObject(0);
+   }
    Session->WorldObjects[Object.Guid].ObjectDescriptionFlags|=ACEObjectDescFlag::Vendor;
    auto Actions=[&](uint32 Action)
    {

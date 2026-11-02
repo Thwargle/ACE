@@ -4162,13 +4162,14 @@ void AACEPlayerController::UpdateMouseLook(float DeltaTime, USpringArmComponent*
     }
     if (UpdateMouseButtons(bRightDown, bLeftDown,
         bInputFocused, IsMouseOverBlockingUI() || (DatGameplayBinder
-            && (DatGameplayBinder->IsInventoryDragActive() || DatGameplayBinder->IsSpellDragActive()
+            && (DatGameplayBinder->IsInventoryInteractionActive() || DatGameplayBinder->IsSpellDragActive()
                 || DatGameplayBinder->IsScrollbarDragActive()))))
     {
         if(!bWasInstant)IdentifyAtScreenPosition(MouseLookPressX, MouseLookPressY);
     }
     // Do not capture an ordinary left click: it still selects objects. Begin
     // free orbit only after a world press turns into a drag.
+    if (DatGameplayBinder && DatGameplayBinder->IsInventoryInteractionActive()) bLeftOrbitEligible = false;
     if (!bMouseLookActive && bLeftDown && bLeftOrbitEligible && bHaveMouse
         && FMath::Abs(MX - MouseLookPressX) + FMath::Abs(MY - MouseLookPressY) > 4.f)
         SetMouseLookActive(true);

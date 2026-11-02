@@ -164,7 +164,8 @@ J VTSettings(const J& D,TArray<FString>& Issues)
                 bool Attack=true;Row->TryGetBoolField(TEXT("Attack"),Attack);R->SetBoolField(TEXT("bolt"),Attack);
                 bool Streak=true;Row->TryGetBoolField(TEXT("Streak"),Streak);R->SetBoolField(TEXT("streak"),Streak);
                 bool Ring=false;Row->TryGetBoolField(TEXT("Ring"),Ring);R->SetBoolField(TEXT("ring"),Ring);
-                R->SetBoolField(TEXT("ignore"),!Attack&&!Streak&&!Ring);
+                // Attack-family switches do not disable essence summoning.
+                R->SetBoolField(TEXT("ignore"),false);
                 const int Damage=int(N(Row,TEXT("DamageType"),8));const int Elements[]={2,4,1,32,64,8,16};
                 if(Damage>=0&&Damage<7)R->SetNumberField(TEXT("damage_type"),Elements[Damage]);
                 else if(Damage==9)R->SetNumberField(TEXT("damage_type"),1024);

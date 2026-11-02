@@ -280,7 +280,7 @@ Reusable files live under `Saved/ClientPlugins/Profiles`:
 - `Character`: combat equipment, targeting defaults, buffs, summons and recovery.
 - `Routes`: waypoints, following, looping and route movement settings.
 - `Loot`: loot rules, salvage groups and looting settings.
-- `Monsters`: per-monster rules and the imported monster catalog.
+- **Mobs**: per-mob rules and the imported mob catalog (stored under `Monsters` for compatibility).
 - `Metas`: state programs, imported metas and dependency references.
 - `Vendors`: vendor supply lists.
 
@@ -301,7 +301,7 @@ leaves the active route and existing file unchanged.
 Use **Add waypoint at my position**, walk to the next turn, and repeat. The point
 list is paged; adding a point opens its page. **Special steps** holds portal/use,
 jump, pause and recall actions; **Route behavior** holds loop, door and follow
-settings. Enable Route Navigation and press Start when ready.
+settings. Enable Route Navigation in Overview or UCM Micro and press Start when ready.
 
 **Import** has separate **Import vTank Loot Profile (*.utl)** and
 **Import vTank Route (*.nav)** buttons, plus Meta and Character imports.
@@ -314,11 +314,45 @@ Editing a dependency or exported route updates subsequent use of that profile.
 Embedded routes are refreshed from their named files when the meta is loaded
 or UCM starts. Stop/Start retains meta progress when the configuration is unchanged.
 
-Protections and Banes are in **Buffs**, saved in Character. **Monsters** offers
-name search and collapsible panels. New rules inherit the Character profile's
-**Combat** defaults for Priority and Attack Range. Both use whole-number sliders;
-uncheck **use Combat default** to override a monster. Explicit zero priority is
-valid. A global attack range of zero uses the weapon-mode attack range.
+Protections and Banes are in **Buffs**, saved in Character. **Mobs** has a
+compact list with an always-visible Default row, name search, **Add selected
+mob**, and an **Add** field for name prefixes. The profile selector shows the
+selected file's name without a category prefix; the built-in profile is **Default**.
+Custom profile names are preserved. Click a switch to save it
+immediately. **A** controls ordinary weapon/bolt/arc attacks, **R** rings, and
+**S** streaks. All debuff and curse columns are available directly, including
+Imperil, Vulnerability, Yield, Fester, Broadside, Gravity Well and the five Void
+switches. Hover a heading or switch for its full name and purpose; switch help
+also shows on/off and inherited state. The Name column stays visible while
+scrolling horizontally through Mode, Damage, Pet and Details; the scrollbar
+disappears when the columns fit. Long names show their full text on hover;
+longer profiles show 25 mobs per page.
+
+New rows inherit the live Default until a field is changed. **Details** edits
+the complete per-mob attack profile: mode, attack families, all debuffs, damage
+type, pet type, weapon/offhand, secondary vulnerability, priority, range and
+native exact-name/prefix matching. Its controls share the table's values and
+save immediately. Restore individual inherited switches with **Default**, or
+reset the row with **Use default settings**. Existing/imported rows retain their
+independent choices. Priority and range fall back to the Character profile's
+**Combat** defaults; explicit zero priority is valid. Range zero uses the
+weapon-mode attack range. Imported matching expressions are preserved.
+
+The chart is the quick editor; Details exposes the same saved rule with full
+labels and additional settings. Combat contains shared equipment defaults,
+power, spell selection, ranges and spell timing. Existing Character fallbacks
+and imported overrides are preserved.
+
+Activity switches live in **Overview**, with quick access in **UCM Micro**;
+the configuration tabs do not repeat them. Editing the chart never silently
+enables a paused activity. For essence summoning without automatic attacks,
+enable **Summoning**, add an eligible essence in **Combat / Equipment Pool**,
+and set Default Mode to **No attacks** with Pet **Auto** in the chart. Leave
+Combat enabled to allow attack overrides for specific monsters, or pause Combat
+in Overview / Micro to suppress all automatic attacks.
+Disabling all attack families also leaves monsters eligible for pets. **Ignore**,
+negative priority, and Pet **None** exclude them from summoning. Charges,
+cooldowns, requirements, visibility and existing-pet checks still apply.
 
 Selecting a profile manually stops the run. Start reloads shared files from disk;
 conflicting stale edits are rejected. Older setups migrate automatically while
@@ -361,7 +395,7 @@ hide with the desktop interface (Alt+Z by default) and are removed on logout.
 Disabled plugins are removed from the bar. In VR, use More → Manage Plugins.
 
 UCM is **Unattended Combat Manager**. The 0.7 interface has Overview, Buffs, Buff others,
-Combat, Recovery, Route, Loot, Vendors, Monsters, Metas, Import and Log pages. Desktop plugin
+Combat, Recovery, Route, Loot, Vendors, Mobs, Metas, Import and Log pages. Desktop plugin
 windows can be resized using the lower-right grip; position and size are saved.
 In VR, More → Manage Plugins opens UCM directly, with a separate management button.
 
@@ -395,17 +429,20 @@ the option off or stop UCM to restore the view. Logout also restores it. This
 does not disable the engine or apply in VR; simulation and UI still use resources.
 
 In **Combat**, select **Automatic attack spell** or a specific learned direct
-attack, including Void bolts, streaks and rings. The **Void curses** controls
-enable Corruption, Destructive Curse, Corrosion, Weakening Curse, and Festering
-Curse. UCM uses eligible learned tiers and waits for effect confirmation before
-moving on to direct attacks. Per-monster rules can override these settings.
+attack, including Void bolts, streaks and rings. In the **Mobs** table,
+use Cp, DC, Cs, W and FC for Corruption, Destructive Curse, Corrosion, Weakening
+Curse and Festering Curse. UCM uses eligible learned tiers and waits for effect
+confirmation before moving on to direct attacks. Configure the Default row and
+override individual monsters as needed. All attack and debuff columns are always
+available, with hover help for each abbreviation. Monster names stay fixed while
+scrolling; the horizontal scrollbar only appears when the columns do not fit.
 
 ### UCM Micro, combat and route recovery
 
 **UCM Micro** is a compact companion window on the plugin bar and in plugin
 management. A full-width **Start UCM / Stop UCM** button controls the run.
 Its checkboxes control the current activities:
-buffing, combat, looting, navigation, vital recovery, buff requests, vendor
+buffing, combat, summoning, looting, navigation, vital recovery, buff requests, vendor
 restocking, metas, and peace while idle. Closing Micro does not stop UCM.
 UCM still needs its normal permissions; Micro grants no additional capabilities.
 
@@ -629,7 +666,7 @@ Corpse opening uses the same approach and server Use sequence as manual
 interaction. UCM waits for opening, complete contents and transfer confirmation
 before resuming combat or navigation. Navigation priority does not suppress
 nearby looting, and obstructed corpses are skipped until the route reaches them.
-Enable Loot corpses and load or create matching rules; empty rules intentionally
+Enable Looting in Overview / Micro and load or create matching rules; empty rules intentionally
 take nothing.
 
 After a confirmed combat kill, UCM holds ordinary route movement while the
@@ -1101,8 +1138,8 @@ successful unattended hunt or complete VT replacement.
 
 ## Tell buff requests and route overlay
 
-In **Buff others**, turn on **Accept buff requests**, enable **Buff**, and start
-UCM. The default exact tell keywords are `mage`, `heavy`, `missile`, `light`,
+In **Overview**, turn on **Accept buff requests**, enable **Buffs**, and start
+UCM. Configure roles in **Buff others**. The default exact tell keywords are `mage`, `heavy`, `missile`, `light`,
 `finesse`, `twohanded`, `unarmed`, and `melee`. Edit keywords or add aliases in this tab. Case and surrounding spaces
 are ignored. Public chat and NPC dialogue never start a request. Up to eight
 players can queue; a player cannot reset an active request by repeating a tell.

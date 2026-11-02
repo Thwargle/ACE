@@ -1060,6 +1060,10 @@ FReply UACEUICanvasWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, 
 			return FReply::Handled().CaptureMouse(TakeWidget());
 		}
 	}
+	// An unclaimed world press may be a portable item. Capture it before the
+	// viewport turns the gesture into camera orbit; clicks still select/use.
+	if (GameplayBinder && bLeft && GameplayBinder->TryBeginWorldInventoryDrag(Local))
+		return FReply::Handled().CaptureMouse(TakeWidget());
 	if (GameplayBinder)
 	{
 		GameplayBinder->ClearChatEntryFocus();

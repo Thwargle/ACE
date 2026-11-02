@@ -341,7 +341,6 @@ void LootNotificationSettings()
 }
 void LootSettings()
 {
-    Add(Toggle(TEXT("looting"),TEXT("Loot corpses"),TEXT("Uses normal corpse permissions and inventory transfers.")));
     LootNotificationSettings();
     const FString Original=Str(P(),TEXT("utl_source"));
     if(!Original.IsEmpty())Add(Button(TEXT("View / edit original Classic UTL copy"),[this,Original](){PreviewLegacy(Original);if(LegacyDocument){LegacyName=TEXT("Loot_edited");LegacyRule.Reset();Page=TEXT("Legacy loot");Rebuild();}}));

@@ -2560,9 +2560,9 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 Gameplay->CancelInventoryDrag();
                 TestFalse(TEXT("Cancel clears inventory drop feedback"),Gameplay->PaperDollDragTargetIcon->IsVisible());
                 Gameplay->ShowExternalContainer(Hook.Guid);CaptureScreen(TEXT("HookDropLayout"),Scale);
-                if(TestTrue(TEXT("Empty house hook has a target square"),!Gameplay->ExtItemSlotBgs.IsEmpty()))
+                if(TestTrue(TEXT("Empty house hook has a target square"),Gameplay->ExtItemSlotBgs.Num()>1))
                 {
-                    auto* Cell=Gameplay->ExtItemSlotBgs[0].Get();
+                    auto* Cell=Gameplay->ExtItemSlotBgs[1].Get();
                     Preview(Cell,0x060011F9);CaptureScreen(TEXT("HookDropAccept"),Scale);
                     Session.WorldObjects[Source.Guid].HookType=2;
                     Preview(Cell,0x060011F8);CaptureScreen(TEXT("HookDropReject"),Scale);
@@ -3708,10 +3708,13 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         DragInventoryWidget(Gameplay->PackSlots[1],Gameplay->PackSlots[3],61003,1);
         AcknowledgeReorder(61003,1,true);
         TestEqual(TEXT("Forward pack move has retail insertion order"),Gameplay->PackSlotGuids[2],61003);
+        TFunction<void()> CheckGroundBackpackPickup=[&]()
         {
             FACEWorldObject GroundPack;GroundPack.Guid=61999;GroundPack.Name=TEXT("Dropped backpack");
             GroundPack.ItemType=ACEItemType::Container;GroundPack.ObjectDescriptionFlags=ACEObjectDescFlag::Openable;
+            GroundPack.ItemsCapacity=24;GroundPack.IconId=0x06004CF7;
             GroundPack.bHasPosition=true;GroundPack.Position=Session.PlayerPosition;Session.UpsertWorldObject(GroundPack);
+            TGuardValue<int32> Peace(Gameplay->CombatMode,int32(ACECombatMode::NonCombat));
             CaptureScreen(TEXT("GameplayGroundPackDropTargets"));
             int32 Empty=INDEX_NONE;
             for(int32 I=1;I<Gameplay->PackSlots.Num();++I)
@@ -3722,15 +3725,43 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 Session.PendingInventoryTransfers.Reset();Session.CachedC2SPackets.Reset();
                 const auto& Geometry=Gameplay->PackSlots[TargetIndex]->GetCachedGeometry();
                 const auto Absolute=Geometry.LocalToAbsolute(Geometry.GetLocalSize()*.5);
-                Gameplay->InvDragGuid=GroundPack.Guid;Gameplay->InvDragAmount=1;
-                Gameplay->InvDragSourcePack=0;Gameplay->InvDragSourceSlot=INDEX_NONE;Gameplay->InvDragPackSlotIndex=INDEX_NONE;
-                Gameplay->bInvDragPending=true;Gameplay->bInvDragActive=true;Gameplay->bInvDoubleClickPending=false;
+                TestTrue(TEXT("Portable ground bag arms an actual drag"),Gameplay->BeginWorldItemDrag(GroundPack.Guid,FVector2D(600,300)));
+                Gameplay->UpdateInventoryDrag(Canvas->GetCachedGeometry().AbsoluteToLocal(Absolute));
                 Gameplay->TryFinishInventoryDrag(Canvas->GetCachedGeometry().AbsoluteToLocal(Absolute));
                 TestTrue(TEXT("Ground backpack can be dropped on an occupied or empty side slot"),HasAction(ACEGameAction::PutItemInContainer));
                 LastWire(ACEGameAction::PutItemInContainer,{uint32(GroundPack.Guid),uint32(Player.Guid),uint32(TargetIndex-1)});
             }
+            FACEWorldObject PackedItem;PackedItem.Guid=61998;PackedItem.ContainerId=GroundPack.Guid;
+            PackedItem.ItemType=ACEItemType::Food;PackedItem.IconId=0x06004CF7;
+            Session.UpsertWorldObject(PackedItem);Session.ContainerContents.Add(GroundPack.Guid,{{PackedItem.Guid,0}});
+            for(float Scale:{1.f,1.5f})
+            {
+                Gameplay->ShowExternalContainer(GroundPack.Guid);
+                CaptureScreen(TEXT("GameplayGroundPackRoot"),Scale,FVector2D(43,27));
+                const auto& Geo=Canvas->GetCachedGeometry();
+                const auto& Root=Gameplay->ExtPackSlots[0]->GetCachedGeometry();
+                const auto Point=Root.LocalToAbsolute(Root.GetLocalSize()*.5);
+                Session.CachedC2SPackets.Reset();
+                for(int32 RootClickIndex=0;RootClickIndex<2;++RootClickIndex)
+                {
+                    Canvas->NativeOnMouseButtonDown(Geo,FPointerEvent(0,Point,Point,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
+                    Canvas->NativeOnMouseButtonUp(Geo,FPointerEvent(0,Point,Point,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
+                }
+                TestTrue(TEXT("Root bag clicks display its items"),Gameplay->ExtItemGuids.Contains(PackedItem.Guid));
+                TestFalse(TEXT("Root bag double click browses without picking it up"),HasAction(ACEGameAction::PutItemInContainer));
+                Session.PendingInventoryTransfers.Reset();
+                DragInventoryWidget(Gameplay->ExtPackSlots[0],Gameplay->PackSlots[1],GroundPack.Guid,0);
+                TestEqual(TEXT("Root drag waits for confirmation before moving the bag"),Session.WorldObjects[GroundPack.Guid].ContainerId,0);
+            }
+            AcknowledgeReorder(GroundPack.Guid,0,true);
+            Gameplay->HideExternalContainer(false);
+            TestTrue(TEXT("Closing a picked-up root bag retains its contents"),Session.ContainerContents.Contains(GroundPack.Guid));
+            TestEqual(TEXT("Root bag pickup preserves item ownership under the bag"),Session.WorldObjects[PackedItem.Guid].ContainerId,GroundPack.Guid);
+            Session.ContainerContents.Remove(GroundPack.Guid);Session.WorldObjects.Remove(PackedItem.Guid);
             Session.PendingInventoryTransfers.Reset();Session.WorldObjects.Remove(GroundPack.Guid);
-        }
+            Session.ContainerContents.Remove(Player.Guid);Gameplay->RefreshInventoryOverlays();
+        };
+        CheckGroundBackpackPickup();
         {
             FACEWorldObject Chest; Chest.Guid=62000; Chest.ItemType=ACEItemType::Container;
             Chest.ContainersCapacity=2; Chest.ItemsCapacity=24; Chest.IconId=0x06004CF7; Chest.Name=TEXT("Loot background fixture");
@@ -3879,6 +3910,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 }
             };
             CheckChestPackRemoval();
+            #include "ACERetailBackpackUIFixture.inl"
             Gameplay->HideExternalContainer(false);
             TestTrue(TEXT("Closing loot hides its pack background"),
                 Gameplay->ExtPackSlotBgs.IsEmpty() || Gameplay->ExtPackSlotBgs[0]->GetVisibility()==ESlateVisibility::Collapsed);

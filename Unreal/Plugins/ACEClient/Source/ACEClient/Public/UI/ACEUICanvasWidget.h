@@ -53,6 +53,7 @@ class ACECLIENT_API UACEUICanvasWidget : public UUserWidget
 	friend struct FACEChatUIFixture;
 	friend class FACEUIInteractionParityTest;
 	friend class FACEHousingTest;
+	friend class FACEDesktopHighlightTest;
 
 public:
 	void InitializeCanvas(UACEUIElementManager* InManager);

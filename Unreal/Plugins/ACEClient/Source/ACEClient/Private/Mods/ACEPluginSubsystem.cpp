@@ -756,7 +756,7 @@ bool UACEPluginSubsystem::SelectUCMSection(const FString& Section, const FString
     if (!ACEUCMProfiles::Save(UserDirectory(), ACEUCMProfiles::ActiveName(), O, Links, Before, Notice, ValidUCMProfile)) return false;
     Stop(P->Id, TEXT("Profile changed; press Start to resume"));
     P->Profile = O; P->ProfileName=ACEUCMProfiles::ActiveName(); P->ProfileLinks = Links; P->ProfileBaseline = ACEUCMProfiles::Copy(O);
-    Notice = TEXT("Selected ") + Section + TEXT(": ") + Name; return true;
+    Notice = TEXT("Selected ") + ACEUCMProfiles::DisplaySection(Section) + TEXT(": ") + Name; return true;
 }
 bool UACEPluginSubsystem::SaveUCMSectionAs(const FString& Section, const FString& Name)
 {
@@ -777,7 +777,7 @@ bool UACEPluginSubsystem::NewUCMSection(const FString& Section, const FString& N
     if(!Defaults||!ValidUCMProfile(Defaults)){Notice=TEXT("Cannot read bundled UCM defaults");return false;}
     if(!ACEUCMProfiles::SaveSectionAs(UserDirectory(),Section,Name,Defaults,Notice))return false;
     if(SelectUCMSection(Section,Name))
-    {Notice=TEXT("Created and selected ")+Section+TEXT(": ")+Name+TEXT(".json. Changes save automatically.");return true;}
+    {Notice=TEXT("Created and selected ")+ACEUCMProfiles::DisplaySection(Section)+TEXT(": ")+Name+TEXT(".json. Changes save automatically.");return true;}
     IFileManager::Get().Delete(*(UserDirectory()/TEXT("Profiles")/Section/(Name+TEXT(".json"))));return false;
 }
 bool UACEPluginSubsystem::DeleteUCMSection(const FString& Section, const FString& Name)
@@ -790,7 +790,7 @@ bool UACEPluginSubsystem::DeleteUCMSection(const FString& Section, const FString
     if(!SaveProfile(P->Id,P->ProfileName,ProfileJson(P->Id),false))return false;
     if(!ACEUCMProfiles::DeleteSection(UserDirectory(),Section,Name,Notice))return false;
     if(!LoadProfile(P->Id,P->ProfileName))return false;
-    Notice=TEXT("Deleted ")+Section+TEXT(": ")+Name+TEXT(". References now use Default; a backup is in Profiles/Deleted.");return true;
+    Notice=TEXT("Deleted ")+ACEUCMProfiles::DisplaySection(Section)+TEXT(": ")+Name+TEXT(". References now use Default; a backup is in Profiles/Deleted.");return true;
 }
 bool UACEPluginSubsystem::InitializeUCMSelection()
 {

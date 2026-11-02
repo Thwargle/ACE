@@ -178,6 +178,9 @@ public:
 	bool TryHandleOverlayClick(FVector2D CanvasLocalPos, bool bRightClick = false);
 	/** LMB press on inventory icon begins a pending drag (activate after small move). */
 	bool TryBeginInventoryDrag(FVector2D CanvasLocalPos);
+	/** Desktop world items share the captured inventory drag/drop path. */
+	bool TryBeginWorldInventoryDrag(FVector2D CanvasLocalPos);
+	bool BeginWorldItemDrag(int32 Guid, FVector2D CanvasLocalPos);
 	void AssignInventoryShortcut(int32 Guid, int32 SlotIndex, int32 SourceShortcut = INDEX_NONE);
 	void UpdateInventoryDrag(FVector2D CanvasLocalPos);
 	/** Completes drag (move/wield/drop) or click/double-click use when not dragged. */

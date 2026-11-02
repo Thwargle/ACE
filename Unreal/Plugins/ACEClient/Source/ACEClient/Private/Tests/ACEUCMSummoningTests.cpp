@@ -63,6 +63,46 @@ bool FACEUCMSummoningTest::RunTest(const FString&)
         S->SetNumberField(TEXT("time"),226);S->SetBoolField(TEXT("owned_pet"),false);
         TestEqual(TEXT("Summons again when both the pet and cooldown are gone"),Action(Step(VM,S,P)),FString(TEXT("use_item")));
     }
+    for(int32 Case=0;Case<3;++Case)
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();
+        auto Default=SummonJson(TEXT(R"({"name":"<DEFAULT>","default":true,"bolt":false,"streak":false,"ring":false})"));
+        if(Case==1)Default->SetBoolField(TEXT("ignore"),true); // Existing imported USD, before this fix.
+        if(Case==2){Default->SetStringField(TEXT("combat"),TEXT("off"));Default->SetBoolField(TEXT("bolt"),true);}
+        auto Rule=SummonJson(TEXT(R"({"name":"Enemy","inherit_default":true})"));
+        // Default is intentionally last: inheritance must not depend on order.
+        P->SetArrayField(TEXT("monsters"),{MakeShared<FJsonValueObject>(Rule),MakeShared<FJsonValueObject>(Default)});
+        TestEqual(TEXT("Combat enabled and attacks disabled still summons"),Action(Step(VM,S,P)),FString(TEXT("use_item")));
+        S->SetBoolField(TEXT("owned_pet"),true);S->SetNumberField(TEXT("time"),103);
+        TestTrue(TEXT("No attack, debuff, assessment, equip or approach while pets fight"),Action(Step(VM,S,P)).IsEmpty());
+        S->SetBoolField(TEXT("owned_pet"),false);S->SetNumberField(TEXT("time"),230);
+        TestEqual(TEXT("Pet-only rules summon again after the pet expires"),Action(Step(VM,S,P)),FString(TEXT("use_item")));
+        S->SetBoolField(TEXT("owned_pet"),true);S->SetNumberField(TEXT("time"),233);
+        Rule->SetBoolField(TEXT("bolt"),true);Rule->SetBoolField(TEXT("ignore"),false);Rule->SetStringField(TEXT("combat"),TEXT("auto"));
+        ExpectCast(Step(VM,S,P),TEXT("Per-monster attack override works over pet-only defaults"));
+        Rule->SetStringField(TEXT("combat"),TEXT("off"));S->SetNumberField(TEXT("time"),236);
+        TestEqual(TEXT("Disabling attacks cancels the already locked target"),Action(Step(VM,S,P)),FString(TEXT("cancel_attack")));
+        S->SetNumberField(TEXT("time"),240);
+        TestTrue(TEXT("Cancelled combat stays stopped"),Action(Step(VM,S,P)).IsEmpty());
+        S->SetBoolField(TEXT("owned_pet"),false);Rule->SetNumberField(TEXT("pet_damage_type"),98);
+        TestTrue(TEXT("Pet None excludes the monster from summoning"),Action(Step(VM,S,P)).IsEmpty());
+        Rule->RemoveField(TEXT("pet_damage_type"));Rule->SetNumberField(TEXT("priority"),-1);
+        TestTrue(TEXT("Negative priority excludes the monster from summoning"),Action(Step(VM,S,P)).IsEmpty());
+        Rule->RemoveField(TEXT("priority"));
+        Rule->SetBoolField(TEXT("ignore"),true);Rule->SetStringField(TEXT("combat"),TEXT("ignore"));S->SetBoolField(TEXT("owned_pet"),false);
+        TestTrue(TEXT("Explicit Ignore also excludes summoning"),Action(Step(VM,S,P)).IsEmpty());
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();
+        P->SetBoolField(TEXT("summon_pets"),false);P->SetNumberField(TEXT("melee_weapon"),60);
+        P->SetArrayField(TEXT("monsters"),{MakeShared<FJsonValueObject>(SummonJson(TEXT(R"({"name":"Enemy","bolt":false,"streak":false,"ring":true})")))});
+        auto Inventory=S->GetArrayField(TEXT("inventory"));
+        Inventory.Add(MakeShared<FJsonValueObject>(SummonJson(TEXT(R"({"id":60,"type":1,"identified":true,"can_wield":true,"equipped":true,"damage":500,"damage_type":4,"weapon_skill":44})"))));S->SetArrayField(TEXT("inventory"),Inventory);
+        S->GetArrayField(TEXT("targets"))[0]->AsObject()->SetNumberField(TEXT("distance"),1);
+        S->SetArrayField(TEXT("spells"),{MakeShared<FJsonValueObject>(SummonJson(TEXT(R"({"id":31,"name":"Nether Ring","category":641,"school":5,"power":300,"skill":500})")))});
+        auto I=Step(VM,S,P);TestEqual(TEXT("Ring-only rule does not fall back to configured melee main hand"),Action(I),FString(TEXT("cast")));
+        if(Action(I)==TEXT("cast"))TestEqual(TEXT("Enabled ring is used"),I->GetNumberField(TEXT("spell")),31.);
+    }
     for(int32 Case=0;Case<10;++Case)
     {
         FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();
