@@ -8,6 +8,77 @@ button exists, its opcode has a constant, or a focused regression test passes.
 This is the working acceptance record, most recently reviewed on 2026-10-13. The client
 is **not yet a feature-complete retail replacement**.
 
+## Linux display resolutions: 2026-11-05
+
+UE 5.8's Vulkan `RHIGetAvailableResolutions` returns false without enumerating
+modes. The video options therefore previously offered only the current saved
+size, commonly the shared 1920x1080 default. Linux now queries SDL3 for the
+display containing the game window and uses desktop pixel dimensions rather
+than potentially scaled logical bounds. Native modes and the current custom
+size are retained; common window/backbuffer sizes fitting the desktop cover
+compositors that expose only one mode. Duplicate refresh-rate entries collapse
+to one resolution, with no 1080p ceiling.
+
+Opening the picker refreshes modes after a monitor move or hotplug while
+preserving unapplied selections. Borderless still fills the desktop, and
+changes retain the existing 15-second Keep/Revert confirmation. Linux platform
+defaults now request desktop resolution on a fresh install; saved choices and
+command-line overrides take precedence.
+
+Validation: Win64 editor and native Linux package builds passed. Resolution
+options and both retail UI suites passed on Windows and Linux; the Linux
+DisplayRecovery fixture passed apply/confirm/disk-save/reload for 1280x800,
+2560x1440, 3440x1440, 3840x2160 and a custom 1712x964 size, plus timeout/revert.
+Native SDL enumeration passed under WSLg X11 (28 advertised modes, 22 unique
+options) and Wayland (22 modes/options), both at a 2560x1440 desktop. Simulated
+monitor lists cover 800p through 8K, ultrawide and empty/single-mode drivers.
+Reports are in `TestOutput/Nov5LinuxResolutions/`; `linux-recovery-tests` is the
+final persistence run. The initial persistence test read an INI cache key as
+a filename; it now reads the generated settings path. Physical Linux monitor
+hotplug and visible 4K/fullscreen rendering remain unverified here.
+
+## Crowded-event dispatch, Recklessness and Linux login: 2026-11-05
+
+Network dispatch retains the normal 0.5 ms allowance, but ready work waiting
+at least 100 ms enables an 8 ms total receive/dispatch catch-up allowance.
+Socket backlog can increase receive time to 2 ms per socket. The existing
+128-work-unit cap remains; an atomic callback finishes before yielding, so one
+expensive callback can exceed the time allowance. Idle queues return to the
+normal allowance. `ace.Network.CatchUpBudgetMs=0` disables catch-up for comparison.
+`/acueperf` now distinguishes socket backlog, undispatched packets, ordered
+events, dispatchable age and events held on missing stamps/objects. The latter
+do not cause catch-up work when no event can actually progress.
+
+Retail `SharedNet::ProcessOptionalHeader` creates a `CEchoResponseHeader` for
+an EchoRequest; `ClientNet` calls that base implementation. Echo handling is
+therefore retained. A loopback traffic fixture compares sustained ordered
+events under fixed and adaptive budgets, including final drain, ACK progress,
+duplicates and ordering. This reproduces budget starvation, but does not prove
+the cause of the reported live event delay without a capture from that event.
+
+The Recklessness DAT field is a fixed range marker, not a charge fill. Exclude
+`basic_recklessness_fill` and `adv_recklessness_fill` from meter-fill clipping.
+Retail `UIElement_Meter` animates child 2; `gmCombatUI` gates Recklessness on
+trained/specialized skill 50. End-of-retail DAT geometry and ACE
+`Player.GetRecklessnessMod` use 10–90%, despite older 20–80% descriptions.
+
+Linux Accounts now offers an unchecked-by-default password persistence option.
+Opt-in writes unencrypted credentials to a uniquely named temporary file
+created with owner-only permissions before replacement. Opt-out removes saved
+passwords while retaining session credentials. Windows DPAPI and Android
+Keystore behavior are unchanged. Persistence and launcher fixtures cover
+opt-in, reopening, opt-out, all accounts and Linux file permissions.
+
+Validation: Win64 Development editor and native Linux package builds passed.
+Eight Windows suites passed (seven in `editor-final-tests`, UIScreens in its
+final `ui-final-tests` rerun); all nine native Linux suites passed. Linux display
+fixtures retained existing console-priority/viewport warnings. Reports and
+rendered Accounts/Recklessness images are in
+`TestOutput/Nov5CrowdLoginRecklessness/`. The 1,440-event Windows UDP fixture
+peaked at 1,140 queued work items with catch-up disabled and 139 with it enabled;
+Linux measured 1,142 and 139. All events drained in order without duplicates.
+These are controlled loopback results, not a live crowded-server validation.
+
 ## Trade, input and turn-animation follow-up: 2026-11-04
 
 ACE `Player_Trade.FinalizeTrade` removes outgoing items with ObjectDelete,

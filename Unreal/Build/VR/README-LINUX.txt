@@ -13,6 +13,14 @@ Install graphics and audio drivers through your distribution's package manager.
 Engine requirements: https://dev.epicgames.com/documentation/en-us/unreal-engine/linux-development-requirements-for-unreal-engine
 This initial Linux release targets desktop play. Linux VR is not validated.
 
+DISPLAY RESOLUTION
+Graphics Options lists modes reported by the monitor containing the game window,
+plus common window sizes that fit it. This includes 1440p, 4K and ultrawide sizes
+on suitable displays. Borderless uses the desktop resolution. Open the resolution
+list again after moving between monitors to refresh it. Display changes require
+confirmation within 15 seconds; otherwise the previous setting is restored.
+Fresh installations start at the desktop size; existing saved choices are kept.
+
 AMD RADV compatibility: Linux disables pipeline precaching to avoid an ACO
 store_deref shader-compiler abort. Pipelines compile on demand, which can
 cause a brief first-use hitch. For older builds, launch with:
@@ -31,8 +39,10 @@ CONNECT AND SAVED SETTINGS
 Use Browse servers in the login screen, or add a custom server with the address,
 port, and ACE/GDLE type supplied by its owner. Enter your account credentials,
 press Launch, select a character, and Play. Server websites explain registration.
-Linux saves server details, account names, and settings, but does not save
-passwords. Enter the account password again after restarting the client.
+Linux saves server details, account names, and settings. On the Accounts tab,
+"Remember passwords on this device (unencrypted)" optionally saves passwords
+in a file readable only by your Linux account. This is off by default. Turning
+it off removes saved passwords while retaining them for the current session.
 Saved data normally lives under ~/.config/Epic/ACUnreal/Saved/.
 Never share another player's Saved folder.
 

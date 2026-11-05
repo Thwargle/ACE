@@ -14,6 +14,9 @@
 #include "Slate/WidgetRenderer.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "RenderingThread.h"
+#if PLATFORM_LINUX
+#include <sys/stat.h>
+#endif
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACELocalLoginSettingsTest,"ACE.RetailParity.LocalLoginSettings",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -60,6 +63,22 @@ bool FACELocalLoginSettingsTest::RunTest(const FString& Parameters)
     FFileHelper::SaveArrayToFile(TArray<uint8>{1,2,3,4},*Path);
     TestFalse(TEXT("Damaged settings are rejected without crashing"),ACELoginSettings::Load(Loaded,Path));
     TestTrue(TEXT("Damaged settings leave empty defaults untouched"),Loaded.Host.IsEmpty() && Loaded.Password.IsEmpty());
+#if PLATFORM_LINUX
+    Entered.Host=TEXT("test.example.invalid");Entered.Port=TEXT("9001");Entered.Account=TEXT("Saved login fixture");Entered.Password=TEXT("Local-only test secret \u2603");
+    Entered.MigrateLegacy();Entered.bSavePasswordsLocally=true;
+    TestTrue(TEXT("Linux password opt-in saves"),ACELoginSettings::Save(Entered,Path));
+    FACELoginSettings Restarted;
+    TestTrue(TEXT("Linux password preference restores on restart"),ACELoginSettings::Load(Restarted,Path)&&Restarted.bSavePasswordsLocally);
+    TestTrue(TEXT("Legacy and account password fields both round trip"),Restarted.Password==Entered.Password&&Restarted.Accounts.Num()==1&&Restarted.Accounts[0].Password==Entered.Password);
+    struct stat Info{};
+    TestTrue(TEXT("Local profile is private from the moment it is created"),stat(TCHAR_TO_UTF8(*FPaths::ConvertRelativePathToFull(Path)),&Info)==0&&(Info.st_mode&0777)==0600);
+    Entered.bSavePasswordsLocally=false;
+    TestTrue(TEXT("Disabling password saving rewrites the file"),ACELoginSettings::Save(Entered,Path));
+    TestTrue(TEXT("Disabled option persists and clears both saved password fields"),ACELoginSettings::Load(Restarted,Path)&&!Restarted.bSavePasswordsLocally&&Restarted.Password.IsEmpty()&&Restarted.Accounts[0].Password.IsEmpty());
+    FString Plain;FFileHelper::LoadFileToString(Plain,*Path);
+    TestFalse(TEXT("Disabling opt-in removes the secret from disk"),Plain.Contains(Entered.Password));
+    TestFalse(TEXT("Disabling persistence preserves this session's credentials"),Entered.Password.IsEmpty());
+#endif
     IFileManager::Get().Delete(*Path,false,true);
     return true;
 }

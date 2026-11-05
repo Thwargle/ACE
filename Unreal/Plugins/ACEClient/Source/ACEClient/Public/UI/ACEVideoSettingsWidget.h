@@ -30,6 +30,7 @@ public:
  /** Apply rendering preferences without changing display resolution or window mode. */
  void ApplyRenderingOptions();
  UFUNCTION() void ResetVideo();
+ UFUNCTION() void RefreshResolutions();
  void RefreshFrameRateOption();
  UFUNCTION() void DefaultsVideo();
  bool HasPendingChanges() const;

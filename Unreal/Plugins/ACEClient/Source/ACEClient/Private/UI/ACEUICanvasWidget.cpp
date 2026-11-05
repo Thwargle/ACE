@@ -100,6 +100,10 @@ namespace
 		{
 			return false;
 		}
+		// Retail UIElement_Meter animates child 2, not the Recklessness range
+		// field (0x100005EF). The range remains visible even at zero charge.
+		if (Element->ElementName == TEXT("basic_recklessness_fill")
+			|| Element->ElementName == TEXT("adv_recklessness_fill")) return false;
 		if (Element->ElementName.Contains(TEXT("Label"))
 			|| Element->ElementName == TEXT("Powerbar_Text")
 			|| Element->Type == ACEUI::ElementType::Text)

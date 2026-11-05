@@ -4,6 +4,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Application/IInputProcessor.h"
 #include "Engine/GameViewportClient.h"
+#include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/GameUserSettings.h"
 #include "Widgets/SWindow.h"
@@ -16,9 +17,28 @@
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Text/STextBlock.h"
+#include "RHI.h"
+#if PLATFORM_LINUX
+#include <SDL3/SDL.h>
+#endif
 
 namespace
 {
+TSharedPtr<SWindow> GetGameWindow(AACEPlayerController* PC)
+{
+    auto* Viewport=PC && PC->GetWorld()?PC->GetWorld()->GetGameViewport():(GEngine?GEngine->GameViewport.Get():nullptr);
+    return Viewport?Viewport->GetWindow():nullptr;
+}
+#if PLATFORM_LINUX
+SDL_DisplayID GetLinuxDisplay(AACEPlayerController* PC)
+{
+    if (!(SDL_WasInit(SDL_INIT_VIDEO)&SDL_INIT_VIDEO)) return 0;
+    if (const auto Window=GetGameWindow(PC);Window && Window->GetNativeWindow())
+        if (auto* Handle=static_cast<SDL_Window*>(Window->GetNativeWindow()->GetOSWindowHandle()))
+            if (const auto Display=SDL_GetDisplayForWindow(Handle)) return Display;
+    return SDL_GetPrimaryDisplay();
+}
+#endif
 constexpr const TCHAR* DisplaySettingsSection = TEXT("ACEDesktopDisplay");
 struct FModePreview
 {
@@ -159,10 +179,16 @@ FIntPoint FACEDesktopDisplay::ResolveResolution(EWindowMode::Type Previous,EWind
 
 FIntPoint FACEDesktopDisplay::GetMonitorResolution(AACEPlayerController* PC)
 {
+#if PLATFORM_LINUX
+    // SDL modes describe pixels; Slate display bounds may be logical coordinates
+    // on a scaled Wayland desktop. Do not turn a 4K mode into a 1080p option.
+    if (const auto Display=GetLinuxDisplay(PC))
+        if (const auto* Mode=SDL_GetDesktopDisplayMode(Display);Mode && Mode->w>0 && Mode->h>0)
+            return FIntPoint(Mode->w,Mode->h);
+#endif
     if (FSlateApplication::IsInitialized())
     {
-        auto* Viewport=PC && PC->GetWorld()?PC->GetWorld()->GetGameViewport():nullptr;
-        auto Window=Viewport?Viewport->GetWindow():nullptr;
+        auto Window=GetGameWindow(PC);
         const auto& Metrics=FSlateApplication::Get().GetCachedDisplayMetricsByRef();
         if (Window)
         {
@@ -175,6 +201,54 @@ FIntPoint FACEDesktopDisplay::GetMonitorResolution(AACEPlayerController* PC)
         return FIntPoint(Metrics.PrimaryDisplayWidth,Metrics.PrimaryDisplayHeight);
     }
     return FIntPoint(1280,720);
+}
+
+TArray<FIntPoint> FACEDesktopDisplay::BuildResolutionOptions(const TArray<FIntPoint>& Reported,
+    FIntPoint Desktop,FIntPoint Current,bool IncludeCommonSizes)
+{
+    TArray<FIntPoint> Result;
+    auto Add=[&](FIntPoint Size){if(Size.X>=800 && Size.Y>=600)Result.AddUnique(Size);};
+    for(const auto& Size:Reported)Add(Size);
+    Add(Desktop);Add(Current);
+    if(IncludeCommonSizes)
+    {
+        const auto Bounds=Desktop.X>0 && Desktop.Y>0?Desktop:(Current.X>0 && Current.Y>0?Current:FIntPoint(1280,720));
+        // Window sizes and scaled fullscreen backbuffers remain usable when a
+        // compositor reports only its desktop mode. Never impose a 1080p cap.
+        const FIntPoint CommonSizes[]={{800,600},{1024,768},{1280,720},{1280,800},{1280,960},{1280,1024},
+            {1360,768},{1366,768},{1440,900},{1600,900},{1600,1200},{1680,1050},{1920,1080},{1920,1200},
+            {2048,1152},{2048,1536},{2560,1080},{2560,1440},{2560,1600},{2880,1620},{2880,1800},
+            {3200,1800},{3440,1440},{3840,1600},{3840,2160},{5120,1440},{5120,2160},{5120,2880},{7680,2160},{7680,4320}};
+        for(const auto Size:CommonSizes)
+            if(Size.X<=Bounds.X && Size.Y<=Bounds.Y)Add(Size);
+    }
+    Result.Sort([](FIntPoint A,FIntPoint B){return A.X==B.X?A.Y<B.Y:A.X<B.X;});
+    return Result;
+}
+
+TArray<FIntPoint> FACEDesktopDisplay::GetAvailableResolutions(AACEPlayerController* PC)
+{
+    TArray<FIntPoint> Reported;
+#if PLATFORM_LINUX
+    // Vulkan's RHIGetAvailableResolutions is unimplemented in UE 5.8.
+    // Use the same SDL display as the native game window, not the primary GPU.
+    if(const auto Display=GetLinuxDisplay(PC))
+    {
+        int Count=0;
+        if(auto** Modes=SDL_GetFullscreenDisplayModes(Display,&Count))
+        {
+            for(int I=0;I<Count;++I)if(Modes[I])Reported.Add(FIntPoint(Modes[I]->w,Modes[I]->h));
+            SDL_free(Modes);
+        }
+    }
+    const bool IncludeCommonSizes=true;
+#else
+    FScreenResolutionArray Modes;RHIGetAvailableResolutions(Modes,true);
+    for(const auto& Mode:Modes)Reported.Add(FIntPoint(Mode.Width,Mode.Height));
+    const bool IncludeCommonSizes=Reported.IsEmpty();
+#endif
+    const auto* Settings=UGameUserSettings::GetGameUserSettings();
+    return BuildResolutionOptions(Reported,GetMonitorResolution(PC),Settings?Settings->GetScreenResolution():FIntPoint::ZeroValue,IncludeCommonSizes);
 }
 
 bool FACEDesktopDisplay::IsModeChangePending() { return Preview.Pending; }
@@ -285,6 +359,7 @@ TSharedPtr<FACEDesktopDisplay> FACEDesktopDisplay::Create(AACEPlayerController* 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
+#include "Misc/Paths.h"
 #include "ACELoginWidget.h"
 #include "Engine/Engine.h"
 #include "UObject/UObjectIterator.h"
@@ -319,6 +394,24 @@ bool FACEDisplayRecoveryTest::RunTest(const FString&)
     FACEDesktopDisplay::FinishModeChange(true);
     GConfig->GetInt(TEXT("/Script/Engine.GameUserSettings"),TEXT("ResolutionSizeX"),SavedX,GGameUserSettingsIni);
     TestEqual(TEXT("Keep persists the confirmed resolution"),SavedX,1280);
+    const FIntPoint Sizes[]={{1280,800},{2560,1440},{3440,1440},{3840,2160},{1712,964}};
+    for(const auto Size:Sizes)
+    {
+        FACEDesktopDisplay::ApplyModeChange(PC,EWindowMode::Windowed,Size);
+        TestTrue(TEXT("Higher and custom resolutions use the confirmation flow"),Preview.Pending);
+        TestEqual(TEXT("Preview applies the selected size without a 1080p cap"),Settings->GetScreenResolution(),Size);
+        FACEDesktopDisplay::FinishModeChange(true);
+        // UE 5.8 uses a cache key ("GameUserSettings"), not a path, in the global.
+        FConfigFile Confirmed;
+        Confirmed.Read(FConfigCacheIni::GetDestIniFilename(TEXT("GameUserSettings"),nullptr,*FPaths::GeneratedConfigDir()));
+        int32 X=0,Y=0;
+        Confirmed.GetInt(TEXT("/Script/Engine.GameUserSettings"),TEXT("ResolutionSizeX"),X);
+        Confirmed.GetInt(TEXT("/Script/Engine.GameUserSettings"),TEXT("ResolutionSizeY"),Y);
+        TestEqual(TEXT("Keep writes resolution width to disk"),X,Size.X);
+        TestEqual(TEXT("Keep writes resolution height to disk"),Y,Size.Y);
+        Settings->SetScreenResolution(FIntPoint(800,600));Settings->LoadSettings(true);
+        TestEqual(TEXT("Loading saved settings restores the chosen resolution"),Settings->GetScreenResolution(),Size);
+    }
     ACERuntimeOptions::Set(TEXT("Contrast"),2);ACERuntimeOptions::Set(TEXT("DesktopUIScale"),3);
     ACERuntimeOptions::Set(TEXT("MasterVolume"),.25f);
     Settings->SetFullscreenMode(EWindowMode::Fullscreen);Settings->SetScreenResolution(FIntPoint(640,480));

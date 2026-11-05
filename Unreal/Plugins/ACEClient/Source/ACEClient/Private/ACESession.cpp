@@ -24,6 +24,8 @@ static TAutoConsoleVariable<float> CVarNetworkPumpMs(TEXT("ace.Network.PumpBudge
 	TEXT("Budget for each socket receive pass and the ordered gameplay pass, in milliseconds. A packet finishes atomically; 0 disables the time bound."));
 static TAutoConsoleVariable<int32> CVarNetworkPumpPackets(TEXT("ace.Network.PumpMaxPackets"),128,
 	TEXT("Maximum packets per socket receive pass and per ordered gameplay pass."));
+static TAutoConsoleVariable<float> CVarNetworkCatchUpMs(TEXT("ace.Network.CatchUpBudgetMs"),8.f,
+	TEXT("Total network catch-up allowance when dispatch is at least 100 ms behind. Socket catch-up is limited to 2 ms per socket. 0 disables catch-up; packet caps still apply."));
 
 FACESession::FACESession() = default;
 
@@ -197,6 +199,10 @@ void FACESession::Disconnect()
 	CachedC2SPackets.Reset();
 	OutOfOrderS2CPackets.Reset();
 	PendingS2CDispatch.Empty();
+	PendingS2CDispatchCount = 0;
+	bNetworkSocketBacklog = bNetworkDispatchLimited = false;
+	LastNetworkReceivedPackets = LastNetworkDispatchedWork = 0;
+	LastNetworkReceiveMs = LastNetworkDispatchMs = LastNetworkDispatchBudgetMs = 0;
 	LastTimeSyncPacketSequence = 0;
 	RequestedS2CPackets.Reset();
 	RejectedS2CPackets.Reset();
@@ -601,6 +607,9 @@ void FACESession::TickPositionReporting(float DeltaSeconds)
 void FACESession::PollSockets()
 {
 	const double ReceiveStart = FPlatformTime::Seconds();
+	const bool HadSocketBacklog = bNetworkSocketBacklog;
+	bNetworkSocketBacklog = false;
+	LastNetworkReceivedPackets = 0;
 	uint8 Buffer[2048];
 	int32 BytesRead = 0;
 	TSharedRef<FInternetAddr> FromAddr = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->CreateInternetAddr();
@@ -612,7 +621,9 @@ void FACESession::PollSockets()
 			return;
 		}
 		const double Start = FPlatformTime::Seconds();
-		const double Budget = FMath::Max(0.f, CVarNetworkPumpMs.GetValueOnGameThread()) * .001;
+		const double Base = FMath::Max(0.f, CVarNetworkPumpMs.GetValueOnGameThread()) * .001;
+		// Preserve room for gameplay in the shared catch-up allowance.
+		const double Budget = FMath::Min(NetworkPumpBudgetSeconds(HadSocketBacklog), FMath::Max(Base, .002));
 		const int32 MaxPackets = FMath::Max(1, CVarNetworkPumpPackets.GetValueOnGameThread());
 		int32 Packets = 0;
 		while (Sock->RecvFrom(Buffer, sizeof(Buffer), BytesRead, *FromAddr) && BytesRead > 0)
@@ -627,8 +638,11 @@ void FACESession::PollSockets()
 			}
 			// Leave the remainder queued in the socket in its original order.
 			// Continuous traffic must not monopolize an entire game frame.
+			++LastNetworkReceivedPackets;
 			if (++Packets >= MaxPackets || (Budget > 0 && FPlatformTime::Seconds() - Start >= Budget)) break;
 		}
+		uint32 PendingBytes = 0;
+		bNetworkSocketBacklog |= Sock->HasPendingData(PendingBytes);
 	};
 
 	{
@@ -643,8 +657,32 @@ void FACESession::PollSockets()
 	LastNetworkReceiveMs = (DispatchStart - ReceiveStart) * 1000.0;
 	// This must also run when both sockets are idle: a deferred contiguous
 	// backlog needs no additional datagram to make progress.
-	DrainOutOfOrderS2C();
+	DrainOutOfOrderS2C(ReceiveStart);
 	LastNetworkDispatchMs = (FPlatformTime::Seconds() - DispatchStart) * 1000.0;
+}
+
+double FACESession::NetworkDispatchAge(double Now) const
+{
+	double Oldest = Now;
+	uint32 Sequence;
+	if (PendingS2CDispatch.Peek(Sequence))
+		if (const auto* Packet = OutOfOrderS2CPackets.Find(Sequence)) Oldest = FMath::Min(Oldest, Packet->ReceivedAt);
+	int32 Owner;
+	if (ReadyGameEventOwners.Peek(Owner))
+		if (const auto* Stream = OrderedGameEvents.Find(Owner))
+		{
+			const uint32 Next = !Stream->bReceivedFirst && Stream->Pending.Contains(0) ? 0 : Stream->LastStamp+1;
+			if (const auto* Event = Stream->Pending.Find(Next)) Oldest = FMath::Min(Oldest, Event->QueuedAt);
+		}
+	return FMath::Max(0.0, Now-Oldest);
+}
+
+double FACESession::NetworkPumpBudgetSeconds(bool bSocketBacklog) const
+{
+	const double Base = FMath::Max(0.f, CVarNetworkPumpMs.GetValueOnGameThread());
+	if (Base == 0) return 0; // Existing unlimited diagnostic mode.
+	const bool Behind = bSocketBacklog || NetworkDispatchAge(FPlatformTime::Seconds()) >= .1;
+	return (Behind ? FMath::Max(Base, double(FMath::Clamp(CVarNetworkCatchUpMs.GetValueOnGameThread(), 0.f, 16.f))) : Base) * .001;
 }
 
 FString FACESession::DescribeNetworkPump() const
@@ -655,8 +693,13 @@ FString FACESession::DescribeNetworkPump() const
 	const uint32 Next = LastReceivedPacketSequence + 1;
 	const bool WaitingForGap = !OutOfOrderS2CPackets.IsEmpty()
 		&& !OutOfOrderS2CPackets.Contains(Next) && !RejectedS2CPackets.Contains(Next);
-	return FString::Printf(TEXT("network receive=%.2f ms dispatch=%.2f ms; buffered=%d oldest=%.2f s missing=%u (last pump)"),
-		LastNetworkReceiveMs, LastNetworkDispatchMs, OutOfOrderS2CPackets.Num(), FMath::Max(0.0, Now - Oldest), WaitingForGap ? Next : 0);
+	double EventOldest = Now;
+	for (const auto& Stream : OrderedGameEvents)
+		for (const auto& Event : Stream.Value.Pending) EventOldest = FMath::Min(EventOldest, Event.Value.QueuedAt);
+	return FString::Printf(TEXT("network receive=%.2f ms dispatch=%.2f/%.2f ms; received=%d work=%d socketPending=%d limited=%d; queued=%d events=%d dispatchAge=%.2f s eventAge=%.2f s; buffered=%d oldest=%.2f s missing=%u (last pump)"),
+		LastNetworkReceiveMs, LastNetworkDispatchMs, LastNetworkDispatchBudgetMs, LastNetworkReceivedPackets, LastNetworkDispatchedWork,
+		bNetworkSocketBacklog, bNetworkDispatchLimited, PendingS2CDispatchCount, PendingGameEventCount, NetworkDispatchAge(Now),
+		FMath::Max(0.0, Now-EventOldest), OutOfOrderS2CPackets.Num(), FMath::Max(0.0, Now - Oldest), WaitingForGap ? Next : 0);
 }
 
 void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CSocket*/)
@@ -1004,6 +1047,7 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 		Pending.ServerTicks = ServerTicks;
 		Pending.ReceivedAt = ReceivedAt;
 		PendingS2CDispatch.Enqueue(Sequence);
+		++PendingS2CDispatchCount;
 	}
 	if (!bDeferOrderedDispatch) DrainOutOfOrderS2C();
 	// Tick requests missing packets once after the receive/dispatch passes;
@@ -1052,25 +1096,34 @@ void FACESession::RequestMissingS2CPackets(double Now)
 	LastRequestForRetransmitTime = Now;
 }
 
-void FACESession::DrainOutOfOrderS2C()
+void FACESession::DrainOutOfOrderS2C(double FrameStartedAt)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_OrderedNetworkDispatch);
 	const double Start = FPlatformTime::Seconds();
-	const double Budget = FMath::Max(0.f, CVarNetworkPumpMs.GetValueOnGameThread()) * .001;
+	const double Budget = NetworkPumpBudgetSeconds(false);
+	const double Base = FMath::Max(0.f, CVarNetworkPumpMs.GetValueOnGameThread()) * .001;
+	// Catch-up is a total per-pump allowance, not eight extra milliseconds for
+	// each socket plus another eight for gameplay. Atomic work still completes.
+	const double Deadline = Budget > Base && FrameStartedAt > 0.0 ? FrameStartedAt + Budget : Start + Budget;
+	LastNetworkDispatchBudgetMs = FMath::Max(0.0, Deadline-Start) * 1000.0;
+	LastNetworkDispatchedWork = 0;
 	const int32 MaxPackets = FMath::Max(1, CVarNetworkPumpPackets.GetValueOnGameThread());
 	for (int32 Packets = 0; Packets < MaxPackets; ++Packets)
 	{
 		// Always permit one atomic packet, then yield the rest to later frames.
-		if (Packets > 0 && Budget > 0 && FPlatformTime::Seconds() - Start >= Budget) break;
+		if (Packets > 0 && Budget > 0 && FPlatformTime::Seconds() >= Deadline) break;
 		if (State == EACESessionState::Failed) break;
 		// Alternate packet and ordered-event work so neither starves the other.
 		if (!ReadyGameEventOwners.IsEmpty() && ((Packets & 1) || PendingS2CDispatch.IsEmpty()))
 		{
 			DispatchReadyGameEvent();
+			++LastNetworkDispatchedWork;
 			continue;
 		}
 		uint32 Seq;
 		if (!PendingS2CDispatch.Dequeue(Seq)) break;
+		--PendingS2CDispatchCount;
+		++LastNetworkDispatchedWork;
 		if (FPendingS2CPacket* Pending = OutOfOrderS2CPackets.Find(Seq))
 		{
 			// Retain only the receipt until the ACK cursor crosses it. Never keep
@@ -1081,6 +1134,7 @@ void FACESession::DrainOutOfOrderS2C()
 			ProcessOrderedS2CPacket(Seq, Copy.Flags, Copy.Fragments, Copy.ServerTicks, Copy.ReceivedAt);
 		}
 	}
+	bNetworkDispatchLimited = !PendingS2CDispatch.IsEmpty() || !ReadyGameEventOwners.IsEmpty();
 	// Receipt pruning is bounded as well: filling a long-lived hole must not
 	// walk an arbitrarily large backlog in one render frame.
 	for (int32 Count = 0; Count < MaxPackets; ++Count)

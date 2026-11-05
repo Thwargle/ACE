@@ -282,7 +282,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	AccountList=WidgetTree->ConstructWidget<UScrollBox>(); AccountList->SetScrollbarThickness(FVector2D(8,8));
 	auto* AccountSlot=Details->AddChildToVerticalBox(AccountList); AccountSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); AccountSlot->SetPadding(FMargin(0,0,0,12));
 	LoginButton=ActionButton(TEXT("Launch"),TEXT("launch"),FString(),true); AddLine(Details,LoginButton,8);
-	AddLine(Details,Label(PLATFORM_LINUX ? TEXT("Account names are saved. Enter your password on the Accounts tab after restarting.") : TEXT("Accounts are saved securely on this device."),14,true),0);
+	AddLine(Details,Label(PLATFORM_LINUX ? TEXT("Manage saved accounts and optional password saving on the Accounts tab.") : TEXT("Accounts are saved securely on this device."),14,true),0);
 	// Server editor: explicit save/cancel avoids sending credentials to an edited endpoint by accident.
 	UVerticalBox* Edit; Pages->AddChild(Card(Edit));
 	AddLine(Edit,Label(TEXT("Server details"),30),18);
@@ -391,8 +391,21 @@ void UACELoginWidget::EnsureDefaultLayout()
 	auto* EyeWidth=WidgetTree->ConstructWidget<USizeBox>(); EyeWidth->SetWidthOverride(44); EyeWidth->SetContent(PasswordVisibilityButton);
 	PasswordRow->AddChildToHorizontalBox(EyeWidth)->SetPadding(FMargin(8,0,0,0));
 	SetPasswordVisible(false);
+#if PLATFORM_LINUX
+	RememberPasswordsCheckBox=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("RememberPasswordsCheckBox"));
+	RememberPasswordsCheckBox->SetWidgetStyle(AutoUpdateStyle);
+	auto* RememberRow=WidgetTree->ConstructWidget<UHorizontalBox>(); RememberPasswordsCheckBox->SetContent(RememberRow);
+	auto* RememberIndicator=WidgetTree->ConstructWidget<UBorder>(); RememberIndicator->SetBrush(FSlateRoundedBoxBrush(Ink,4.f,Gold,1.f));
+	auto* RememberSize=WidgetTree->ConstructWidget<USizeBox>(); RememberSize->SetWidthOverride(28); RememberSize->SetHeightOverride(28); RememberSize->SetContent(RememberIndicator);
+	RememberRow->AddChildToHorizontalBox(RememberSize)->SetVerticalAlignment(VAlign_Center);
+	RememberPasswordsMark=Label(TEXT("\u2713"),18); RememberPasswordsMark->SetRenderOpacity(0); RememberIndicator->SetContent(RememberPasswordsMark);
+	auto* RememberCaption=RememberRow->AddChildToHorizontalBox(Label(TEXT("Remember passwords on this device (unencrypted)"),18,true));
+	RememberCaption->SetPadding(FMargin(10,0,0,0)); RememberCaption->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+	RememberPasswordsCheckBox->OnCheckStateChanged.AddDynamic(this,&UACELoginWidget::OnRememberPasswordsChanged);
+	AddLine(Accounts,RememberPasswordsCheckBox,8);
+#endif
 	Row(Accounts,{{TEXT("Save account"),TEXT("saveaccount")},{TEXT("New account"),TEXT("newaccount")},{TEXT("Remove account"),TEXT("removeaccount")}});
-	AddLine(Accounts,Label(PLATFORM_LINUX ? TEXT("Passwords are kept for this session only. Enter them here after restarting.") : TEXT("Accounts are saved securely on this device."),14,true));
+	AddLine(Accounts,Label(PLATFORM_LINUX ? TEXT("Password saving is off by default. The local file is restricted to your Linux account. Turning this off removes saved passwords; they remain available for this session.") : TEXT("Accounts are saved securely on this device."),14,true));
 	Row(Accounts,{{TEXT("Back to play"),TEXT("play")}});
 	// Inline destructive-action confirmation is also fully usable with VR pointers.
 	FooterSize=WidgetTree->ConstructWidget<USizeBox>(); FooterSize->SetWidthOverride(1028);
@@ -440,6 +453,8 @@ void UACELoginWidget::NativeConstruct()
 		ValidateGameFiles();
 	}
 	AutoUpdateCheckBox->SetIsChecked(Profile.bAutoUpdate);
+	if (RememberPasswordsCheckBox) RememberPasswordsCheckBox->SetIsChecked(Profile.bSavePasswordsLocally);
+	if (RememberPasswordsMark) RememberPasswordsMark->SetRenderOpacity(Profile.bSavePasswordsLocally?1.f:0.f);
 	if (Updater) { Updater->SetAutoUpdateEnabled(Profile.bAutoUpdate); Updater->Check(true); }
 	RefreshUpdateControls();
 	ForceLayoutPrepass();
@@ -522,6 +537,15 @@ void UACELoginWidget::NativeTick(const FGeometry& Geometry, float Dt)
 			const FMargin Offsets(-Width*.5f,24,Width,FooterSize->GetDesiredSize().Y+34.f);
 			if(DashboardSlot->GetOffsets()!=Offsets) DashboardSlot->SetOffsets(Offsets);
 		}
+}
+
+void UACELoginWidget::OnRememberPasswordsChanged(bool bChecked)
+{
+	if (RememberPasswordsMark) RememberPasswordsMark->SetRenderOpacity(bChecked?1.f:0.f);
+	if (Profile.bSavePasswordsLocally==bChecked) return;
+	Profile.bSavePasswordsLocally=bChecked;
+	bLoginEntriesDirty=true;
+	SaveLoginEntries();
 }
 
 void UACELoginWidget::OnAutoUpdateChanged(bool bChecked)

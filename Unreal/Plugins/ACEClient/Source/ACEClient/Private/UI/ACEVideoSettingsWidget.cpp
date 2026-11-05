@@ -25,7 +25,6 @@
 #include "Components/Slider.h"
 #include "Engine/Texture2D.h"
 #include "GameFramework/GameUserSettings.h"
-#include "RHI.h"
 #include "Styling/CoreStyle.h"
 #include "Misc/ConfigCacheIni.h"
 
@@ -131,12 +130,7 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  ShowFrameRate=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("ShowFrameRate"));
  ShowFrameRate->SetWidgetStyle(RoundToggle);ShowFrameRate->SetContent(Label(TEXT("Show FPS overlay")));Box->AddChild(Fixed(ShowFrameRate,272,20));
  Resolution=Combo(TEXT("Resolution")); Resolution->Rename(TEXT("DisplayResolution"));
- FScreenResolutionArray Modes; RHIGetAvailableResolutions(Modes,true);
- for (const auto& M:Modes) if(M.Width>=800&&M.Height>=600)
- {
-  FString Value=FString::Printf(TEXT("%u x %u"),M.Width,M.Height);
-  if(Resolution->FindOptionIndex(Value)<0)Resolution->AddOption(Value);
- }
+ Resolution->OnOpening.AddDynamic(this,&UACEVideoSettingsWidget::RefreshResolutions);
  UACEHoverTooltipWidget::SetWidgetTooltip(Resolution,FText::FromString(TEXT("Resolution for fullscreen and windowed modes. Borderless fills the desktop at its native resolution.")));
  WindowMode=Combo(TEXT("Display")); WindowMode->Rename(TEXT("DisplayMode")); for(const TCHAR* S:{TEXT("Fullscreen"),TEXT("Borderless"),TEXT("Windowed")})WindowMode->AddOption(S);
  FrameLimit=Combo(TEXT("Frame limit")); for(const TCHAR* S:{TEXT("Unlimited"),TEXT("30"),TEXT("60"),TEXT("120"),TEXT("144"),TEXT("240")})FrameLimit->AddOption(S);
@@ -247,15 +241,32 @@ void UACEVideoSettingsWidget::NativeTick(const FGeometry& Geometry, float DeltaT
  {
   ObservedWindowMode=Mode; ObservedResolution=R;
   WindowMode->SetSelectedIndex(Mode);
+  RefreshResolutions();
   const FString Value=FString::Printf(TEXT("%d x %d"),R.X,R.Y);
   if(Resolution->FindOptionIndex(Value)<0)Resolution->AddOption(Value);
   Resolution->SetSelectedOption(Value);
+ }
+}
+void UACEVideoSettingsWidget::RefreshResolutions()
+{
+ if(!Resolution)return;
+ const FString Selected=Resolution->GetSelectedOption();
+ Resolution->ClearOptions();
+ for(const auto& Size:FACEDesktopDisplay::GetAvailableResolutions(Cast<AACEPlayerController>(GetOwningPlayer())))
+  Resolution->AddOption(FString::Printf(TEXT("%d x %d"),Size.X,Size.Y));
+ // Refresh when reopening after moving between monitors or hotplugging one.
+ // Keep the user's unapplied selection, including a custom window size.
+ if(!Selected.IsEmpty())
+ {
+  if(Resolution->FindOptionIndex(Selected)<0)Resolution->AddOption(Selected);
+  Resolution->SetSelectedOption(Selected);
  }
 }
 void UACEVideoSettingsWidget::ResetVideo()
 {
  TGuardValue<bool> Loading(LoadingSettings,true);
  auto* S=UGameUserSettings::GetGameUserSettings();if(!S||!Resolution)return;
+ RefreshResolutions();
  const auto R=S->GetScreenResolution(); ObservedResolution=R; ObservedWindowMode=int32(S->GetFullscreenMode()); const FString Value=FString::Printf(TEXT("%d x %d"),R.X,R.Y);
  if(Resolution->FindOptionIndex(Value)<0)Resolution->AddOption(Value);Resolution->SetSelectedOption(Value);
  WindowMode->SetSelectedIndex(int32(S->GetFullscreenMode()));

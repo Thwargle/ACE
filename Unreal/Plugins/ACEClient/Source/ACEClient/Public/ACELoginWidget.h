@@ -156,6 +156,9 @@ protected:
 	UPROPERTY() TObjectPtr<class UCheckBox> AutoUpdateCheckBox;
 	UPROPERTY() TObjectPtr<UTextBlock> AutoUpdateMark;
 	UFUNCTION() void OnAutoUpdateChanged(bool bChecked);
+	UPROPERTY() TObjectPtr<class UCheckBox> RememberPasswordsCheckBox;
+	UPROPERTY() TObjectPtr<UTextBlock> RememberPasswordsMark;
+	UFUNCTION() void OnRememberPasswordsChanged(bool bChecked);
 	float UpdatePollTime = 0;
 	void RefreshUpdateControls();
 	void RefreshServers();

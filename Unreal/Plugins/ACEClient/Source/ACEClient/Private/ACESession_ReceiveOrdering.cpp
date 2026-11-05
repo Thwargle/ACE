@@ -25,7 +25,7 @@ void FACESession::ReceiveGameMessage(const TArray<uint8>& Message)
 		ConnectionError = TEXT("Too many incomplete ordered game events. Please reconnect to the server.");
 		Log(ConnectionError); SetState(EACESessionState::Failed); return;
 	}
-	Stream.Pending.Add(Stamp, Message);
+	Stream.Pending.Add(Stamp, {Message, FPlatformTime::Seconds()});
 	++PendingGameEventCount; PendingGameEventBytes += Message.Num();
 	QueueReadyGameEvents(Owner);
 }
@@ -51,13 +51,13 @@ void FACESession::DispatchReadyGameEvent()
 	if (!Stream) return;
 	Stream->bReadyQueued = false;
 	const uint32 Next = !Stream->bReceivedFirst && Stream->Pending.Contains(0) ? 0 : Stream->LastStamp + 1;
-	TArray<uint8> Message;
-	if (!Stream->Pending.RemoveAndCopyValue(Next, Message)) return;
+	FOrderedGameEvents::FEvent Event;
+	if (!Stream->Pending.RemoveAndCopyValue(Next, Event)) return;
 	Stream->LastStamp = Next; Stream->bReceivedFirst = true;
-	--PendingGameEventCount; PendingGameEventBytes -= Message.Num();
+	--PendingGameEventCount; PendingGameEventBytes -= Event.Message.Num();
 	QueueReadyGameEvents(Owner);
 	// The callback may clear world/session state. Never retain Stream across it.
-	HandleGameMessage(Message);
+	HandleGameMessage(Event.Message);
 }
 
 bool FACESession::AcceptPropertyStamp(const TArray<uint8>& Message)

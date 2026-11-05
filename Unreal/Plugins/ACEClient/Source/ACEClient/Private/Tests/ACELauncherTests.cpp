@@ -244,6 +244,27 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     TestNotNull(TEXT("Updates page provides a real checkbox"),W->AutoUpdateCheckBox.Get());
     TestFalse(TEXT("Checkbox starts unchecked"),W->AutoUpdateCheckBox->IsChecked());
 #if PLATFORM_LINUX
+    if(TestNotNull(TEXT("Linux accounts provide a password-saving checkbox"),W->RememberPasswordsCheckBox.Get()))
+    {
+        TestFalse(TEXT("Password saving starts unchecked"),W->RememberPasswordsCheckBox->IsChecked());
+        W->RememberPasswordsCheckBox->SetIsChecked(true);
+        W->RememberPasswordsCheckBox->OnCheckStateChanged.Broadcast(true);
+        {
+            TStrongObjectPtr<UACELoginWidget> Reopened(CreateWidget<UACELoginWidget>(GI,UACELoginWidget::StaticClass()));
+            Reopened->ProfilePath=W->ProfilePath;
+            auto ReopenedSlate=Reopened->TakeWidget();
+            TestTrue(TEXT("Reopened Linux launcher restores the password preference"),Reopened->RememberPasswordsCheckBox->IsChecked());
+            TestEqual(TEXT("Reopened Linux launcher fills the selected account password"),Reopened->PasswordBox->GetText().ToString(),FString(TEXT("fixture-two")));
+            Reopened->NativeDestruct();
+        }
+        W->RememberPasswordsCheckBox->SetIsChecked(false);
+        W->RememberPasswordsCheckBox->OnCheckStateChanged.Broadcast(false);
+        FACELoginSettings Cleared;
+        TestTrue(TEXT("Unchecking removes passwords from every saved account"),ACELoginSettings::Load(Cleared,W->ProfilePath)
+            && !Cleared.bSavePasswordsLocally && Cleared.Password.IsEmpty()
+            && !Cleared.Accounts.ContainsByPredicate([](const FACELoginAccount& A){return !A.Password.IsEmpty();}));
+        TestFalse(TEXT("Unchecking retains the current session password"),W->PasswordBox->GetText().IsEmpty());
+    }
     TestTrue(TEXT("Linux exposes supported automatic installation"),W->AutoUpdateCheckBox->IsVisible());
     TestFalse(TEXT("Linux automatic updates are opt-in"),W->Updater->IsAutoUpdateEnabled());
     W->AutoUpdateCheckBox->SetIsChecked(true);

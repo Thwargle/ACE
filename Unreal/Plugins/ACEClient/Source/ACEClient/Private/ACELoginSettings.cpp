@@ -14,6 +14,9 @@
 #include "Android/AndroidJNI.h"
 #elif PLATFORM_LINUX
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
 #endif
 
 namespace ACELoginSettings
@@ -51,7 +54,9 @@ namespace ACELoginSettings
 		Json->SetStringField(TEXT("host"), Settings.Host);
 		Json->SetStringField(TEXT("port"), Settings.Port);
 		Json->SetStringField(TEXT("account"), Settings.Account);
-        Json->SetStringField(TEXT("password"), PLATFORM_LINUX ? FString() : Settings.Password);
+		const bool SavePasswords = !PLATFORM_LINUX || Settings.bSavePasswordsLocally;
+		Json->SetBoolField(TEXT("savePasswordsLocally"), Settings.bSavePasswordsLocally);
+		Json->SetStringField(TEXT("password"), SavePasswords ? Settings.Password : FString());
 		if (Settings.bProfileFormat)
 		{
 			Json->SetNumberField(TEXT("version"), 3);
@@ -74,7 +79,7 @@ namespace ACELoginSettings
 				auto J = MakeShared<FJsonObject>();
 				J->SetStringField(TEXT("id"), A.Id);
 				J->SetStringField(TEXT("alias"), A.Alias);
-                J->SetStringField(TEXT("username"), A.Username); J->SetStringField(TEXT("password"), PLATFORM_LINUX ? FString() : A.Password);
+				J->SetStringField(TEXT("username"), A.Username); J->SetStringField(TEXT("password"), SavePasswords ? A.Password : FString());
 				Accounts.Add(MakeShared<FJsonValueObject>(J));
 			}
 			Json->SetArrayField(TEXT("servers"), Servers); Json->SetArrayField(TEXT("accounts"), Accounts);
@@ -93,17 +98,30 @@ namespace ACELoginSettings
 #elif PLATFORM_ANDROID
 		if (!AndroidCrypt(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length(), true, Bytes)) return false;
 #elif PLATFORM_LINUX
-        // Persist nonsecret profile data only; passwords remain in memory for this session.
+        // Password persistence is opt-in; the local file is owner-readable only.
         Bytes.Append(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length());
 #else
 		return false;
 #endif
 		const FString Directory = FPaths::GetPath(Path);
 		if (!IFileManager::Get().MakeDirectory(*Directory, true)) return false;
-		const FString TemporaryPath = Path + TEXT(".tmp");
-        bool Saved = FFileHelper::SaveArrayToFile(Bytes, *TemporaryPath);
+		const FString TemporaryPath = Path + TEXT(".tmp-") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
 #if PLATFORM_LINUX
-        Saved = Saved && chmod(TCHAR_TO_UTF8(*FPaths::ConvertRelativePathToFull(TemporaryPath)), S_IRUSR | S_IWUSR) == 0;
+		// Restrict access when creating the file, before any plaintext is written.
+		const int Fd = open(TCHAR_TO_UTF8(*FPaths::ConvertRelativePathToFull(TemporaryPath)),
+			O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, S_IRUSR | S_IWUSR);
+		bool Saved = Fd >= 0;
+		int32 Written = 0;
+		while (Saved && Written < Bytes.Num())
+		{
+			const ssize_t Count = write(Fd, Bytes.GetData()+Written, Bytes.Num()-Written);
+			if (Count < 0 && errno == EINTR) continue;
+			if (Count <= 0) { Saved = false; break; }
+			Written += static_cast<int32>(Count);
+		}
+		if (Fd >= 0 && close(Fd) != 0) Saved = false;
+#else
+		bool Saved = FFileHelper::SaveArrayToFile(Bytes, *TemporaryPath);
 #endif
         Saved = Saved && IFileManager::Get().Move(*Path, *TemporaryPath, true, false);
 		if (!Saved) IFileManager::Get().Delete(*TemporaryPath, false, true);
@@ -147,12 +165,13 @@ namespace ACELoginSettings
 		TSharedPtr<FJsonObject> Json;
 		if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Json) || !Json) return false;
 		FACELoginSettings Loaded;
+		Json->TryGetBoolField(TEXT("savePasswordsLocally"), Loaded.bSavePasswordsLocally);
 		if (!Json->TryGetStringField(TEXT("host"), Loaded.Host)
 			|| !Json->TryGetStringField(TEXT("port"), Loaded.Port)
 			|| !Json->TryGetStringField(TEXT("account"), Loaded.Account)
 			|| !Json->TryGetStringField(TEXT("password"), Loaded.Password)) return false;
 #if PLATFORM_LINUX
-        Loaded.Password.Reset();
+        if (!Loaded.bSavePasswordsLocally) Loaded.Password.Reset();
 #endif
 		double Version = 0;
 		if (Json->TryGetNumberField(TEXT("version"), Version))
@@ -187,7 +206,7 @@ namespace ACELoginSettings
 				// Optional for existing saved logins; identity remains the entry ID.
 				(*J)->TryGetStringField(TEXT("alias"), A.Alias);
 #if PLATFORM_LINUX
-                A.Password.Reset();
+                if (!Loaded.bSavePasswordsLocally) A.Password.Reset();
 #endif
 				AccountIds.Add(A.Id);
 				// Upgrade any early server-scoped profile without losing alternate

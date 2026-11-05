@@ -981,7 +981,9 @@ private:
 	void CacheOutboundPacket(uint32 Sequence, EACEPacketHeaderFlags Flags, uint32 IsaacXor, uint32 PayloadHash, const TArray<uint8>& PayloadAfterHeader);
 	void ProcessOrderedS2CPacket(uint32 Sequence, EACEPacketHeaderFlags Flags, const TArray<FReceivedFragment>& Fragments, double ServerTicks, double ReceivedAt);
 	void ApplyServerTime(double ServerTicks, double ReceivedAt, const TCHAR* Source);
-	void DrainOutOfOrderS2C();
+	void DrainOutOfOrderS2C(double FrameStartedAt = 0.0);
+	double NetworkDispatchAge(double Now) const;
+	double NetworkPumpBudgetSeconds(bool bSocketBacklog) const;
 	void RequestMissingS2CPackets(double Now);
 	void ProcessReceivedFragment(const FReceivedFragment& Fragment);
 	void ResetReceivedMessages();
@@ -1076,14 +1078,16 @@ private:
 	TMap<uint32, FCachedC2SPacket> CachedC2SPackets;
 	TMap<uint32, FPendingS2CPacket> OutOfOrderS2CPackets;
 	TQueue<uint32> PendingS2CDispatch;
+	int32 PendingS2CDispatchCount = 0;
 	uint32 LastTimeSyncPacketSequence = 0;
 	/** Packet gaps affect ACK/NAK, not dispatch. Only F7B0 events block on their own stamps. */
 	struct FOrderedGameEvents
 	{
+		struct FEvent { TArray<uint8> Message; double QueuedAt = 0; };
 		uint32 LastStamp = 0;
 		bool bReceivedFirst = false;
 		bool bReadyQueued = false;
-		TMap<uint32, TArray<uint8>> Pending;
+		TMap<uint32, FEvent> Pending;
 	};
 	TMap<int32, FOrderedGameEvents> OrderedGameEvents;
 	TQueue<int32> ReadyGameEventOwners;
@@ -1094,6 +1098,9 @@ private:
 	bool bDeferOrderedDispatch = false;
 	double LastNetworkReceiveMs = 0.0;
 	double LastNetworkDispatchMs = 0.0;
+	double LastNetworkDispatchBudgetMs = 0.0;
+	int32 LastNetworkReceivedPackets = 0, LastNetworkDispatchedWork = 0;
+	bool bNetworkSocketBacklog = false, bNetworkDispatchLimited = false;
 	TSet<uint32> RequestedS2CPackets;
 	TSet<uint32> RejectedS2CPackets;
 	float AutoPosTimer = 0.f;
