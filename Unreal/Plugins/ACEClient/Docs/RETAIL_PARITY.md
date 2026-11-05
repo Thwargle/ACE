@@ -8,6 +8,43 @@ button exists, its opcode has a constant, or a focused regression test passes.
 This is the working acceptance record, most recently reviewed on 2026-10-13. The client
 is **not yet a feature-complete retail replacement**.
 
+## Trade, input and turn-animation follow-up: 2026-11-04
+
+ACE `Player_Trade.FinalizeTrade` removes outgoing items with ObjectDelete,
+then sends TradeComplete and ResetTrade. The client previously retained these
+objects as owned inventory, interpreting deletion only as a 3D removal. Offered
+items now leave inventory on the authoritative delete/completion. Completion
+also covers event/object queue ordering, and does not delete an item twice if
+ACE has recreated it for its original owner after failed delivery. Cancellation
+and items not offered are preserved. Trade offers use the retail item-foreground
+mark; the inventory cache includes offer IDs so add/reset updates it immediately.
+
+Spell-bar hover names use the actual visible spell icon tooltip. All twelve
+numbered spell slots are exposed in keyboard configuration and retail keymap
+round trips (default 1-9, 0, -, =). A hidden or detached text editor no longer
+suppresses Give or Action Deck hotkeys merely because Slate retained its focus.
+Visible typing continues to suppress gameplay hotkeys.
+
+Stationary turn animation integrates elapsed turn speed instead of multiplying
+total clip time by the most recent mouse delta. Short gaps between slow mouse
+events retain footwork for at most 100 ms; physical heading and network movement
+are unchanged. Use/Give clears the previous mouse-turn release bookkeeping so a
+late neutral MoveToState cannot cancel the new server interaction chain. Retail
+`ItemHolder::UseObject` and ACE `GameActionMoveToState` were the comparison paths.
+
+The provided logs identify Corpse of Daimyo Nobanuga, WCID 600938, setup
+02001B99. They show repeated Use requests followed by approach cancellation and
+no UseDone. The stale mouse-release path is reproduced in a fixture using that
+setup; the logs alone do not prove it caused this particular failed reward.
+Live custom-server reward delivery and the rare Action Deck incident still need
+verification. No synthetic loot receipt or automatic repeated Use was added.
+
+Win64 Development editor build passed. KeyboardBindings, NetworkAnimationParity,
+WorldEntry and ActionDeck passed in the initial run; final InteractionRecovery
+and UIScreens reruns passed with zero errors/warnings, including returned-item
+ordering and cached inventory mark removal. Reports and rendered UI fixtures are
+under `TestOutput/Nov4Reports/` (final changed suites under `final/`).
+
 ## Backpack drag pickup and return transfers: 2026-11-01
 
 Compared local retail `UIElement_SmartBoxWrapper` world drag handling,

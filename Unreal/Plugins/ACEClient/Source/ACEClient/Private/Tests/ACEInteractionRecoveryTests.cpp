@@ -31,6 +31,23 @@ bool FACEInteractionRecoveryTest::RunTest(const FString&)
     Session.LastServerPacketAt=120.; TestFalse(TEXT("Fresh received packet restores liveness"),Session.HasConnectionTimedOut(121.));
     Session.State=EACESessionState::Failed; TestFalse(TEXT("Authentication failure cannot start a reconnect loop"),Session.HasConnectionTimedOut(200.));
     Session.State=EACESessionState::InWorld;
+    for(bool DeleteFirst:{false,true})for(bool Returned:{false,true})
+    {
+        FACEWorldObject Gift;Gift.Guid=901;Gift.ContainerId=100;Gift.Name=TEXT("Offered salvage");
+        FACEWorldObject Kept=Gift;Kept.Guid=902;
+        Session.WorldObjects.Add(Gift.Guid,Gift);Session.WorldObjects.Add(Kept.Guid,Kept);
+        Session.TradeSelfItems={Gift.Guid};Session.TradePartnerGuid=200;
+        FACEBinaryWriter Deleted;Deleted.WriteUInt32(Gift.Guid);
+        if(DeleteFirst){FACEBinaryReader R(Deleted.GetData());Session.HandleObjectDelete(R);}
+        if(DeleteFirst&&Returned)Session.UpsertWorldObject(Gift);
+        FACEBinaryWriter Complete;Complete.WriteUInt32(0x0529);FACEBinaryReader C(Complete.GetData());Session.HandleWeenieError(C);
+        FACEBinaryWriter Reset;Reset.WriteUInt32(100);FACEBinaryReader R(Reset.GetData());Session.HandleResetTradeEvent(R);
+        if(!DeleteFirst){FACEBinaryReader D(Deleted.GetData());Session.HandleObjectDelete(D);}
+        if(!DeleteFirst&&Returned)Session.UpsertWorldObject(Gift);
+        TestEqual(TEXT("Completed trade removes transferred items and preserves server-returned items in either order"),Session.WorldObjects.Contains(Gift.Guid),Returned);
+        TestTrue(TEXT("Completed trade preserves items not offered"),Session.WorldObjects.Contains(Kept.Guid));
+        Session.WorldObjects.Remove(Gift.Guid);Session.WorldObjects.Remove(Kept.Guid);
+    }
     // A missing reply must not make every subsequent door/NPC use busy forever.
     Session.SendUseItem(200);
     TestTrue(TEXT("Use remains busy while its response is outstanding"),Session.IsUseBusy());

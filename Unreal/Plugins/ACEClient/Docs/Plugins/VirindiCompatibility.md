@@ -1,5 +1,110 @@
 # Virindi compatibility review
 
+## ILT custom wand property-dump follow-up (2026-11-04)
+
+The later UB appraisal for Blunt Sceptre (WCID 29260, GUID F06A016A) identifies
+the remaining blocker: requirement type 13 in slots 3/4, referencing 64-bit
+character properties 9007 >= 5500 and 9009 >= 3500. ILT defines type 13 as
+Int64Stat and performs a minimum comparison against PropertyInt64. Its Creature
+and Life augmentation counters are not marked SendOnLogin, so their absence
+from client data cannot be treated as a confirmed zero. The description also
+mentions an Item requirement, but the raw dump does not contain that triplet;
+the client does not invent requirements by parsing description prose.
+
+Sources pinned to ACECustom commit 718dc8b3033d66a2e816aee27c8c470002597b28:
+
+- [WieldRequirement enum](https://github.com/rkroska/ACECustom/blob/718dc8b3033d66a2e816aee27c8c470002597b28/Source/ACE.Entity/Enum/WieldRequirement.cs)
+- [Server wield checks](https://github.com/rkroska/ACECustom/blob/718dc8b3033d66a2e816aee27c8c470002597b28/Source/ACE.Server/WorldObjects/Player_Inventory.cs)
+- [Int64 properties and replication attributes](https://github.com/rkroska/ACECustom/blob/718dc8b3033d66a2e816aee27c8c470002597b28/Source/ACE.Entity/Enum/Properties/PropertyInt64.cs)
+
+UCM now checks reported Int64 counts without truncation and defers unreported
+counts to the normal server-validated equip request. This follows the supplied
+VT ga.cs requirement helper's behavior of permitting server validation for
+requirements beyond its local checks. Known unmet requirements still block;
+unsupported kinds still produce an explicit diagnostic. The equipment pool and
+Lua snapshot distinguish deferred validation from known eligibility. Server
+confirmation and the existing bounded equip retries remain authoritative.
+
+Only Int64 properties referenced by carried equipment invalidate cached item
+rows. Presence is part of the cache key, so receiving zero replaces an unknown
+count; ordinary XP/luminance updates do not rebuild every inventory entry.
+Fixtures use the dump's actual requirement, element, rend, slayer and caster
+bonus properties, with separate synthetic character counts. They exercise native
+snapshots, real private Int64 packets, automatic/pool/explicit selection and the
+shipped Lua casting policy. Live ILT acceptance remains a player verification.
+
+Win64 Development editor build passed. CustomWieldRequirements,
+VTankWeaponSelection, EquipmentBuffCycle, ActivityFailureIsolation,
+ImportAndSettingsUI and UCMIdleWorkload passed with zero test errors or warnings.
+Evidence: `TestOutput/UCMInt64Wands-20261104/report/index.json` and `tests.log`.
+
+## Mob controls and recovery follow-up (2026-11-04)
+
+The matrix now includes numeric priority (P, -1 through 10) and a Remove action
+on each non-default row. Pet selection remains in Details alongside weapon and
+offhand selection. Native rows copy Default when created and retain their own
+values; opening an older inherited row materializes its current settings before
+Default can be edited. Copy Default settings is an explicit action. Native name
+matching uses the longest matching prefix, with exact matches winning ties;
+imported VT expression rules retain their first-match order.
+
+Ordinary attacks (A) no longer gate debuff-only target admission. Bolt/arc
+selection also respects A independently from rings, streaks and Void curses.
+After a debuff-only row's effects are confirmed, it waits for expiry without
+selecting an ordinary damage attack or requiring a damage loadout.
+
+The native stamina-to-health threshold is independent from the ordinary healing
+threshold. Below it, eligible stamina-to-health spells are preferred and the
+lowest tier sufficient to reach the threshold is selected. Explicit supplies
+preference and imported recovery-handler order remain authoritative. A vital
+update cancels an unsent combat intent waiting for a stance transition so the
+policy can evaluate recovery first; an already submitted cast/equip is retained.
+
+Coverage includes matrix buttons and actual menus, save/reload, independent rows,
+longest-prefix/exact matching, debuff-only casting, conversion thresholds, and
+recovery overtaking an unsent attack. No live UCM recovery log was available in
+the supplied client logs; these are deterministic policy and host fixtures.
+
+Win64 Development editor build passed. The final ImportAndSettingsUI, Recovery
+and VoidCombat rerun completed without errors or warnings, including the actual
+P menu and file reload. Initial ActionDeck, ActionDeckMacroSyntax,
+RouteAndTellRequests and SchedulingParity coverage also passed. Evidence:
+`TestOutput/Nov4Reports/` and its `final/` report.
+
+## Custom caster eligibility and diagnostics (2026-11-04)
+
+The initial ILT report identified Blunt Sceptre, WCID 29260, GUID F06A016A, with
+the normal Caster item type. That initial report did not include its appraisal
+requirements or imbued properties, so it could not establish which eligibility
+check rejected that specific server item. See the later property-dump follow-up
+above. No tier limit or weapon-name whitelist was found.
+
+Compared the local VT `ga.cs` caster/appraisal selection and requirement checks
+with ACE `Player_Inventory.CheckWieldRequirement`. UCM had rejected BoolStat and
+CreatureType requirements unconditionally. It now evaluates those qualities,
+uses the resolved unbuffed vital for RawSecondaryAttrib, and invalidates cached
+eligibility when those player qualities change. All four requirement slots are
+checked. Unknown requirement types remain blocked and are explained explicitly.
+
+An explicit weapon no longer overrides a mob's Magic/Melee/Missile mode. Failed
+loadouts identify the rejected item and requirement, element/ammunition or mode
+conflict. The equipment pool says Assessed instead of implying combat readiness,
+shows unmet requirements, and presents caster element/bonus instead of absent
+physical weapon-profile damage and speed.
+
+Regression fixtures use the reported GUID/WCID and caster type with synthetic
+appraisal properties, through the native snapshot and shipped Lua. They cover
+automatic, pool-selected and explicit equipment, spell selection, high caster
+bonuses, unmet requirements and cache invalidation. These fixtures are not the
+ILT item's full appraisal and do not constitute a live ILT reproduction.
+
+Validated with a Win64 Development editor build and passing CustomWieldRequirements,
+VTankWeaponSelection, EquipmentBuffCycle, VoidCombat, Summoning, Decisions,
+ActivityFailureIsolation, ImportAndSettingsUI and UCMIdleWorkload automation tests.
+Decisions completed with its JSON missing-field warnings; the two requirement and
+inventory-refresh tests completed without warnings. Results are in the local
+`TestOutput/UCMCustomWands-20261104` reports (including the corrected fixture retest).
+
 ## Compact monster controls and pet-only operation (2026-11-01)
 
 Checked the supplied `utank2_decompiled/uTank2/PluginCore.cs` monster-column
@@ -12,11 +117,11 @@ that, and the runtime recognizes the old encoding. Explicit Ignore and negative
 priority still exclude pets. UCM additionally supports Summoning with Combat off.
 
 The native Mobs editor provides a compact default/mob matrix with
-immediate attack/debuff switches, combat mode and damage/pet selectors. Extended
+immediate attack/debuff switches, combat mode, priority and damage selectors. Extended
 columns cover all spell modes in the reference, with tooltips and full-size hit
 targets. Details shares all attack/debuff, mode, damage and pet controls with
-the table and adds weapon, offhand, secondary vulnerability, priority, range and
-native name matching. New native rows opt into live default inheritance; existing imported
+the table and adds weapon, offhand, pet selection, secondary vulnerability, range and
+native name matching. New native rows copy Default once; existing imported
 rows keep independent settings and matching expressions. Editing a switch does
 not stop UCM. No-attacks rules skip combat assessment, pursuit and equipment
 changes while remaining available to the independent summoning activity.

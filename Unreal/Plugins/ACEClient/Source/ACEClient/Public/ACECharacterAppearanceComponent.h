@@ -298,6 +298,7 @@ protected:
 	float LocomotionForward = 0.f;
 	ACEWalkingMotion::FSequence WalkingMotion;
 	float LocomotionTurn = 0.f;
+	float LocomotionTurnTime = 0.f;
 	bool bWalkingTransitionsEnabled = true;
 	bool bWalkingExternallyAdvanced = false;
 	bool bRemoteWalkingFramePending = false;

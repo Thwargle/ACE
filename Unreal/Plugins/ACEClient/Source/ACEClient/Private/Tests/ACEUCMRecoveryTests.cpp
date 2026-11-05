@@ -185,6 +185,19 @@ bool FACEUCMRecoveryTest::RunTest(const FString&)
         Settings->SetNumberField(TEXT("emergency_health_threshold"),0);FACEPluginVM Disabled;Disabled.Load(Source,Error);
         TestEqual(TEXT("Emergency conversion can be disabled"),Step(Disabled,State,Settings)->GetNumberField(TEXT("spell")),Spells[TEXT("Heal Self I")]->GetNumberField(TEXT("id")));
     }
+    // Conversion's own slider must work above the ordinary healing threshold,
+    // including when a regular heal could cover the whole deficit.
+    {
+        auto State=Snapshot(),Settings=Profile();Settings->SetNumberField(TEXT("health_threshold"),35);
+        Settings->SetNumberField(TEXT("emergency_health_threshold"),70);
+        State->SetNumberField(TEXT("health"),60);
+        State->SetArrayField(TEXT("spells"),{MakeShared<FJsonValueObject>(Spells[TEXT("Incantation of Heal Self")]),
+            MakeShared<FJsonValueObject>(Spells[TEXT("Stamina to Health Self II")])});
+        FACEPluginVM V;V.Load(Source,Error);
+        TestEqual(TEXT("Conversion slider independently triggers stamina-to-health"),Step(V,State,Settings)->GetNumberField(TEXT("spell")),Spells[TEXT("Stamina to Health Self II")]->GetNumberField(TEXT("id")));
+        State->SetNumberField(TEXT("health"),80);State->SetNumberField(TEXT("action_serial"),1);State->SetNumberField(TEXT("time"),101);
+        TestFalse(TEXT("Recovery stops when both thresholds are satisfied"),Step(V,State,Settings)->HasField(TEXT("spell")));
+    }
     // Buff priority must not depend on DAT IDs or spellbook enumeration.
     // Match VT's opening sequence, then the remaining magic schools.
     for(bool Forced:{false,true})

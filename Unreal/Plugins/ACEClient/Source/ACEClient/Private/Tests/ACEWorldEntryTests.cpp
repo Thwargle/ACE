@@ -1765,6 +1765,18 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
         UseTarget.SetupId=0;UseTarget.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
         UseTarget.ItemType=0;UseTarget.ItemUseable=32;UseTarget.InitialMotionCommand=ACEMotion::Ready;
         int32 ChargeErrors=0;
+        // A pending mouse-turn release must not cancel a custom direct-grant
+        // object after its Use was sent, even if the half-second timer expires.
+        ResetApproach(FVector(100,0,0));
+        UseTarget.ItemType=0x80;UseTarget.SetupId=0x02001B99;UseTarget.Name=TEXT("Corpse of Daimyo Nobanuga");
+        Session->WorldObjects.Add(UseTarget.Guid,UseTarget);
+        Controller->bMouseTurnSent=true;Controller->MouseTurnReportSeconds=.49f;
+        Controller->InteractWithObject(UseTarget.Guid);
+        const int32 BeforeMouseRelease=CountAction(ACEGameAction::MoveToState);
+        for(int32 Frame=0;Frame<90;++Frame)TickPlayer(1.f/60);
+        TestEqual(TEXT("Previous mouse turn does not cancel direct-grant Use"),CountAction(ACEGameAction::MoveToState),BeforeMouseRelease);
+        TestEqual(TEXT("Custom reward use is sent exactly once"),CountAction(ACEGameAction::Use),1);
+        Controller->EndUseApproach();Session->ClearPendingUse();UseTarget.SetupId=0;UseTarget.ItemType=0;
         const auto ChatHandle=Session->OnChatMessage.AddLambda([&](const FString& Message,const FString&,int32 Type)
         {
             if (Message==TEXT("You charged too far!"))

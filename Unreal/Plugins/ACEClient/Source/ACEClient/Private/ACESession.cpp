@@ -139,6 +139,7 @@ void FACESession::Disconnect()
 	TradePartnerGuid = 0;
 	TradeInitiatorGuid = 0;
 	TradeSelfItems.Reset();
+	TradeRemovedItems.Reset();
 	TradePartnerItems.Reset();
 	bUseBusy = false;
 	ResetCursorWaits();
@@ -295,6 +296,7 @@ void FACESession::ClearWorldState()
 	TradePartnerGuid = 0;
 	TradeInitiatorGuid = 0;
 	TradeSelfItems.Reset();
+	TradeRemovedItems.Reset();
 	TradePartnerItems.Reset();
 	bUseBusy = false;
 	ResetCursorWaits();
@@ -2364,6 +2366,14 @@ void FACESession::DeleteWorldObject(int32 Guid)
 {
 	ObjectVisibilityDeadlines.Remove(Guid);
 	ClosedContainerItemDeadlines.Remove(Guid);
+	// ACE removes completed trade offers with DeleteObject (not InventoryRemove).
+	// PickupEvent/attachment updates still preserve owned items in their own path.
+	if (TradeSelfItems.Contains(Guid))
+	{
+		TradeRemovedItems.Add(Guid);
+		RemoveInventoryObject(Guid);
+		return;
+	}
 	// ObjectDelete = leave the 3D world. Keep WorldObjects only for items the player still
 	// owns (main pack / side pack / wielded). Do NOT keep corpse/chest ViewContents rows or
 	// arbitrary ContainerId — that hid lifestones/chests after false inventory parses.
@@ -3146,6 +3156,13 @@ void FACESession::HandleWeenieError(FACEBinaryReader& Reader)
 		return;
 	}
 	const uint32 Code = Reader.ReadUInt32();
+	if (Code == 0x0529u) // TradeComplete: authoritative commit, before ResetTrade clears offers.
+	{
+		const auto Transferred = TradeSelfItems;
+		// ACE may recreate an item for its original owner if delivery fails.
+		// Its earlier Delete was already applied; do not erase that returned copy.
+		for (int32 Guid : Transferred) if (!TradeRemovedItems.Contains(Guid)) RemoveInventoryObject(Guid);
+	}
 	// Some servers reject a world Use with WeenieError alone, without UseDone.
 	// Do not retain its local busy gate until timeout after that terminal reply.
 	// Keep unrelated inventory/targeted-use transactions locked: a combat error
@@ -6550,6 +6567,7 @@ void FACESession::HandleRegisterTrade(FACEBinaryReader& Reader)
 	}
 	TradeAcceptedByGuid = 0;
 	TradeSelfItems.Reset();
+	TradeRemovedItems.Reset();
 	TradePartnerItems.Reset();
 	TradeInitiatorGuid = InitiatorGuid;
 	if (InitiatorGuid == PlayerGuid)
@@ -6586,6 +6604,7 @@ void FACESession::HandleCloseTrade(FACEBinaryReader& Reader)
 	TradeInitiatorGuid = 0;
 	TradeAcceptedByGuid = 0;
 	TradeSelfItems.Reset();
+	TradeRemovedItems.Reset();
 	TradePartnerItems.Reset();
 	OnTradeEvent.Broadcast(static_cast<int32>(ACEGameEvent::CloseTrade));
 }
@@ -6618,6 +6637,7 @@ void FACESession::HandleResetTradeEvent(FACEBinaryReader& Reader)
 	// Retail: resetting the trade clears both accept flags.
 	TradeAcceptedByGuid = 0;
 	TradeSelfItems.Reset();
+	TradeRemovedItems.Reset();
 	TradePartnerItems.Reset();
 	OnTradeEvent.Broadcast(static_cast<int32>(ACEGameEvent::ResetTrade));
 }
@@ -6634,6 +6654,7 @@ void FACESession::HandleAddToTradeEvent(FACEBinaryReader& Reader)
 	const int32 TradeSide = Reader.ReadInt32();
 	Reader.ReadInt32(); // location
 	TArray<int32>& Side = (TradeSide == 2) ? TradePartnerItems : TradeSelfItems;
+	if (TradeSide != 2) TradeRemovedItems.Remove(ItemGuid);
 	Side.Remove(ItemGuid);
 	Side.Add(ItemGuid);
 	TradeAcceptedByGuid = 0;
@@ -6648,6 +6669,7 @@ void FACESession::HandleRemoveFromTradeEvent(FACEBinaryReader& Reader)
 		const int32 ItemGuid = static_cast<int32>(Reader.ReadUInt32());
 		const int32 TradeSide = Reader.ReadInt32();
 		TArray<int32>& Side = (TradeSide == 2) ? TradePartnerItems : TradeSelfItems;
+		if (TradeSide != 2) TradeRemovedItems.Remove(ItemGuid);
 		Side.Remove(ItemGuid);
 	}
 	OnTradeEvent.Broadcast(static_cast<int32>(ACEGameEvent::RemoveFromTrade));
@@ -6668,6 +6690,7 @@ void FACESession::HandleClearTradeAcceptance(FACEBinaryReader& Reader)
 	// ACE clears ItemsInTradeWindow when broadcasting ClearTradeAcceptance.
 	TradeAcceptedByGuid = 0;
 	TradeSelfItems.Reset();
+	TradeRemovedItems.Reset();
 	TradePartnerItems.Reset();
 	OnTradeEvent.Broadcast(static_cast<int32>(ACEGameEvent::ClearTradeAcceptance));
 }

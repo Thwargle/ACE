@@ -51,7 +51,10 @@
     for(const auto& Key:DebuffKeys){const bool Expected=!Panel->MonsterFlag(MatrixRule,Key);Click(TEXT("Sir Bellas"),Key);SavedDebuffs.Add(Key,Expected);}
     TestTrue(TEXT("Click overrides only the chosen monster"),Panel->MonsterFlag(MatrixRule,TEXT("bolt"))&&!Panel->MonsterFlag(Default,TEXT("bolt")));
     Click(TEXT("<DEFAULT>"),TEXT("debuff_vuln"));
-    TestTrue(TEXT("Unchanged switches follow default immediately"),Panel->MonsterFlag(MatrixRule,TEXT("debuff_vuln")));
+    TestFalse(TEXT("Default edits leave existing mob switches unchanged"),Panel->MonsterFlag(MatrixRule,TEXT("debuff_vuln")));
+    TestEqual(TEXT("New mob priority starts at zero"),Num(MatrixRule,TEXT("priority")),0.);
+    TestTrue(TEXT("Each mob has a priority dropdown"),FindMobWidget(Panel,TEXT("UCMMonster.Sir Bellas.priority")).IsValid());
+    TestFalse(TEXT("Pet configuration is kept in Details"),FindMobWidget(Panel,TEXT("UCMMonster.Sir Bellas.pet_damage_type")).IsValid());
     Panel->AddMonster(TEXT("sir bellas"));TestEqual(TEXT("Adding the same monster does not duplicate it"),Plugin->Profile->GetArrayField(TEXT("monsters")).Num(),2);
     Panel->ExpandedMonster=INDEX_NONE;Panel->Rebuild();
     TestFalse(TEXT("No duplicate pet-only shortcut"),FindButton(Panel,TEXT("Summon without attacking")).IsValid());
@@ -172,9 +175,8 @@
             Click(TEXT("Sir Bellas"),Mode.Key);
             TestEqual(TEXT("Table updates the same row settings as Details"),Panel->MonsterFlag(MatrixRule,Mode.Key),Before);
             auto Reset=FindMobWidget(Panel,FName(*(TEXT("UCMMobDefault.Sir Bellas.")+FString(Mode.Key))));
-            if(TestTrue(TEXT("Inherited flag can be restored individually"),Reset.IsValid()))StaticCastSharedPtr<SButton>(Reset)->SimulateClick();
-            TestFalse(TEXT("Restoring Default removes only the flag override"),MatrixRule->HasField(Mode.Key));
-            TestEqual(TEXT("Restored flag follows Default immediately"),Panel->MonsterFlag(MatrixRule,Mode.Key),Panel->MonsterFlag(Panel->MonsterDefaults(),Mode.Key));
+            TestFalse(TEXT("Independent mob rows have no ambiguous inheritance checkbox"),Reset.IsValid());
+            TestTrue(TEXT("Every mode remains explicitly saved"),MatrixRule->HasField(Mode.Key));
         }
     }
     for(const TCHAR* Key:{TEXT("combat"),TEXT("damage_type"),TEXT("pet_damage_type"),TEXT("secondary_vuln"),TEXT("weapon"),TEXT("secondary_equip")})
@@ -193,7 +195,7 @@
         auto Paint=[&](){++GFrameCounter;Renderer.DrawWindow(Target,Window->GetHittestGrid(),Window,1.f,Size,.016f);FlushRenderingCommands();};
         auto Choose=[&](const TCHAR* Key,const TCHAR* Caption)
         {
-            auto W=FindMobWidget(Panel,FName(*(FString(TEXT("UCMMobDetail.Sir Bellas."))+Key)));if(!TestTrue(TEXT("Details selector exists"),W.IsValid()))return;
+            auto W=FindMobWidget(Panel,FName(*(FString(Key==FString(TEXT("priority"))?TEXT("UCMMonster.Sir Bellas."):TEXT("UCMMobDetail.Sir Bellas."))+Key)));if(!TestTrue(TEXT("Mob selector exists"),W.IsValid()))return;
             Panel->BodyScroll->ScrollDescendantIntoView(W,false,EDescendantScrollDestination::IntoView);for(int Pass=0;Pass<4;++Pass)Paint();
             auto Combo=StaticCastSharedPtr<SComboButton>(W);Combo->SetIsOpen(true);Paint();auto Menu=Combo->GetMenuWindow();
             if(!TestTrue(TEXT("Details selector opens its actual menu"),Menu.IsValid()))return;
@@ -204,17 +206,21 @@
         ACERuntimeOptions::Set(TEXT("PluginTextScale"),1);Panel->Rebuild();for(int Pass=0;Pass<4;++Pass)Paint();
         Choose(TEXT("combat"),TEXT("No attacks"));Choose(TEXT("damage_type"),TEXT("Fire"));Choose(TEXT("pet_damage_type"),TEXT("Cold"));
         Choose(TEXT("secondary_vuln"),TEXT("Electric"));Choose(TEXT("weapon"),TEXT("Casting device"));Choose(TEXT("secondary_equip"),TEXT("Shield"));
+        Choose(TEXT("priority"),TEXT("4"));
         TestTrue(TEXT("Reload another mob profile"),Host->SelectUCMSection(TEXT("Monsters"),TEXT("Default")));
         TestTrue(TEXT("Reload Details edits"),Host->SelectUCMSection(TEXT("Monsters"),TEXT("Matrix")));
         MatrixRule=Plugin->Profile->GetArrayField(TEXT("monsters"))[1]->AsObject();Panel->ExpandedMonster=1;Panel->Rebuild();
         TestEqual(TEXT("Combat mode survives reload"),Str(MatrixRule,TEXT("combat")),FString(TEXT("off")));
+        TestEqual(TEXT("Matrix priority selection survives reload"),Num(MatrixRule,TEXT("priority")),4.);
         TestEqual(TEXT("Damage type survives reload"),Num(MatrixRule,TEXT("damage_type")),16.);
         TestEqual(TEXT("Pet type survives reload"),Num(MatrixRule,TEXT("pet_damage_type")),5.);
         TestEqual(TEXT("Secondary vulnerability survives reload"),Num(MatrixRule,TEXT("secondary_vuln")),64.);
         TestEqual(TEXT("Weapon survives reload"),Num(MatrixRule,TEXT("weapon"),-1),0.);
         TestEqual(TEXT("Offhand survives reload"),Num(MatrixRule,TEXT("secondary_equip")),1.);
         TestTrue(TEXT("Exact-name matching survives reload"),Bool(MatrixRule,TEXT("exact")));
-        Choose(TEXT("damage_type"),TEXT("Use default"));TestFalse(TEXT("Details selector can restore Default"),MatrixRule->HasField(TEXT("damage_type")));
+        auto Copy=FindButton(Panel,TEXT("Copy Default settings"));
+        if(TestTrue(TEXT("Details can explicitly copy Default"),Copy.IsValid()))Copy->SimulateClick();
+        TestEqual(TEXT("Explicit copy restores Default damage"),Num(Panel->EffectiveMonster(MatrixRule),TEXT("damage_type")),Num(Panel->EffectiveMonster(Panel->MonsterDefaults()),TEXT("damage_type")));
         // Use a virtual window for offscreen hit testing; a hidden native
         // window is intentionally excluded from LocateWindowUnderMouse.
         Window->SetContent(SNew(SBox));
@@ -242,6 +248,8 @@
         }
     }
     Panel->ExpandedMonster=INDEX_NONE;Panel->Rebuild();
+    Panel->AddMonster(TEXT("Temporary mob"));Click(TEXT("Temporary mob"),TEXT("remove"));
+    TestFalse(TEXT("Remove acts directly from the matrix"),FindMonsterName(TEXT("Temporary mob")).IsValid());
     auto ManyRules=Plugin->Profile->GetArrayField(TEXT("monsters"));
     for(int32 I=0;I<24;++I){auto R=MakeShared<FJsonObject>();R->SetStringField(TEXT("name"),FString::Printf(TEXT("Monster %d"),I));ManyRules.Add(MakeShared<FJsonValueObject>(R));}
     Plugin->Profile->SetArrayField(TEXT("monsters"),ManyRules);Panel->Save();Panel->AddMonster(TEXT("Last monster"));

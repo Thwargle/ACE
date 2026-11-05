@@ -463,6 +463,19 @@ as well. `identified=false` means a property may be unknown; it is not evidence
 that the property is zero. Automation appraisal uses inventory permission;
 companions use the narrower identify permission above.
 
+Assessed inventory entries expose `can_wield` and, when a requirement fails,
+`wield_reason`. The reason identifies the requirement slot, type/property, required
+value and observed value. Eligibility checks all four wield-requirement triplets,
+including boolean, creature-type and ILT Int64Stat (13) checks used by custom servers.
+For type 13, the property ID refers to a 64-bit character quality, not an integer
+quality or skill. When that count has not been replicated, `can_wield=true` permits
+an equip attempt and `wield_requires_server_check=true` indicates that the server
+must validate the missing count. A received zero is known and checked normally;
+other known unmet requirements still prevent the attempt. Already-worn
+equipment is usable in the snapshot; sending a new equip action rechecks current
+requirements. Server responses remain authoritative. `identified=true` alone
+does not mean an item meets requirements or has a usable combat loadout.
+
 An API 2 companion requesting only `inventory`, `inventory_revision` and
 `appraisal_revision` through `snapshot_fields` builds the cached inventory section
 without also building spells, vendor data or scanning combat targets. It still

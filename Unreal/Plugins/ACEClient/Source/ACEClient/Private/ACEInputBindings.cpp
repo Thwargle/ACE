@@ -7,6 +7,7 @@
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Layout/WidgetPath.h"
 namespace ACEInputBindings
 {
 struct FBinding : FInputChord
@@ -146,8 +147,9 @@ const TArray<FAction>& Actions()
    else Keys.Add(FInputChord(Digits[I-9],false,false,true,false));
    Result.Emplace(Shortcut(I),Labels[I],TEXT("Combat"),MoveTemp(Keys));
   }
-  static const TCHAR* SpellLabels[]={TEXT("Magic: spell 1"),TEXT("Magic: spell 2"),TEXT("Magic: spell 3"),TEXT("Magic: spell 4"),TEXT("Magic: spell 5"),TEXT("Magic: spell 6"),TEXT("Magic: spell 7"),TEXT("Magic: spell 8"),TEXT("Magic: spell 9")};
-  for(int32 I=0;I<9;++I)Result.Emplace(SpellSlot(I),SpellLabels[I],TEXT("Combat"),TArray<FInputChord>{FInputChord(Digits[I])},8);
+  static const TCHAR* SpellLabels[]={TEXT("Magic: spell 1"),TEXT("Magic: spell 2"),TEXT("Magic: spell 3"),TEXT("Magic: spell 4"),TEXT("Magic: spell 5"),TEXT("Magic: spell 6"),TEXT("Magic: spell 7"),TEXT("Magic: spell 8"),TEXT("Magic: spell 9"),TEXT("Magic: spell 10"),TEXT("Magic: spell 11"),TEXT("Magic: spell 12")};
+  static const FKey ExtraSpellKeys[]={EKeys::Zero,EKeys::Hyphen,EKeys::Equals};
+  for(int32 I=0;I<12;++I)Result.Emplace(SpellSlot(I),SpellLabels[I],TEXT("Combat"),TArray<FInputChord>{FInputChord(I<9?Digits[I]:ExtraSpellKeys[I-9])},8);
   Result.Append(ACERetailAdditionalActions());
   // Keep the three retail mapping slots intact, including imported keymaps.
   const TMap<FKey,FKey> Controller={
@@ -279,10 +281,17 @@ bool IsTextEntryFocused()
 {
  if(!FSlateApplication::IsInitialized())return false;
  const auto Focus=FSlateApplication::Get().GetKeyboardFocusedWidget();
+ // A collapsed/removed panel may retain Slate focus until the next click or
+ // portal. Only a visible, enabled path can own typing and suppress hotkeys.
+ if(!Focus)return false;
+ if(!Focus->GetTypeAsString().Contains(TEXT("EditableText")) && !Focus->GetTypeAsString().Contains(TEXT("RetailTextEntry")))return false;
+ FWidgetPath Path;
+ if(!FSlateApplication::Get().GeneratePathToWidgetUnchecked(Focus.ToSharedRef(),Path))return false;
+ for(auto W=Focus;W;W=W->GetParentWidget())
+  if(!W->GetVisibility().IsVisible()||!W->IsEnabled())return false;
  // DAT panels use our bitmap-font editor rather than Slate's EditableText.
  // Both must own typing before either polled or immediate gameplay bindings.
- return Focus.IsValid() && (Focus->GetTypeAsString().Contains(TEXT("EditableText"))
-  || Focus->GetTypeAsString().Contains(TEXT("RetailTextEntry")));
+ return true;
 }
 static bool Check(const APlayerController* PC,FKey Key,bool bPressed)
 {

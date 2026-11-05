@@ -268,7 +268,8 @@ bool FACEUCMProfilePanelTest::RunTest(const FString&)
         for(const auto& Child:Children)OpenDetails(Child);
     };
     OpenDetails(MonstersPanel);const FString Monsters=CollectText(MonstersPanel);
-    TestTrue(TEXT("Monster details retain default priority and range"),Monsters.Contains(TEXT("Priority: use default"))&&Monsters.Contains(TEXT("Attack Range: use default")));
+    TestTrue(TEXT("Mob details expose priority and retain default range"),Monsters.Contains(TEXT("Priority\n"))&&Monsters.Contains(TEXT("Attack Range: use default")));
+    TestFalse(TEXT("Priority has no redundant default checkbox"),Monsters.Contains(TEXT("Priority: use default")));
     TestTrue(TEXT("Monster search and name action exist"),Monsters.Contains(TEXT("Search"))&&Monsters.Contains(TEXT("Add\n")));
     TestTrue(TEXT("Details exposes the complete attack profile"),Monsters.Contains(TEXT("Combat mode\n"))&&Monsters.Contains(TEXT("Imperil\n"))&&Monsters.Contains(TEXT("Ring spells\n"))&&Monsters.Contains(TEXT("Pet damage type\n"))&&Monsters.Contains(TEXT("Secondary vulnerability\n")));
     TestTrue(TEXT("Tab uses Mobs while existing initial page names remain compatible"),Monsters.Contains(TEXT("Mobs\n"))&&!Monsters.Contains(TEXT("Monsters\n")));

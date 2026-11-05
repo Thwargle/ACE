@@ -329,6 +329,8 @@ protected:
 	float RightSent = 0.f;
 	float TurnSent = 0.f;
 	float MouseTurnReportSeconds = .5f;
+	float MouseTurnAnimationRate = 0.f;
+	float MouseTurnAnimationIdle = 0.f;
 	bool bMouseTurnSent = false;
 	bool bRunning = true; // AC default: run; Shift holds walk
 	bool bRunningSent = true;

@@ -1183,7 +1183,7 @@ void UACECharacterAppearanceComponent::SetTurnInput(float Turn)
 {
 	if (FMath::Sign(Turn)!=FMath::Sign(LocomotionTurn) && AnimMode==EACEAnimMode::Locomotion
 		&& FMath::IsNearlyZero(LocomotionForward) && FMath::IsNearlyZero(LocomotionStrafe))
-	{ AnimTime=0.f; ResetHookTracking(); }
+	{ AnimTime=0.f; LocomotionTurnTime=0.f; ResetHookTracking(); }
 	LocomotionTurn=Turn;
 }
 
@@ -2150,6 +2150,10 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 			: (AnimMode == EACEAnimMode::ActionOneShot) ? ActionPlayRate : LocomotionPlayRate;
 		AnimTime += DeltaTime * Rate;
 	}
+	// Integrate speed. Multiplying total elapsed time by the latest mouse rate
+	// jumps backwards/forwards through the clip whenever that rate changes.
+	if (AnimMode == EACEAnimMode::Locomotion)
+		LocomotionTurnTime += DeltaTime * LocomotionPlayRate * LocomotionTurn;
 	UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
 	if (!GI)
 	{
@@ -2604,7 +2608,7 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 		}
 	}
 	if (!bMoving && !FMath::IsNearlyZero(LocomotionTurn))
-		bOk = Evaluate(ACEMotion::TurnRight, AnimTime*LocomotionTurn, Animated, AnimatedCount, true, &Hooks);
+		bOk = Evaluate(ACEMotion::TurnRight, LocomotionTurnTime, Animated, AnimatedCount, true, &Hooks);
 	if (!bOk)
 	{
 		const uint64 IdleTrackKey = (5ull << 60) | static_cast<uint32>(MotionTableId)

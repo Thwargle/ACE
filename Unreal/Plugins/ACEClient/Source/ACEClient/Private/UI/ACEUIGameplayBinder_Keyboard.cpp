@@ -378,7 +378,7 @@ void UACEUIGameplayBinder::PollKeyboardActions(APlayerController* PC)
   UseShortcutSlot(I+1);
   break;
  }
- for(int32 I=0;I<9;++I)if(ACEInputBindings::Pressed(PC,ACEInputBindings::SpellSlot(I))){ActivateHotbarSlot(I);break;}
+ for(int32 I=0;I<12;++I)if(ACEInputBindings::Pressed(PC,ACEInputBindings::SpellSlot(I))){ActivateHotbarSlot(I);break;}
  if(ACEInputBindings::Pressed(PC,EKeys::Zero))
  {
   const int32 Guid=Client->GetSelectedObject().Guid;

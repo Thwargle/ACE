@@ -1166,6 +1166,8 @@ private:
 	int32 TradePartnerGuid = 0;
 	int32 TradeAcceptedByGuid = 0;
 	TArray<int32> TradeSelfItems;
+	// A completed trade must not remove an offered item twice if ACE returned it.
+	TSet<int32> TradeRemovedItems;
 	TArray<int32> TradePartnerItems;
 	bool bUseBusy = false;
 	// Independent waits preserve the hourglass when one overlapping operation finishes.

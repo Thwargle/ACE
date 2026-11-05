@@ -7,6 +7,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Mods/ACEPluginVM.h"
 #include "Mods/ACEPluginCombat.h"
+#include "Mods/ACEPluginEquipment.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "Mods/ACEUCMProfiles.h"
 #include "Mods/ACEVTProfile.h"
@@ -90,6 +91,55 @@ bool FACEUCMWeaponSelectionTest::RunTest(const FString&)
         Wands[Index]->AsObject()->SetBoolField(TEXT("equipped"),false);
         Item(Step(S,P),90+Index,TEXT("Monster element selects the matching elemental wand"));
     }
+    // Reported custom wand identity, through the native snapshot and real Lua.
+    // Zero physical weapon-profile fields are normal for a caster. Custom GUIDs
+    // and bonuses must not require a retail WCID/name whitelist.
+    FACEWorldObject Custom;Custom.Guid=int32(0xF06A016Au);Custom.WeenieClassId=29260;
+    Custom.Name=TEXT("Blunt Sceptre");Custom.ItemType=ACEItemType::Caster;Custom.ValidLocations=0x1000000;
+    // Gameplay properties from the user's UB dump; character counts are a
+    // separate fixture, since the dump describes the item, not its owner.
+    FACEAppraisalInfo CustomAppraisal;CustomAppraisal.bSuccess=true;
+    CustomAppraisal.IntProperties={{45,4},{179,32},{166,82},{273,13},{274,9007},{275,5500},{276,13},{277,9009},{278,3500}};
+    CustomAppraisal.FloatProperties={{152,2.9275233745575},{144,0.200000002980232},{29,1.20000004768372},{9056,1.91069092857143}};
+    Host->Appraisals.Add(Custom.Guid,CustomAppraisal);
+    auto Wand=Host->PluginItemSnapshot(Custom)->AsObject();
+    TestFalse(TEXT("Pre-login zero owner IDs do not mark a wand equipped"),Wand->GetBoolField(TEXT("equipped")));
+    TestEqual(TEXT("Custom wand GUID survives the native snapshot"),Wand->GetNumberField(TEXT("id")),double(0xF06A016Au));
+    TestEqual(TEXT("Custom caster bonus survives without a weapon profile"),Wand->GetNumberField(TEXT("element_mod")),2.9275233745575);
+    TestTrue(TEXT("Unreported custom augmentation counts permit a server-validated equip attempt"),Wand->GetBoolField(TEXT("can_wield")));
+    TestTrue(TEXT("Native snapshot distinguishes unknown counts from confirmed eligibility"),Wand->GetBoolField(TEXT("wield_requires_server_check")));
+    FACEPlayerVitals Qualifying;Qualifying.QualityInt64s={{9007,5500},{9009,3500}};
+    for(bool CountsKnown:{false,true})for(const TCHAR* Mode:{TEXT("auto"),TEXT("magic")})for(int32 Choice=0;Choice<3;++Choice)
+    {
+        bool RequiresServerCheck=false;
+        Wand->SetBoolField(TEXT("can_wield"),ACEPluginEquipment::WieldFailure(CustomAppraisal,CountsKnown?Qualifying:FACEPlayerVitals(),&RequiresServerCheck).IsEmpty());
+        Wand->SetBoolField(TEXT("wield_requires_server_check"),RequiresServerCheck);
+        TestEqual(TEXT("Only missing counts defer the requirement check"),RequiresServerCheck,!CountsKnown);
+        S=State();P=Profile();auto Rule=Json(TEXT(R"({"default":true,"bolt":true,"damage_type":4})"));Rule->SetStringField(TEXT("combat"),Mode);
+        if(Choice==1)P->SetArrayField(TEXT("weapon_items"),{MakeShared<FJsonValueNumber>(uint32(Custom.Guid))});
+        if(Choice==2)Rule->SetNumberField(TEXT("weapon"),uint32(Custom.Guid));
+        P->SetArrayField(TEXT("monsters"),{MakeShared<FJsonValueObject>(Rule)});
+        auto Melee=Json(TEXT(R"({"id":90,"name":"Melee weapon","type":1,"damage_type":1,"damage":5,"identified":true,"can_wield":true})"));
+        S->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(Melee),MakeShared<FJsonValueObject>(Wand)});
+        S->SetArrayField(TEXT("spells"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":1001,"category":118,"school":1,"power":100,"skill":400})")))});
+        Wand->SetBoolField(TEXT("equipped"),false);
+        TestEqual(TEXT("Auto, selected pool and explicit custom caster all equip"),Step(S,P)->GetNumberField(TEXT("item")),double(uint32(Custom.Guid)));
+        Wand->SetBoolField(TEXT("equipped"),true);
+        TestEqual(TEXT("Custom blunt caster attacks with bludgeoning magic"),Step(S,P)->GetNumberField(TEXT("spell")),1001.);
+        if(Choice==2&&FString(Mode)==TEXT("magic"))
+        {
+            Rule->SetNumberField(TEXT("damage_type"),0);
+            Rule->SetNumberField(TEXT("weapon"),90);
+            auto I=Step(S,P);
+            TestEqual(TEXT("Magic-only mode never equips an explicitly conflicting melee weapon"),I->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
+            TestTrue(TEXT("Conflicting weapon mode is explained"),I->GetStringField(TEXT("status")).Contains(TEXT("does not match magic mode")));
+        }
+    }
+    Wand->SetBoolField(TEXT("equipped"),false);Wand->SetBoolField(TEXT("can_wield"),false);
+    Wand->SetStringField(TEXT("wield_reason"),TEXT("Wield requirement 2: boolean property 999 must be true (have false)"));
+    P->SetArrayField(TEXT("monsters"),{});P->SetArrayField(TEXT("weapon_items"),{MakeShared<FJsonValueNumber>(uint32(Custom.Guid))});
+    auto Blocked=Step(S,P);
+    TestTrue(TEXT("A blocked custom wand names its failed requirement"),Blocked->GetStringField(TEXT("status")).Contains(TEXT("Blunt Sceptre: Wield requirement 2: boolean property 999")));
     // Neutral rend wand chooses rend's spell, not its absent damage profile.
     S=State();P=Profile();P->SetStringField(TEXT("combat"),TEXT("magic"));
     Target=S->GetArrayField(TEXT("targets"))[0]->AsObject();Target->SetArrayField(TEXT("preferred_elements"),{MakeShared<FJsonValueNumber>(16)});
@@ -159,6 +209,52 @@ bool FACEUCMWeaponSelectionTest::RunTest(const FString&)
         TestTrue(TEXT("Saved shared file reloads"),Load(Root,ActiveName(),Reloaded,Links,Error));
         TestEqual(TEXT("Shared version survives reload without flipping again"),Reloaded->GetArrayField(TEXT("monsters"))[0]->AsObject()->GetNumberField(TEXT("damage_type")),16.);
     }
+    return !HasAnyErrors();
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMWieldRequirementsTest,"ACE.Plugins.CustomWieldRequirements",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMWieldRequirementsTest::RunTest(const FString&)
+{
+    FACEPlayerVitals V;V.Level=300;V.HeritageGroup=2;V.StatQualityInts.Add(2,31);V.StatQualityInts.Add(999,12);V.QualityBools.Add(999,true);
+    V.Strength=400;V.BaseMaxHealth=500;V.MaxHealth=600;
+    FACESkillInfo Skill;Skill.SkillId=34;Skill.Base=600;Skill.Current=650;Skill.AdvancementClass=3;V.Skills.Add(Skill);
+    // ACE checks all four requirement slots, including BoolStat and CreatureType
+    // which are uncommon in retail loot but supported on custom servers.
+    V.QualityInt64s.Add(9007,5500);
+    const int32 Kinds[]={1,2,4,5,6,7,8,9,10,11,12,13};
+    const int32 Ids[]={34,34,1,1,1,0,34,999,999,0,0,9007};
+    const int32 Values[]={650,600,400,600,500,300,3,12,1,31,2,5500};
+    for(int32 Key:{158,270,273,276})for(int32 N=0;N<UE_ARRAY_COUNT(Kinds);++N)
+    {
+        FACEAppraisalInfo A;A.bSuccess=true;A.IntProperties.Add(Key,Kinds[N]);A.IntProperties.Add(Key+1,Ids[N]);A.IntProperties.Add(Key+2,Values[N]);
+        TestTrue(*FString::Printf(TEXT("Requirement %d in slot %d accepts eligible custom gear"),Kinds[N],Key),ACEPluginEquipment::WieldFailure(A,V).IsEmpty());
+        A.IntProperties[Key+2]=Kinds[N]==10?0:Values[N]+1;
+        TestFalse(*FString::Printf(TEXT("Requirement %d in slot %d still rejects unmet requirements"),Kinds[N],Key),ACEPluginEquipment::WieldFailure(A,V).IsEmpty());
+    }
+    FACEAppraisalInfo A;A.bSuccess=true;A.IntProperties.Add(158,10);A.IntProperties.Add(159,998);A.IntProperties.Add(160,0);
+    TestTrue(TEXT("Absent boolean quality follows ACE's false default"),ACEPluginEquipment::WieldFailure(A,V).IsEmpty());
+    A.IntProperties={{273,13},{274,9007},{275,5500},{276,13},{277,9009},{278,3500}};
+    V.StatQualityInts.Add(9009,MAX_int32);
+    bool RequiresServerCheck=false;
+    TestTrue(TEXT("Unreported Int64 counts defer to server equip validation"),ACEPluginEquipment::WieldFailure(A,V,&RequiresServerCheck).IsEmpty());
+    TestTrue(TEXT("Deferred validation is exposed"),RequiresServerCheck);
+    V.QualityInt64s.Add(9009,0);
+    TestTrue(TEXT("ILT gates use Int64, not a same-numbered Int property"),ACEPluginEquipment::WieldFailure(A,V).Contains(TEXT("property 9009 requires 3500 (have 0)")));
+    V.QualityInt64s.Add(9009,3499);
+    TestFalse(TEXT("One augmentation below the fourth requirement fails"),ACEPluginEquipment::WieldFailure(A,V).IsEmpty());
+    V.QualityInt64s[9009]=3500;
+    TestTrue(TEXT("Both exact UB dump thresholds pass"),ACEPluginEquipment::WieldFailure(A,V,&RequiresServerCheck).IsEmpty());
+    TestFalse(TEXT("Known counts clear deferred validation"),RequiresServerCheck);
+    V.QualityInt64s[9007]=int64(1)<<40;
+    TestTrue(TEXT("Augmentation counts retain all 64 bits during comparison"),ACEPluginEquipment::WieldFailure(A,V).IsEmpty());
+    V.QualityInt64s[9007]=-1;
+    TestFalse(TEXT("Negative Int64 values do not become large unsigned counts"),ACEPluginEquipment::WieldFailure(A,V).IsEmpty());
+    V.QualityInt64s.Remove(9007);
+    A.IntProperties[276]=7;A.IntProperties[278]=V.Level+1;
+    TestTrue(TEXT("An unreported custom count does not bypass a later failed level check"),ACEPluginEquipment::WieldFailure(A,V).Contains(TEXT("Wield requirement 4: level")));
+    A.IntProperties.Reset();
+    A.IntProperties.Add(158,99);
+    TestTrue(TEXT("Unknown custom requirements are reported, not silently bypassed"),ACEPluginEquipment::WieldFailure(A,V).Contains(TEXT("unsupported type 99")));
     return !HasAnyErrors();
 }
 #endif

@@ -1555,6 +1555,13 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
                 Session.ApplyServerCombatMode(Mode);H->UpdateCombatTransition(*P);
                 TestEqual(TEXT("Late stance acknowledgment cannot dispatch an obsolete attack"),Mode==8?CastCount():AttackCount(),Before);
             }
+            P->Profile->SetBoolField(TEXT("recovery"),true);
+            P->CombatTransitionIntent=AttackIntent(971,2);P->CombatTransitionIntent->SetStringField(TEXT("activity"),TEXT("combat"));
+            P->NextAction=FPlatformTime::Seconds()+5;P->NextDecision=P->NextAction;
+            auto Hurt=Session.PlayerVitals;Hurt.Health=20;Hurt.MaxHealth=100;H->LastCombatVitals=FIntVector(100,100,100);
+            H->ObserveCombatVitals(Hurt);
+            TestFalse(TEXT("Damage during stance preparation drops the unsent combat decision"),P->CombatTransitionIntent.IsValid());
+            TestTrue(TEXT("Recovery can reevaluate immediately after damage"),P->NextAction==0&&P->NextDecision==0);
             H->CombatTarget=971;H->PendingSpell=0;P->WaitAction=TEXT("identify");P->WaitItem=971;P->NextAction=FPlatformTime::Seconds()-1;
             H->RefreshActionWait(*P);P->NextDecision=FPlatformTime::Seconds()+.25;
             FTSTicker::GetCoreTicker().RemoveTicker(H->DecisionWakeTicker);H->DecisionWakeTicker.Reset();

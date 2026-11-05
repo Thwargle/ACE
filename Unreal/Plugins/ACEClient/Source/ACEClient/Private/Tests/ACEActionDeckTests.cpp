@@ -308,6 +308,10 @@ bool FACEActionDeckTest::RunTest(const FString&)
     Slate.SetKeyboardFocus(Entry);
     TestTrue(TEXT("Typing fixture has text focus"),ACEInputBindings::IsTextEntryFocused());
     TestFalse(TEXT("Typing never triggers the deck"),Deck->HandleKey(Deck->EffectiveKey(24),false));
+    Entry->SetVisibility(EVisibility::Collapsed);
+    TestFalse(TEXT("A hidden editor cannot retain gameplay's typing gate"),ACEInputBindings::IsTextEntryFocused());
+    TestTrue(TEXT("Deck shortcuts recover without a portal or relog"),Deck->HandleKey(Deck->EffectiveKey(24),false));
+    Entry->SetVisibility(EVisibility::Visible);
     Slate.ClearKeyboardFocus();Deck->ConfigOpen=true;
     TestTrue(TEXT("Settings keep native hotbars blocked"),Deck->HandleKey(Deck->EffectiveKey(24),false));Deck->ConfigOpen=false;
     Deck->Override=false;TestFalse(TEXT("Override off restores native hotbars"),Deck->HandleKey(Deck->EffectiveKey(24),false));Deck->Override=true;

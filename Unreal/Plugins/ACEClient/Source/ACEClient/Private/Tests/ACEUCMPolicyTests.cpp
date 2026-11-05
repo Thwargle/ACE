@@ -918,7 +918,54 @@ bool FACEPluginEquipmentTest::RunTest(const FString&)
             if(Action==TEXT("cast"))TestEqual(TEXT("Native Void chooses its known spell"),uint32(Intent->GetNumberField(TEXT("spell"))),SpellId);
         }
     }
-    return true;
+    // Custom wield eligibility must refresh when server boolean qualities or
+    // raw maximum vitals change, even with no new inventory or appraisal event.
+    FACEWorldObject Custom;Custom.Guid=int32(0xF06A016Au);Custom.WeenieClassId=29260;Custom.Name=TEXT("Blunt Sceptre");
+    Custom.ItemType=ACEItemType::Caster;Custom.ContainerId=Session.PlayerGuid;Custom.ValidLocations=ACEEquipMask::Held;
+    Session.UpsertWorldObject(Custom);
+    FACEBinaryWriter Contain;Contain.WriteUInt32(uint32(Custom.Guid));Contain.WriteUInt32(uint32(Session.PlayerGuid));Contain.WriteInt32(0);Contain.WriteInt32(0);
+    FACEBinaryReader ContainReader(Contain.GetData());Session.HandleInventoryPutObjInContainer(ContainReader);
+    FACEAppraisalInfo CustomInfo;CustomInfo.ObjectGuid=Custom.Guid;CustomInfo.bSuccess=true;
+    CustomInfo.IntProperties.Add(158,10);CustomInfo.IntProperties.Add(159,999);CustomInfo.IntProperties.Add(160,1);
+    H->ObserveAppraisal(CustomInfo);
+    auto CustomSnapshot=[&]()->TSharedPtr<FJsonObject>{auto Snapshot=MakeShared<FJsonObject>();H->ExtendInventorySnapshot(Snapshot);
+        for(auto Item:Snapshot->GetArrayField(TEXT("inventory")))if(Item->AsObject()->GetNumberField(TEXT("id"))==double(uint32(Custom.Guid)))return Item->AsObject();
+        AddError(TEXT("Custom wand missing from inventory snapshot"));return MakeShared<FJsonObject>();};
+    auto Row=CustomSnapshot();TestFalse(TEXT("Unmet boolean requirement blocks custom wand"),Row->GetBoolField(TEXT("can_wield")));
+    TestTrue(TEXT("Native eligibility exposes which custom requirement failed"),Row->GetStringField(TEXT("wield_reason")).Contains(TEXT("boolean property 999")));
+    Session.PlayerVitals.QualityBools.Add(999,true);
+    TestTrue(TEXT("Server boolean change invalidates cached eligibility"),CustomSnapshot()->GetBoolField(TEXT("can_wield")));
+    CustomInfo.IntProperties[158]=6;CustomInfo.IntProperties[159]=1;CustomInfo.IntProperties[160]=500;
+    Session.PlayerVitals.BaseMaxHealth=499;H->ObserveAppraisal(CustomInfo);
+    TestFalse(TEXT("Raw vital requirement rejects lower base health"),CustomSnapshot()->GetBoolField(TEXT("can_wield")));
+    Session.PlayerVitals.BaseMaxHealth=500;
+    TestTrue(TEXT("Raw max-vital change invalidates cached eligibility"),CustomSnapshot()->GetBoolField(TEXT("can_wield")));
+    // Exact custom requirements from the Blunt Sceptre UB dump. Exercise real
+    // private Int64 packets, including eligibility changes with no new appraisal.
+    CustomInfo.IntProperties={{45,4},{179,32},{273,13},{274,9007},{275,5500},{276,13},{277,9009},{278,3500}};
+    CustomInfo.FloatProperties.Add(152,2.9275233745575);H->ObserveAppraisal(CustomInfo);
+    auto UpdateCount=[&](int32 Key,int64 Count){FACEBinaryWriter W;W.WriteUInt8(1);W.WriteUInt32(Key);W.WriteUInt64(uint64(Count));
+        FACEBinaryReader R(W.GetData());Session.HandlePrivateUpdatePropertyInt64(R);};
+    Row=CustomSnapshot();TestTrue(TEXT("Unreported augmentation counts permit a server-validated equip attempt"),Row->GetBoolField(TEXT("can_wield")));
+    TestTrue(TEXT("Unreported counts are marked for server validation"),Row->GetBoolField(TEXT("wield_requires_server_check")));
+    UpdateCount(9007,0);
+    TestFalse(TEXT("Receiving zero invalidates the previously unknown count"),CustomSnapshot()->GetBoolField(TEXT("can_wield")));
+    UpdateCount(9007,5500);
+    Row=CustomSnapshot();TestTrue(TEXT("Known Creature count permits server validation of missing Life count"),Row->GetBoolField(TEXT("can_wield")));
+    TestTrue(TEXT("Life count still requires server validation"),Row->GetBoolField(TEXT("wield_requires_server_check")));
+    UpdateCount(9009,3499);
+    Row=CustomSnapshot();TestFalse(TEXT("Creature augmentation alone does not satisfy a known low Life count"),Row->GetBoolField(TEXT("can_wield")));
+    TestTrue(TEXT("Low Life count is explained in slot four"),Row->GetStringField(TEXT("wield_reason")).Contains(TEXT("Wield requirement 4: 64-bit integer property 9009 requires 3500")));
+    UpdateCount(9009,3500);
+    Row=CustomSnapshot();TestTrue(TEXT("Both reported Int64 requirements make the wand eligible"),Row->GetBoolField(TEXT("can_wield")));
+    TestFalse(TEXT("Both known counts remove the server-check note"),Row->GetBoolField(TEXT("wield_requires_server_check")));
+    UpdateCount(1,123456);UpdateCount(6,789);
+    TestTrue(TEXT("Unrelated XP/luminance packets reuse cached inventory rows"),CustomSnapshot()==Row);
+    UpdateCount(9007,5499);
+    TestFalse(TEXT("Losing a required augmentation invalidates eligibility without reassessment"),CustomSnapshot()->GetBoolField(TEXT("can_wield")));
+    UpdateCount(9007,int64(1)<<40);
+    TestTrue(TEXT("Large Int64 update restores eligibility without truncation"),CustomSnapshot()->GetBoolField(TEXT("can_wield")));
+    return !HasAnyErrors();
 }
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMLootMemoryTest,"ACE.Plugins.LootMemory",
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
@@ -1302,6 +1349,19 @@ bool FACEUCMVoidCombatTest::RunTest(const FString&)
 {
     FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
     auto Snapshot=[](){return ParseUCM(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"action_serial":0,"combat_mode":8,"components_required":false,"spells":[{"id":20,"name":"Nether Bolt","category":640,"school":5,"power":300,"skill":500},{"id":21,"name":"Acid Bolt","category":117,"school":1,"power":300,"skill":500}],"inventory":[{"id":50,"name":"Wand","type":32768,"identified":true,"can_wield":true,"equipped":true}],"targets":[{"id":500,"name":"Enemy","distance":10,"identified":true,"line_of_sight":true,"resists":{"1024":2,"32":0.1}}]})"));};
+    for(bool Exact:{false,true})
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot();
+        auto P=ParseUCM(TEXT(R"({"buffing":false,"recovery":false,"combat":"magic","monsters":[{"name":"En","combat":"ignore"},{"name":"Enemy","bolt":false,"streak":false,"ring":false,"debuff_imperil":true}]})"));
+        P->GetArrayField(TEXT("monsters"))[1]->AsObject()->SetBoolField(TEXT("exact"),Exact);
+        auto Book=S->GetArrayField(TEXT("spells"));Book.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":22,"name":"Imperil","category":116,"school":2,"duration":120,"power":100,"skill":500})"))));S->SetArrayField(TEXT("spells"),Book);
+        TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));
+        if(TestTrue(TEXT("Debuff-only mob produces an intent"),I.IsValid()))TestEqual(TEXT("A/S/R off still casts Imperil; specific name beats earlier prefix"),I->GetNumberField(TEXT("spell")),22.);
+        S->SetArrayField(TEXT("debuffs"),{MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"target":500,"category":116,"power":100,"expires":220})")))});
+        S->SetNumberField(TEXT("time"),101);S->SetNumberField(TEXT("action_serial"),1);S->SetNumberField(TEXT("last_spell"),22);
+        TestTrue(*Error,VM.Step(S,P,I,Error));
+        TestTrue(TEXT("Debuff-only mode does not fall back to a bolt"),I.IsValid()&&!I->HasField(TEXT("action")));
+    }
     for(int32 Element:{0,128,1024})
     {
         FACEPluginVM VM;TestTrue(TEXT("Void policy loads"),VM.Load(Source,Error));auto S=Snapshot();

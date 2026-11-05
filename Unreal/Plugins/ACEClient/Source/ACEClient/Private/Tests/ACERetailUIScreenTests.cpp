@@ -2745,6 +2745,10 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 Gameplay->SpellBarSlotNumIcons[I]->GetVisibility()==ESlateVisibility::Collapsed);
         }
         Favorites={1,2,3}; Gameplay->RefreshSpellHotbarOverlays();
+        CaptureScreen(TEXT("GameplayNumberedSpellTooltips"));
+        FString SpellTooltip;const auto SpellGeometry=Gameplay->SpellBarIcons[0]->GetCachedGeometry();
+        TestTrue(TEXT("Numbered spell icon exposes its name through canvas hover"),Gameplay->GetStatTooltipAt(SpellGeometry.LocalToAbsolute(SpellGeometry.GetLocalSize()*.5),SpellTooltip));
+        TestTrue(TEXT("Numbered spell tooltip identifies the spell"),SpellTooltip.Contains(TEXT("Strength Other I")));
 		Gameplay->StepCombatSpellSelection(1, false, false);
 		TestEqual(TEXT("Next selection moves from innate to first favorite"), Gameplay->SelectedCombatSpellSlot, 0);
 		Gameplay->StepCombatSpellSelection(-1, false, false);
@@ -3340,6 +3344,21 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         Session.TradePartnerGuid=Partner.Guid;
         Session.TradeSelfItems={Device.Guid}; Session.TradePartnerItems={Item.Guid};
         Gameplay->ShowTradePanel(Partner.Guid); CaptureScreen(TEXT("GameplayTrade"));
+        Gameplay->SelectedPackGuid=Player.Guid;
+        Gameplay->HandleTradeStateChanged(ACEGameEvent::AddToTrade);
+        const int32 OfferedSlot=Gameplay->InventorySlotGuids.IndexOfByKey(Device.Guid);
+        if (TestTrue(TEXT("Offered item remains visible in the backpack"),Gameplay->InventorySlots.IsValidIndex(OfferedSlot)))
+        {
+            auto* Slot=Gameplay->InventorySlots[OfferedSlot].Get();
+            TestTrue(TEXT("Trade event marks the offered inventory icon"),Slot->Background.GetResourceObject()==
+                Resources->ResolveItemForeground(Device.IconId,Device.IconOverlayId,Device.UiEffects,true));
+            Session.TradeSelfItems.Reset();
+            Gameplay->HandleTradeStateChanged(ACEGameEvent::ResetTrade);
+            TestTrue(TEXT("Clearing trade removes the offered mark without another inventory update"),Slot->Background.GetResourceObject()==
+                Resources->ResolveItemForeground(Device.IconId,Device.IconOverlayId,Device.UiEffects,false));
+            Session.TradeSelfItems={Device.Guid};
+            Gameplay->HandleTradeStateChanged(ACEGameEvent::AddToTrade);
+        }
         TFunction<void()> CheckTradeAndToolbarDrops=[&]()
         {
             const FVector2D SavedCursor=FSlateApplication::Get().GetCursorPos();

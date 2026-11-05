@@ -4,6 +4,7 @@
 #include "Mods/ACEUCMProfiles.h"
 #include "ACEUCMLootPresentation.h"
 #include "ACEPetDevice.h"
+#include "ACEPluginEquipment.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "UI/ACEUIResourceResolver.h"
@@ -387,6 +388,9 @@ namespace ACEUCMPanelPrivate
             {
                 if(!Host->IsOwnedPluginItem(O)||(Consumables&&Seen.Contains(O.WeenieClassId)))continue;
                 const auto* A=Host->GetPluginAppraisals().Find(O.Guid);
+                const bool Equipped=C->GetPlayerGuid()!=0&&(O.WielderId==C->GetPlayerGuid()||(O.CurrentWieldedLocation&&O.ParentGuid==C->GetPlayerGuid()));
+                bool RequiresServerCheck=false;
+                const FString WieldFailure=A&&A->bSuccess&&!Consumables&&!Equipped?ACEPluginEquipment::WieldFailure(*A,C->GetPlayerVitalsView(),&RequiresServerCheck):FString();
                 const bool Pet=ACEPetDevice::IsSummoningDevice(A);
                 const bool Weapon=Pet||((O.ItemType&(ACEItemType::MeleeWeapon|ACEItemType::MissileWeapon|ACEItemType::Caster))!=0 && !(O.ValidLocations&0x800000))||((O.ItemType&ACEItemType::Armor)&&(O.ValidLocations&0x200000));
                 if(Consumables?Weapon||!ACEInventoryRulesUsable(O):!Weapon)continue;
@@ -394,9 +398,25 @@ namespace ACEUCMPanelPrivate
                 auto Row=SNew(SHorizontalBox);Row->AddSlot().AutoWidth()[Icon(O.IconId)];
                 auto Details=SNew(SVerticalBox);Details->AddSlot().AutoHeight()[Text(ACERetailObjectNames::Name(O))];
                 if(Pet)Details->AddSlot().AutoHeight().Padding(0,3)[Text(FString::Printf(TEXT("Pet essence  •  %d charges  •  Level %d  •  Summoning %d"),O.Structure,A->IntProperties.FindRef(369),A->IntProperties.FindRef(367)),12,Muted)];
-                else if(A&&A->bSuccess&&!Consumables)Details->AddSlot().AutoHeight().Padding(0,3)[Text(FString::Printf(TEXT("Damage %d  •  Modifier %.2f  •  Speed %d%s"),A->Damage,A->WeaponDamageMod,A->WeaponTime,O.WielderId==C->GetPlayerGuid()?TEXT("  •  Equipped"):TEXT("")),12,Muted)];
+                else if(A&&A->bSuccess&&!Consumables)
+                {
+                    FString Summary;
+                    if(O.ItemType&ACEItemType::Caster)
+                    {
+                        Summary=TEXT("Casting device");
+                        const int32 Damage=A->IntProperties.FindRef(45);
+                        for(const auto& Element:MonsterOptions(TEXT("damage_type")))if(FCString::Atoi(*Element.Key)==Damage)
+                        {if(Damage)Summary+=TEXT("  •  ")+Element.Value;break;}
+                        if(const double* Modifier=A->FloatProperties.Find(152))Summary+=FString::Printf(TEXT("  •  Elemental damage ×%.2f"),*Modifier);
+                    }
+                    else Summary=FString::Printf(TEXT("Damage %d  •  Modifier %.2f  •  Speed %d"),A->Damage,A->WeaponDamageMod,A->WeaponTime);
+                    if(Equipped)Summary+=TEXT("  •  Equipped");
+                    Details->AddSlot().AutoHeight().Padding(0,3)[Text(Summary,12,Muted)];
+                    if(!WieldFailure.IsEmpty())Details->AddSlot().AutoHeight()[Text(WieldFailure,12,Muted)];
+                    else if(RequiresServerCheck)Details->AddSlot().AutoHeight()[Text(TEXT("Custom requirements are checked by the server when equipping."),12,Muted)];
+                }
                 Row->AddSlot().FillWidth(1).Padding(10,0).VAlign(VAlign_Center)[Details];
-                Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[Text(A&&A->bSuccess?TEXT("Ready"):TEXT("Inspecting"),12,Muted)];
+                Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[Text(!A||!A->bSuccess?TEXT("Inspecting"):!WieldFailure.IsEmpty()?TEXT("Unavailable"):TEXT("Assessed"),12,Muted)];
                 const uint32 Entry=Consumables?uint32(O.WeenieClassId):uint32(O.Guid);
                 Row->AddSlot().AutoWidth().Padding(8,0)[ChoiceButton(TEXT("Use"),[this,Key,Entry](){return Has(Key,Entry);},[this,Key,Entry](){ToggleId(Key,Entry);})];Add(Tile(Row));
             }
@@ -480,7 +500,7 @@ namespace ACEUCMPanelPrivate
             Add(Text(TEXT("Equipment"),18,Accent));
             MonsterEquipment(Rule,false);MonsterEquipment(Rule,true);
             Add(Text(TEXT("Targeting"),18,Accent));
-            IntegerSetting(Rule,TEXT("priority"),TEXT("Priority"),-1,10,TEXT(""),TEXT("monster_default_priority"));
+            IntegerSetting(Rule,TEXT("priority"),TEXT("Priority"),-1,10,TEXT(""));
             IntegerSetting(Rule,TEXT("range"),TEXT("Attack Range"),0,100,TEXT(" m"),TEXT("monster_default_range"));
             Add(Text(TEXT("Higher priority is attacked first; negative priority ignores the mob. Range 0 uses the shared attack distance. Power, spell selection and timing are shared settings in Combat."),14,Muted));
         }
@@ -498,7 +518,7 @@ namespace ACEUCMPanelPrivate
                 if(!Default)++CustomCount;
             }
             if(Rules.Num()>=(HasDefault?512:511)){Host->Notice=TEXT("This profile has reached its limit of 511 mob rules plus Default.");return;}
-            auto Rule=MakeShared<FJsonObject>();Rule->SetStringField(TEXT("name"),Name);Rule->SetBoolField(TEXT("inherit_default"),true);
+            auto Rule=MakeShared<FJsonObject>();Rule->SetStringField(TEXT("name"),Name);CopyMonsterDefaults(Rule,false);Rule->SetNumberField(TEXT("priority"),0);
             Rules.Add(MakeShared<FJsonValueObject>(Rule));P()->SetArrayField(TEXT("monsters"),Rules);ExpandedMonster=INDEX_NONE;MonsterPage=CustomCount/25;Save();Rebuild();
         }
         void AddSelectedMonster()
@@ -750,7 +770,7 @@ namespace ACEUCMPanelPrivate
                     }));
                 Slider(TEXT("health_threshold"),TEXT("Health"),1,95,65,FLinearColor(.95f,.25f,.3f));
                 Slider(TEXT("emergency_health_threshold"),TEXT("Emergency stamina-to-health below"),0,75,35,FLinearColor(.95f,.25f,.3f));
-                Add(Text(TEXT("Below this health percentage, prefer a stamina-to-health spell when it restores more than a regular heal. Uses the lowest sufficient tier. Zero disables; imported recovery order and supplies-first still take precedence."),12,Muted));
+                Add(Text(TEXT("Below this health percentage, prefer stamina-to-health independently of the Health slider. Uses the lowest sufficient tier. Zero disables; imported recovery order and supplies-first still take precedence."),12,Muted));
                 Slider(TEXT("stamina_threshold"),TEXT("Stamina"),1,95,50,FLinearColor(.95f,.7f,.15f));
                 Slider(TEXT("mana_threshold"),TEXT("Mana"),1,95,45,FLinearColor(.2f,.55f,1));
                 Slider(TEXT("kit_min_success"),TEXT("Minimum kit success chance"),0,100,0,Accent);

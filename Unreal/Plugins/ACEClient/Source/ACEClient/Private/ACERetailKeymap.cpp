@@ -123,7 +123,7 @@ FKey ActionFor(const FString& Name)
  if(const FKey* Key=ActionNames().Find(Name))return *Key;
  for(const auto& A:ACERetailAdditionalActions())if(A.Key.ToString()==TEXT("ACE.")+Name)return A.Key;
  for(int32 I=0;I<18;++I)if(Name==FString::Printf(TEXT("UseQuickSlot_%d"),I+1))return Shortcut(I);
- for(int32 I=0;I<9;++I)if(Name==FString::Printf(TEXT("UseSpellSlot_%d"),I+1))return SpellSlot(I);
+ for(int32 I=0;I<12;++I)if(Name==FString::Printf(TEXT("UseSpellSlot_%d"),I+1))return SpellSlot(I);
  return FKey();
 }
 FString NameFor(FKey Key)
@@ -131,7 +131,7 @@ FString NameFor(FKey Key)
  for(const auto& P:ActionNames())if(P.Value==Key)return P.Key;
  for(const auto& A:ACERetailAdditionalActions())if(A.Key==Key)return Key.ToString().Mid(4);
  for(int32 I=0;I<18;++I)if(Key==ACEInputBindings::Shortcut(I))return FString::Printf(TEXT("UseQuickSlot_%d"),I+1);
- for(int32 I=0;I<9;++I)if(Key==ACEInputBindings::SpellSlot(I))return FString::Printf(TEXT("UseSpellSlot_%d"),I+1);
+ for(int32 I=0;I<12;++I)if(Key==ACEInputBindings::SpellSlot(I))return FString::Printf(TEXT("UseSpellSlot_%d"),I+1);
  return FString();
 }
 FString GroupFor(const FString& Name,int32 Context,const TCHAR* Page)
@@ -261,7 +261,7 @@ bool ExportRetailKeymapFile(const FString& Path,FString& Error)
  TMap<FKey,FString> Names;for(const auto& P:ActionNames())Names.Add(P.Value,P.Key);
  for(const auto& A:ACERetailAdditionalActions())Names.Add(A.Key,A.Key.ToString().Mid(4));
  for(int32 I=0;I<18;++I)Names.Add(Shortcut(I),FString::Printf(TEXT("UseQuickSlot_%d"),I+1));
- for(int32 I=0;I<9;++I)Names.Add(SpellSlot(I),FString::Printf(TEXT("UseSpellSlot_%d"),I+1));
+ for(int32 I=0;I<12;++I)Names.Add(SpellSlot(I),FString::Printf(TEXT("UseSpellSlot_%d"),I+1));
  // First entry is ControlNameMapper's canonical DirectInput spelling; later
  // aliases are accepted on load but are not emitted into retail files.
  TMap<FKey,FString> Controls;for(const auto& P:PhysicalNames())if(!Controls.Contains(P.Value))Controls.Add(P.Value,TEXT("DIK_")+P.Key);

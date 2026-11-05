@@ -743,7 +743,7 @@ meta_expression=function(e,s)
  error('Unsupported expression operator: '..op)
 end
 local function monster_rule(t,p)
- local rule,defaults={},{}
+ local rule,defaults,best_match={},{},-1
  for _,r in ipairs(p.monsters or {}) do if r.default then defaults=r;break end end
  rule=defaults
  for _,r in ipairs(p.monsters or {}) do
@@ -752,12 +752,20 @@ local function monster_rule(t,p)
    local value=meta_expression(r.expression,{monster=t,profile=p})
    matches=type(value)=='string' and string.lower(t.name)==string.lower(value) or (type(value)~='string' and truth(value))
   end
-  if not r.default and (matches or (not r.expression and ((r.exact and string.lower(t.name)==string.lower(r.name or '')) or (not r.exact and string.lower(t.name):sub(1,#(r.name or ''))==string.lower(r.name or ''))))) then rule=r;break end
+  if not r.default then
+   if matches then rule=r;break end -- Imported expressions retain their ordering.
+   if not r.expression then
+    local name=string.lower(r.name or '');local target_name=string.lower(t.name)
+    local match=r.exact and target_name==name or not r.exact and target_name:sub(1,#name)==name
+    local score=#name*2+(r.exact and 1 or 0)
+    if match and score>best_match then rule=r;best_match=score end
+   end
+  end
  end
  -- Inherit without mutating saved rules; an explicit zero priority is valid.
  local effective={}
- -- New native rows inherit the live default; imported rows retain their full,
- -- independent settings. Never change a saved rule while resolving a target.
+ -- Preserve legacy explicit inheritance until the native editor materializes
+ -- it. New native rows copy Default once; imported rows remain independent.
  if rule.inherit_default then for k,v in pairs(defaults) do effective[k]=v end end
  for k,v in pairs(rule) do effective[k]=v end
  -- Older USD imports encoded disabled attack families as Ignore. That must not
@@ -770,7 +778,7 @@ local function monster_rule(t,p)
  if (effective.range or 0)<=0 then effective.range=p.monster_default_range or 0 end
  return effective
 end
-local function monster_attacks(rule,p)
+local function monster_damage_attacks(rule,p)
  if rule.ignore or rule.combat=='ignore' or rule.combat=='off' then return false end
  if rule.bolt~=false or rule.streak~=false then return true end
  for _,key in ipairs({'ring','debuff_corruption','debuff_destructive','debuff_corrosion'}) do
@@ -778,6 +786,15 @@ local function monster_attacks(rule,p)
   if value then return true end
  end
  return false
+end
+local function monster_attacks(rule,p)
+ if rule.ignore or rule.combat=='ignore' or rule.combat=='off' then return false end
+ if monster_damage_attacks(rule,p) then return true end
+ for _,key in ipairs({'debuff_imperil','debuff_vuln','debuff_yield','debuff_fester','debuff_broadside','debuff_gravity','debuff_weakening','debuff_festering'}) do
+  local value=rule[key];if value==nil then value=p[key] end
+  if value then return true end
+ end
+ return (rule.secondary_vuln or 0)~=0
 end
 local function meta_condition(c,s,p)
  local t,v,q=c.type,c.value,c.properties or {}
@@ -1759,6 +1776,12 @@ local function tick(s,p)
  local recovery_missing={}
  local function recovery(vital,percent,threshold)
   if not activity_ready('recovery'..vital) then return end
+  -- The conversion slider is an independent health trigger, not a subset of
+  -- the regular-heal slider. Keep explicit imported handler order authoritative.
+  local conversion_threshold=option('emergency_health_threshold',35)
+  if vital==2 and not (p.recharge_handlers and option('use_imported_recovery_order',true)) then
+   threshold=math.max(threshold,conversion_threshold)
+  end
   if percent>=threshold then return end
   local function pending(handler)
    recovery_pending={vital=vital,before=vital==2 and s.health or vital==4 and s.stamina or s.mana,expires=s.time+8,serial=s.action_serial,handler=handler}
@@ -1832,18 +1855,17 @@ local function tick(s,p)
   if vital==2 and percent<option('emergency_health_threshold',35) and (s.stamina or 0)>10
    and not (p.recharge_handlers and option('use_imported_recovery_order',true))
    and not option('recovery_supplies_first',false) and can_prepare_spell() then
-   local regular,conversion,gain=0,nil,0
+   local conversion,gain=nil,0
    local needed=math.max(1,math.ceil((s.max_health or 0)*threshold/100-(s.health or 0)))
    for _,v in ipairs(spell_groups.instant_self) do
     local destination,from=recovery_spell(v)
-    if destination==2 and from==0 then regular=math.max(regular,health_gain(v)) end
     if destination==2 and from==4 then
      local amount=health_gain(v,s.stamina)
      if not conversion or (amount>=needed and gain<needed) or (amount>=needed and gain>=needed and v.power<conversion.power)
       or (amount<needed and gain<needed and amount>gain) then conversion=v;gain=amount end
     end
    end
-   if conversion and gain>math.min(needed,regular) then return recover_cast(conversion) end
+   if conversion and gain>0 then return recover_cast(conversion) end
   end
   if p.recharge_handlers and option('use_imported_recovery_order',true) then
    local stance=s.combat_mode==8 and 1 or 2;local last
@@ -2629,8 +2651,8 @@ local function tick(s,p)
      local score=v.power*resistance(target,e);if damage_override and damage_override~=0 and e~=damage_override then score=-1 end
      if is_ring then if use_ring and score>ring_score then ring=v;ring_score=score end
      elseif streak then if streak_enabled and score>streak_score then streak_spell=v;streak_score=score end
-     elseif band(v.flags,0x1000)~=0 then if score>arc_score then arc=v;arc_score=score end
-     elseif score>best_score then attack=v;best_score=score end
+     elseif band(v.flags,0x1000)~=0 then if bolt_enabled and score>arc_score then arc=v;arc_score=score end
+     elseif bolt_enabled and score>best_score then attack=v;best_score=score end
     end
    end
    -- VT chooses the higher-quality eligible family first. The arc preference
@@ -2652,6 +2674,10 @@ local function tick(s,p)
   local weapon,best,best_spells,best_ammo,best_element
   local usable_caster=false
   local unassessed,unassessed_ammo
+  local blocked,blocked_reason
+  local function rejected(v,reason)
+   if not blocked or (explicit and v.id==explicit.id) then blocked=v;blocked_reason=reason end
+  end
   local function better(a,b)
    if not b then return true end
    for i=1,#a do if a[i]~=b[i] then return a[i]>b[i] end end
@@ -2699,15 +2725,21 @@ local function tick(s,p)
   for _,v in ipairs(combat_inventory) do
    local melee=band(v.type,1)~=0;local missile=band(v.type,0x100)~=0 and band(v.slots,0x800000)==0;local caster=band(v.type,0x8000)~=0
    local allowed=explicit and v.id==explicit.id or (not explicit or strict_damage) and weapon_allowed(v)
+   local mode_allowed=target_combat=='auto' or (target_combat=='melee' and melee) or (target_combat=='missile' and missile) or (target_combat=='magic' and caster)
    local main_hand=option('melee_weapon',-1)
    if melee then
     if not explicit and main_hand>0 and not strict_damage then allowed=v.id==main_hand end
     if v.auto_wield_left then allowed=false end
    end
    if not caster and target_rule and target_rule.bolt==false then allowed=false end
+   if allowed and not mode_allowed then
+    if explicit and v.id==explicit.id then rejected(v,'selected weapon does not match '..target_combat..' mode') end
+    allowed=false
+   end
    if caster and allowed and v.identified and v.can_wield then usable_caster=true end
    if not v.identified and allowed and (melee or missile or caster) then unassessed=v end
-   if v.identified and v.can_wield and allowed and ((explicit and v.id==explicit.id) or (target_combat=='auto' and (melee or missile or (caster and casting_attack))) or (target_combat=='melee' and melee) or (target_combat=='missile' and missile) or (target_combat=='magic' and caster)) then
+   if v.identified and allowed and not v.can_wield then rejected(v,v.wield_reason or 'wield requirements are not met or unavailable') end
+   if v.identified and v.can_wield and allowed and (melee or missile or caster) then
     local damage=v.damage_type or 0
     local rend,bonus=weapon_traits(v)
     local launcher=missile and (v.ammo_type or 0)~=0
@@ -2738,6 +2770,8 @@ local function tick(s,p)
     elseif launcher then
      value=ammo and (ammo.damage or 0)*resist*math.max(1,v.damage_mod or 1)/(1+(v.weapon_time or 0)/100) or -1
     elseif strict_damage and band(damage,damage_override)==0 then value=-1 end
+    if value<0 then rejected(v,caster and 'no usable attack spell for the selected element and spell settings'
+      or launcher and 'no eligible ammunition for the selected damage type' or 'weapon does not match the selected damage type') end
     if (v.slayer or 0)>0 and v.slayer==target.creature_type then value=value*math.max(1,v.slayer_mod or 1) end
     local skill_id=caster and spells.casting and combat_school_skill[spells.casting.school] or v.weapon_skill
     local skill=target_combat=='auto' and trained_skill(s,skill_id) or 0
@@ -2753,7 +2787,8 @@ local function tick(s,p)
   local categories=debuff_categories(target_rule,debuff_element)
   local confirmed=effect_index[target.id] or {}
   local needs=missing_debuff(target,categories)
-  return {attack=attack,dot_only=not attack and dot_attack~=nil,missing_attack=usable_caster and not casting_attack and (target_combat=='auto' or target_combat=='magic'),weapon=weapon,unassessed=unassessed,unassessed_ammo=unassessed_ammo,mode=mode,categories=categories,confirmed=confirmed,needs=needs,damage=damage_override,attack_element=best_element,ammo=best_ammo,priority=tier}
+  return {attack=attack,dot_only=not attack and dot_attack~=nil,missing_attack=usable_caster and not casting_attack and (target_combat=='auto' or target_combat=='magic'),weapon=weapon,unassessed=unassessed,unassessed_ammo=unassessed_ammo,mode=mode,categories=categories,confirmed=confirmed,needs=needs,damage=damage_override,attack_element=best_element,ammo=best_ammo,priority=tier,
+   blocked_reason=blocked and ((blocked.name or tostring(blocked.id))..': '..blocked_reason) or nil}
  end
  -- Keep an in-flight debuff on its recipient until the server answers. A new
  -- higher-priority spawn must not make UseDone look like successful debuffing.
@@ -2803,14 +2838,11 @@ local function tick(s,p)
    until_time['id'..target.id]=s.time+30;return {action='identify',item=target.id,status='Assessing '..target.name,continue_work=true} end
   local plan=combat_plan(target,target_rule)
   local attack,weapon,mode,damage_override=plan.attack,plan.weapon,plan.mode,plan.damage
-  if not weapon and plan.unassessed then return assess(plan.unassessed) end
-  if not weapon and plan.unassessed_ammo then return assess(plan.unassessed_ammo) end
-  if not weapon and plan.missing_attack then return failed('No usable attack spell; check learned spells, skill buffer, components, selected element and enabled Void curses/rings') end
-  if not weapon and s.inventory then return failed('No eligible combat loadout; check weapon requirements, damage type and ammunition') end
   local categories,confirmed=plan.categories,plan.confirmed
+  local missing_attack_status='No usable attack spell; check learned spells, skill buffer, components, selected element and enabled Void curses/rings'
   for _,category in ipairs(categories) do
    local spell=best_debuffs[category]
-   if not spell then if not option('debuff_fallback',false) then return failed('Required debuff unavailable; check learned spells, skill margin and scarabs') end
+   if not spell then if not option('debuff_fallback',false) then return failed(plan.missing_attack and monster_damage_attacks(target_rule or {},p) and missing_attack_status or 'Required debuff unavailable; check learned spells, skill margin and scarabs') end
    elseif (confirmed[category] or 0)<spell.power then
     local key='debuff'..target.id..':'..category
     if (item_attempts[key] or 0)>=3 then if not option('debuff_fallback',false) then return failed('Debuff resisted or unconfirmed after three attempts') end
@@ -2823,6 +2855,12 @@ local function tick(s,p)
     end
    else item_attempts['debuff'..target.id..':'..category]=0 end
   end
+  if not monster_damage_attacks(target_rule or {},p) then return result(nil,'Debuffs active; ordinary attacks disabled for this mob') end
+  if not weapon and plan.unassessed then return assess(plan.unassessed) end
+  if not weapon and plan.unassessed_ammo then return assess(plan.unassessed_ammo) end
+  if not weapon and plan.missing_attack then return failed(missing_attack_status) end
+  if not weapon and plan.blocked_reason then return failed('No eligible combat loadout; '..plan.blocked_reason) end
+  if not weapon and s.inventory then return failed('No eligible combat loadout; check weapon requirements, damage type and ammunition') end
   if weapon and (not weapon.equipped or band(weapon.equipped_slot,0x200000)~=0) then return equip(weapon) end
   local secondary_request=target_rule and target_rule.secondary_equip
   if secondary_request==nil then secondary_request=option('melee_secondary_equip',nil) end

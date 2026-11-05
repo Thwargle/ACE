@@ -533,6 +533,7 @@ private:
     TMap<int32, double> AppraisalRequests;
     TArray<TSharedPtr<FJsonValue>> CachedInventory;
     TMap<int32,int32> CachedInventoryIndices;
+    TSet<int32> InventoryWieldInt64Keys;
     TSet<int32> DirtyInventoryAppraisals;
     uint64 InventoryRevision = MAX_uint64, InventoryAppraisalRevision = MAX_uint64;
     uint32 InventoryEligibility = 0;

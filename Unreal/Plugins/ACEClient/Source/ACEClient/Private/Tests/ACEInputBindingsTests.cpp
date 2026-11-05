@@ -198,6 +198,11 @@ bool FACEInputBindingsTest::RunTest(const FString&)
  TestEqual(TEXT("Cancel preserves prior live import"),ACEInputBindings::Get(EKeys::S,0).Key,EKeys::S);
  ACEInputBindings::BeginEdit();
  const FString ExportPath=FPaths::ProjectSavedDir()/TEXT("Automation/RoundTrip.keymap");FString ExportError;
+ for(int32 Slot=9;Slot<12;++Slot)
+ {
+  TestTrue(TEXT("All twelve spell actions are listed for rebinding"),ACEInputBindings::Actions().ContainsByPredicate([&](const auto& A){return A.Key==ACEInputBindings::SpellSlot(Slot);}));
+  ACEInputBindings::Set(ACEInputBindings::SpellSlot(Slot),0,FInputChord(Slot==9?EKeys::Zero:Slot==10?EKeys::Hyphen:EKeys::Equals));
+ }
  ACEInputBindings::Set(ACEInputBindings::Action(TEXT("ToggleChat")),0,FInputChord(EKeys::F12));
  const FKey ToggleUCM=ACEInputBindings::Action(TEXT("ToggleUCM"));
  ACEInputBindings::Set(ToggleUCM,0,FInputChord(EKeys::F10));
@@ -207,6 +212,7 @@ bool FACEInputBindingsTest::RunTest(const FString&)
  ACEInputBindings::Defaults();
  const auto RoundTrip=ACEInputBindings::ImportRetailKeymapFile(ExportPath);
  TestTrue(TEXT("Exported file reloads"),RoundTrip.bSuccess);
+ for(int32 Slot=9;Slot<12;++Slot)TestEqual(TEXT("Spell slots 10–12 survive keymap export/import"),ACEInputBindings::Get(ACEInputBindings::SpellSlot(Slot),0).Key,Slot==9?EKeys::Zero:Slot==10?EKeys::Hyphen:EKeys::Equals);
  TestEqual(TEXT("Toggle Chat Entry is rebindable and survives keymap export/import"),ACEInputBindings::Get(ACEInputBindings::Action(TEXT("ToggleChat")),0).Key,EKeys::F12);
  TestTrue(TEXT("Retail keymap import retains the local interface shortcut"),ACEInputBindings::Get(ToggleInterface,0)==FInputChord(EKeys::Z,false,false,true,false));
  TestTrue(TEXT("Retail keymap import retains local quick-show binding"),ACEInputBindings::Get(QuickShow,0)==FInputChord(EKeys::LeftControl));

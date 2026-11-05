@@ -212,6 +212,14 @@ bool FACENetworkAnimationParityTest::RunTest(const FString&)
    TestEqual(TEXT("Completed directed movement releases turn footwork"),App->LocomotionTurn,0.f);
   }
  }
+ // Changing the interpreted rate must advance from the last pose, not seek to
+ // total elapsed time multiplied by a new rate (slow mouselook jitter).
+ App->ClearActionMotion();App->SetLocomotionInput(0,0,false);App->SetTurnInput(0);
+ App->SetTurnInput(.1f);App->TickComponent(.2f,LEVELTICK_All,nullptr);
+ const float TurnPhase=App->LocomotionTurnTime;
+ App->SetTurnInput(.02f);App->TickComponent(.1f,LEVELTICK_All,nullptr);
+ TestTrue(TEXT("Changing turn speed preserves phase and advances by the new rate"),FMath::IsNearlyEqual(App->LocomotionTurnTime,TurnPhase+.002f,.00001f));
+ App->SetTurnInput(0);
  // Retail chooses interpolation using viewer distance, not correction size.
  Actor->RemoteMotion={};Actor->RemoteWalkingMotion.Reset();Actor->RemoteCycleRootTrack.Reset();
  Actor->bHavePhysicsVelocity=false;Actor->bRemoteCorrectionPending=false;

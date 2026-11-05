@@ -1,5 +1,5 @@
 // Included inside SUCMPanel. The matrix uses the same fields as imported VT
-// rules; only new native rules opt into inheritance from the live default row.
+// rules. Native rows copy Default when created, then remain independent.
 int32 MonsterPage=0;
 float MonsterFontSize=0;
 TSharedPtr<FJsonObject> MatrixDefault;
@@ -18,6 +18,20 @@ TSharedPtr<FJsonObject> EffectiveMonster(const TSharedPtr<FJsonObject>& Rule) co
     for(const auto& Pair:Rule->Values)R->Values.Add(Pair.Key,Pair.Value);
     if(Bool(R,TEXT("ignore"))&&Str(R,TEXT("combat"))!=TEXT("ignore")&&R->HasField(TEXT("bolt"))&&!Bool(R,TEXT("bolt"))&&R->HasField(TEXT("streak"))&&!Bool(R,TEXT("streak"))&&R->HasField(TEXT("ring"))&&!Bool(R,TEXT("ring")))R->SetBoolField(TEXT("ignore"),false);
     return R;
+}
+void CopyMonsterDefaults(const TSharedPtr<FJsonObject>& Rule,bool PreserveOverrides)
+{
+    auto Values=MonsterDefaults()->Values;
+    Values.Remove(TEXT("default"));Values.Remove(TEXT("name"));Values.Remove(TEXT("expression"));Values.Remove(TEXT("exact"));
+    for(const auto& Pair:Rule->Values)if(PreserveOverrides||Pair.Key==TEXT("name")||Pair.Key==TEXT("exact")||Pair.Key==TEXT("expression"))Values.Add(Pair.Key,Pair.Value);
+    Rule->Values=MoveTemp(Values);Rule->SetBoolField(TEXT("inherit_default"),false);
+    for(const auto& Mode:MonsterModes())if(!Rule->HasField(Mode.Key))Rule->SetBoolField(Mode.Key,MonsterFlag(MonsterDefaults(),Mode.Key));
+    if(!Rule->HasField(TEXT("priority")))Rule->SetNumberField(TEXT("priority"),0);
+}
+void RemoveMonster(const TSharedPtr<FJsonObject>& Rule)
+{
+    auto Rules=P()->GetArrayField(TEXT("monsters"));Rules.RemoveAll([Rule](const auto& V){return V->AsObject()==Rule;});
+    P()->SetArrayField(TEXT("monsters"),Rules);ExpandedMonster=INDEX_NONE;Save();Rebuild();
 }
 void SaveMonster(const TSharedPtr<FJsonObject>& Rule)
 {
@@ -88,6 +102,7 @@ static const TArray<FMonsterMode>& MonsterModes()
 }
 static const TArray<TPair<FString,FString>>& MonsterOptions(const FString& Key)
 {
+    if(Key==TEXT("priority")){static const TArray<TPair<FString,FString>> Options=[](){TArray<TPair<FString,FString>> R;for(int32 N=-1;N<=10;++N)R.Emplace(FString::FromInt(N),FString::FromInt(N));return R;}();return Options;}
     if(Key==TEXT("combat")){static const TArray<TPair<FString,FString>> Options={{TEXT("auto"),TEXT("Auto")},{TEXT("melee"),TEXT("Melee")},{TEXT("missile"),TEXT("Missile")},{TEXT("magic"),TEXT("Magic")},{TEXT("off"),TEXT("No attacks")},{TEXT("ignore"),TEXT("Ignore")}};return Options;}
     if(Key==TEXT("damage_type")){static const TArray<TPair<FString,FString>> Options={{TEXT("0"),TEXT("Auto")},{TEXT("1"),TEXT("Slash")},{TEXT("2"),TEXT("Pierce")},{TEXT("4"),TEXT("Blunt")},{TEXT("8"),TEXT("Cold")},{TEXT("16"),TEXT("Fire")},{TEXT("32"),TEXT("Acid")},{TEXT("64"),TEXT("Electric")},{TEXT("1024"),TEXT("Nether")}};return Options;}
     if(Key==TEXT("pet_damage_type")){static const TArray<TPair<FString,FString>> Options={{TEXT("101"),TEXT("Auto")},{TEXT("98"),TEXT("None")},{TEXT("8"),TEXT("Attack")},{TEXT("2"),TEXT("Slash")},{TEXT("0"),TEXT("Pierce")},{TEXT("1"),TEXT("Blunt")},{TEXT("5"),TEXT("Cold")},{TEXT("6"),TEXT("Fire")},{TEXT("3"),TEXT("Acid")},{TEXT("4"),TEXT("Electric")}};return Options;}
@@ -117,6 +132,12 @@ void MonsterDetailFlags(const TSharedPtr<FJsonObject>& Rule)
 }
 void MonsterMatrix()
 {
+    // Preserve the visible values of older inherited rows before editing Default.
+    // Otherwise its first toggle silently edits every untouched mob at once.
+    bool Changed=false;
+    for(const auto& Value:P()->GetArrayField(TEXT("monsters")))if(auto Rule=Value->AsObject();!Bool(Rule,TEXT("default"))&&Bool(Rule,TEXT("inherit_default")))
+    {CopyMonsterDefaults(Rule,true);Changed=true;}
+    if(Changed)Save();
     SectionSelector(TEXT("Monsters"));SectionBody.Reset();
     auto Actions=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6,6));
     Actions->AddSlot()[Button(TEXT("Add selected mob"),[this](){AddSelectedMonster();})];
@@ -140,9 +161,10 @@ void MonsterMatrix()
         .Tag(FName(*(FString(TEXT("UCMMonster.Header."))+Key))).Visibility(EVisibility::Visible).HAlign(HAlign_Center).VAlign(VAlign_Center)
         .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Help)))[Text(Label,15,Accent)];};
     Column(Header,115,HeadingCell(TEXT("combat"),TEXT("Mode"),TEXT("Combat mode\nAuto chooses a usable skill and weapon. No attacks allows pets only. Ignore excludes both attacks and pets. Activity switches in Overview / Micro must be enabled.")));
+    Column(Header,55,HeadingCell(TEXT("priority"),TEXT("P"),TEXT("Priority\nHigher numbers are targeted first. 0 is the default; -1 ignores this mob.")));
     for(const auto& M:Modes)Column(Header,42,HeadingCell(M.Key,M.Short,M.Help));
     Column(Header,105,HeadingCell(TEXT("damage_type"),TEXT("Damage"),TEXT("Attack damage type\nAuto chooses an element for this mob; choose an element to override it.")));
-    Column(Header,105,HeadingCell(TEXT("pet_damage_type"),TEXT("Pet"),TEXT("Pet damage type\nAuto chooses an eligible essence from the Equipment Pool. None disables summoning for this row. Summoning must be enabled in Overview / Micro.")));Column(Header,80,Text(TEXT("")));
+    Column(Header,80,Text(TEXT("")));Column(Header,70,Text(TEXT("")));
     Table->AddSlot().AutoHeight()[Header];
     // Names stay outside the horizontal scroller. Match each control row's
     // measured height so names remain aligned at every plugin text scale.
@@ -157,11 +179,14 @@ void MonsterMatrix()
     {
         auto Row=SNew(SHorizontalBox);const bool Default=Bool(Rule,TEXT("default"));
         Column(Row,115,MonsterChoice(Rule,TEXT("combat"),MonsterOptions(TEXT("combat"))));
+        Column(Row,55,MonsterChoice(Rule,TEXT("priority"),MonsterOptions(TEXT("priority")),true));
         for(const auto& M:Modes)Column(Row,42,MonsterSwitch(Rule,M.Key,M.Help));
         Column(Row,105,MonsterChoice(Rule,TEXT("damage_type"),MonsterOptions(TEXT("damage_type")),true));
-        Column(Row,105,MonsterChoice(Rule,TEXT("pet_damage_type"),MonsterOptions(TEXT("pet_damage_type")),true));
         Column(Row,80,SNew(SACEPluginButton).Tag(FName(*(TEXT("UCMMonster.")+Str(Rule,TEXT("name"))+TEXT(".details")))).ButtonStyle(&Style()).ContentPadding(FMargin(5,7))
             .OnClicked_Lambda([this,Rule](){if(Bool(Rule,TEXT("default")))SaveMonster(Rule);const auto Current=P()->GetArrayField(TEXT("monsters"));for(int32 I=0;I<Current.Num();++I)if(Current[I]->AsObject()==Rule)ExpandedMonster=ExpandedMonster==I?INDEX_NONE:I;Rebuild();return FReply::Handled();})[Text(TEXT("Details"),14)]);
+        Column(Row,70,SNew(SACEPluginButton).Tag(FName(*(TEXT("UCMMonster.")+Str(Rule,TEXT("name"))+TEXT(".remove")))).ButtonStyle(&Style()).ContentPadding(FMargin(5,7))
+            .IsEnabled(!Default).ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Remove this mob's rule."))))
+            .OnClicked_Lambda([this,Rule](){RemoveMonster(Rule);return FReply::Handled();})[Text(TEXT("Remove"),14)]);
         Table->AddSlot().AutoHeight()[SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->TitleBackground).Padding(0)[Row]];
         Names->AddSlot().AutoHeight()[SNew(SBox).HeightOverride_Lambda([Row](){return Row->GetDesiredSize().Y;})
             [SNew(SBorder).Tag(FName(*(TEXT("UCMMonster.Name.")+Str(Rule,TEXT("name"))))).BorderImage(&FACEPluginStyle::Current()->TitleBackground)
@@ -186,10 +211,7 @@ void MonsterMatrix()
         Heading(Name,TEXT("Changes save immediately to the selected Mobs profile."));MonsterDetails(Rule);
         if(!Bool(Rule,TEXT("default")))
         {
-            Add(Button(TEXT("Use default settings"),[this,Rule](){const auto Original=Rule->Values;Rule->Values.Empty();
-                for(const TCHAR* Key:{TEXT("name"),TEXT("exact"),TEXT("expression")})if(const auto* V=Original.Find(Key))Rule->Values.Add(Key,*V);
-                Rule->SetBoolField(TEXT("inherit_default"),true);SaveMonster(Rule);Rebuild();}));
-            Add(Button(TEXT("Remove mob"),[this,Rule](){auto Copy=P()->GetArrayField(TEXT("monsters"));Copy.RemoveAll([Rule](const auto& V){return V->AsObject()==Rule;});P()->SetArrayField(TEXT("monsters"),Copy);ExpandedMonster=INDEX_NONE;Save();Rebuild();}));
+            Add(Button(TEXT("Copy Default settings"),[this,Rule](){CopyMonsterDefaults(Rule,false);SaveMonster(Rule);Rebuild();}));
         }
     }
 }

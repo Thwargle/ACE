@@ -10,6 +10,7 @@
 #include "ACEVTObjectClass.h"
 #include "ACEVTLootPalette.h"
 #include "ACEPetDevice.h"
+#include "ACEPluginEquipment.h"
 #include "ACESession.h"
 #include "ACEOpcodes.h"
 #include "Engine/GameInstance.h"
@@ -26,6 +27,7 @@ namespace
 {
     double N(const TSharedPtr<FJsonObject>& O,const TCHAR* K,double Default=0){double V;return O&&O->TryGetNumberField(K,V)&&FMath::IsFinite(V)?V:Default;}
     FString S(const TSharedPtr<FJsonObject>& O,const TCHAR* K){FString V;if(O)O->TryGetStringField(K,V);return V;}
+    bool B(const TSharedPtr<FJsonObject>& O,const TCHAR* K,bool Default=false){bool V;return O&&O->TryGetBoolField(K,V)?V:Default;}
     FString CorpseOwnerName(FString Name)
     {
         // ACE strips administrator markers from Creature_Death's LongDesc to
@@ -81,34 +83,6 @@ namespace
         // identifies the standard Ust even when a server omits its item category.
         return (Item.WeenieClassId==ACEWeenieClass::TinkeringTool||ACEVTObjectClass::Classify(Item)==40)
             && LootItemAvailable(Client,Item,true);
-    }
-    bool Wieldable(const FACEAppraisalInfo& A,const FACEPlayerVitals& V)
-    {
-        const int32 Keys[]={158,270,273,276};
-        for(int32 Key:Keys)
-        {
-            const int32 Req=A.IntProperties.FindRef(Key),Id=A.IntProperties.FindRef(Key+1),Value=A.IntProperties.FindRef(Key+2);
-            if(!Req)continue;
-            if(Req==7){if(V.Level<Value)return false;continue;}
-            if(Req==3||Req==4){if((Req==3?V.GetAttributeCurrent(Id):V.GetAttributeBase(Id))<Value)return false;continue;}
-            if(Req==9){if(V.StatQualityInts.FindRef(Id)<Value)return false;continue;}
-            if(Req==12){if(V.HeritageGroup!=Value)return false;continue;}
-            if(Req==5||Req==6)
-            {
-                const int32 Actual=Id==1?(Req==5?V.MaxHealth:V.HealthStart+V.HealthRanks+V.Endurance/2)
-                    :Id==3?(Req==5?V.MaxStamina:V.StaminaStart+V.StaminaRanks+V.Endurance)
-                    :Id==5?(Req==5?V.MaxMana:V.ManaStart+V.ManaRanks+V.Self):0;
-                if(Actual<Value)return false;continue;
-            }
-            if(Req==1||Req==2||Req==8)
-            {
-                bool Pass=false;for(const auto& Skill:V.Skills)if(Skill.SkillId==Id)
-                    Pass=(Req==1?Skill.Current:Req==2?Skill.Base:Skill.AdvancementClass)>=Value;
-                if(!Pass)return false;
-            }
-            else return false; // Do not guess about server-specific requirements.
-        }
-        return true;
     }
 }
 bool UACEPluginSubsystem::IsOwnedPluginItem(const FACEWorldObject& Item) const
@@ -263,6 +237,21 @@ void UACEPluginSubsystem::ObserveCombatVitals(const FACEPlayerVitals& Vitals)
     const FIntVector Current(Vitals.Health,Vitals.Stamina,Vitals.Mana);
     if(Current==LastCombatVitals)return;
     LastCombatVitals=Current;
+    if(auto P=PolicyPlugin();P&&P->Running&&B(P->Profile,TEXT("recovery"),true))
+    {
+        const auto Below=[](int32 Value,int32 Maximum,double Threshold){return Maximum>0&&100.0*Value/Maximum<Threshold;};
+        const double HealthThreshold=FMath::Max(N(P->Profile,TEXT("health_threshold"),65),N(P->Profile,TEXT("emergency_health_threshold"),35));
+        if(Below(Vitals.Health,Vitals.MaxHealth,HealthThreshold)||Below(Vitals.Stamina,Vitals.MaxStamina,N(P->Profile,TEXT("stamina_threshold"),50))
+            ||Below(Vitals.Mana,Vitals.MaxMana,N(P->Profile,TEXT("mana_threshold"),45)))
+        {
+            // An unsent attack selected before a stance change must not bypass
+            // recovery after damage arrives during that wait. Do not interrupt
+            // a cast or equipment transaction already accepted by the server.
+            if(P->CombatTransitionIntent&&S(P->CombatTransitionIntent,TEXT("activity"))==TEXT("combat"))
+            {P->CombatTransitionIntent.Reset();P->NextAction=0;}
+            WakeCombatDecision();
+        }
+    }
     // VT's ChangeVital wakes the scheduler. Run recovery through the ordinary
     // policy before choosing another attack; never attack from this callback.
     if(CombatTarget||!PhysicalAttackOwner.IsEmpty())WakeCombatDecision();
@@ -698,7 +687,7 @@ TSharedPtr<FJsonValue> UACEPluginSubsystem::PluginItemSnapshot(const FACEWorldOb
     J->SetNumberField(TEXT("structure"),Item.Structure);J->SetNumberField(TEXT("max_structure"),Item.MaxStructure);J->SetBoolField(TEXT("retained"),(Item.ObjectDescriptionFlags&ACEObjectDescFlag::Retained)!=0);
     J->SetNumberField(TEXT("icon_effects"),Item.UiEffects);
     if(Item.SalvageWorkmanship>=0)J->SetNumberField(TEXT("workmanship"),Item.SalvageWorkmanship);
-    const bool Equipped=Item.WielderId==C->GetPlayerGuid() || (Item.CurrentWieldedLocation && Item.ParentGuid==C->GetPlayerGuid());
+    const bool Equipped=C->GetPlayerGuid()!=0 && (Item.WielderId==C->GetPlayerGuid() || (Item.CurrentWieldedLocation && Item.ParentGuid==C->GetPlayerGuid()));
     J->SetBoolField(TEXT("equipped"),Equipped);J->SetNumberField(TEXT("ammo_type"),Item.AmmoType);
     J->SetBoolField(TEXT("resource_available"),LootItemAvailable(C,Item));
     J->SetBoolField(TEXT("salvage_tool_available"),SalvageToolAvailable(C,Item));
@@ -769,7 +758,11 @@ TSharedPtr<FJsonValue> UACEPluginSubsystem::PluginItemSnapshot(const FACEWorldOb
 
     if(A&&A->bSuccess)
     {
-        J->SetBoolField(TEXT("can_wield"),Equipped||Wieldable(*A,V));
+        bool RequiresServerCheck=false;
+        const FString WieldFailure=Equipped?FString():ACEPluginEquipment::WieldFailure(*A,V,&RequiresServerCheck);
+        J->SetBoolField(TEXT("can_wield"),WieldFailure.IsEmpty());
+        J->SetBoolField(TEXT("wield_requires_server_check"),RequiresServerCheck);
+        if(!WieldFailure.IsEmpty())J->SetStringField(TEXT("wield_reason"),WieldFailure);
         if(Item.SalvageWorkmanship<0)if(const auto* W=A->IntProperties.Find(105))
             J->SetNumberField(TEXT("workmanship"),double(*W)/FMath::Max(1,A->IntProperties.FindRef(170)));
         // Casters do not have a weapon appraisal profile. VT reads their
@@ -1267,7 +1260,9 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
             return true;
         }
         const auto* A=Appraisals.Find(Id);
-        if(!Found||!IsOwnedPluginItem(Item)||!A||!A->bSuccess||!Wieldable(*A,C->GetPlayerVitalsView())){P.Status=TEXT("Equipment requirements unavailable or not met");return true;}
+        if(!Found||!IsOwnedPluginItem(Item)||!A||!A->bSuccess){ReportActivityFailure(P,I,TEXT("Equipment is no longer owned or its appraisal is unavailable"));return true;}
+        const FString WieldFailure=ACEPluginEquipment::WieldFailure(*A,C->GetPlayerVitalsView());
+        if(!WieldFailure.IsEmpty()){ReportActivityFailure(P,I,ACERetailObjectNames::Name(Item)+TEXT(": ")+WieldFailure);return true;}
         // Ordinary equip honors the same automatic hand preference as retail
         // ItemHolder::DetermineUse. It is live object data, not an appraisal hint.
         if((Item.ObjectDescriptionFlags&ACEObjectDescFlag::WieldLeft)!=0)Offhand=true;
@@ -1744,13 +1739,31 @@ void UACEPluginSubsystem::ExtendInventorySnapshot(const TSharedPtr<FJsonObject>&
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Session=C->GetSession();if(!Session)return;
     const auto& V=C->GetPlayerVitalsView();
     auto ItemJson=[this](const FACEWorldObject& Item){return PluginItemSnapshot(Item);};
+    if(InventoryRevision!=Session->GetInventoryDataRevision() || InventoryAppraisalRevision!=DataRevision)
+    {
+        InventoryWieldInt64Keys.Reset();
+        for(const auto& Pair:Session->GetWorldObjects())if(IsOwnedPluginItem(Pair.Value))
+            if(const auto* A=Appraisals.Find(Pair.Key);A&&A->bSuccess)
+                for(int32 Key:{158,270,273,276})if(A->IntProperties.FindRef(Key)==13)
+                    InventoryWieldInt64Keys.Add(A->IntProperties.FindRef(Key+1));
+    }
     // Keep immutable rows across background assessments. A one-item reply used
     // to reconstruct every item's property/spell tables on the game thread.
     uint32 Eligibility=GetTypeHash(V.Level);
     for(int32 Id=1;Id<=6;++Id){Eligibility=HashCombine(Eligibility,GetTypeHash(V.GetAttributeBase(Id)));Eligibility=HashCombine(Eligibility,GetTypeHash(V.GetAttributeCurrent(Id)));}
     for(const auto& Skill:V.Skills){Eligibility=HashCombine(Eligibility,GetTypeHash(Skill.Base));Eligibility=HashCombine(Eligibility,GetTypeHash(Skill.Current));Eligibility=HashCombine(Eligibility,GetTypeHash(Skill.AdvancementClass));}
     Eligibility=HashCombine(Eligibility,GetTypeHash(V.MaxHealth));Eligibility=HashCombine(Eligibility,GetTypeHash(V.MaxStamina));Eligibility=HashCombine(Eligibility,GetTypeHash(V.MaxMana));
+    Eligibility=HashCombine(Eligibility,GetTypeHash(V.HeritageGroup));
+    for(int32 Id:{1,3,5})Eligibility=HashCombine(Eligibility,GetTypeHash(V.GetVitalBase(Id)));
     for(const auto& Pair:V.StatQualityInts)Eligibility=HashCombine(Eligibility,HashCombine(GetTypeHash(Pair.Key),GetTypeHash(Pair.Value)));
+    for(const auto& Pair:V.QualityBools)Eligibility=HashCombine(Eligibility,HashCombine(GetTypeHash(Pair.Key),GetTypeHash(Pair.Value)));
+    // XP/luminance change throughout combat. Rebuild rows only for Int64
+    // qualities actually used by carried equipment's requirements.
+    for(int32 Key:InventoryWieldInt64Keys)
+    {
+        Eligibility=HashCombine(Eligibility,HashCombine(GetTypeHash(Key),GetTypeHash(V.QualityInt64s.Contains(Key))));
+        Eligibility=HashCombine(Eligibility,GetTypeHash(V.QualityInt64s.FindRef(Key)));
+    }
     if(InventoryRevision!=Session->GetInventoryDataRevision() || InventoryEligibility!=Eligibility
         || (InventoryAppraisalRevision!=DataRevision && DirtyInventoryAppraisals.IsEmpty()))
     {
