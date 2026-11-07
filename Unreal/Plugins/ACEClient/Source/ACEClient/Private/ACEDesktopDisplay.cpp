@@ -45,6 +45,8 @@ struct FModePreview
     bool Pending = false;
     EWindowMode::Type PreviousMode = EWindowMode::Windowed;
     FIntPoint PreviousSize;
+    EWindowMode::Type RequestedMode = EWindowMode::Windowed;
+    FIntPoint RequestedSize;
     double Deadline = 0;
     TWeakObjectPtr<AACEPlayerController> Controller;
     TWeakObjectPtr<UGameViewportClient> Viewport;
@@ -269,6 +271,14 @@ void FACEDesktopDisplay::FinishModeChange(bool Keep)
             Settings->SetScreenResolution(Preview.PreviousSize);
             Settings->ApplyResolutionSettings(false);
         }
+        else
+        {
+            // Linux can deliver the old window's resize event during a mode
+            // switch. UGameEngine::OnViewportResized then overwrites settings
+            // with the old decorated client area. Commit the confirmed request.
+            Settings->SetFullscreenMode(Preview.RequestedMode);
+            Settings->SetScreenResolution(Preview.RequestedSize);
+        }
         Settings->ConfirmVideoMode();Settings->SaveSettings();
     }
     if (auto* PC=Preview.Controller.Get()) PC->RefreshDesktopDisplayInputMode();
@@ -278,6 +288,17 @@ void FACEDesktopDisplay::ApplyModeChange(AACEPlayerController* PC,EWindowMode::T
 {
     auto* Settings=UGameUserSettings::GetGameUserSettings();
     if (!Settings || (PC && PC->IsVRActive())) return;
+#if PLATFORM_LINUX
+    // A native-sized decorated window cannot fit inside its own desktop work
+    // area. The compositor shrinks it (often to an odd size such as 2648x1461).
+    // Use fullscreen for this explicit choice, with the normal revert prompt.
+    if (Mode==EWindowMode::Windowed && FSlateApplication::IsInitialized()
+        && !FSlateApplication::Get().IsRenderingOffScreen())
+    {
+        const auto Desktop=GetMonitorResolution(PC);
+        if (Size.X>=Desktop.X || Size.Y>=Desktop.Y) Mode=EWindowMode::Fullscreen;
+    }
+#endif
     FinishModeChange(false);
     if (Settings->GetFullscreenMode()==Mode && Settings->GetScreenResolution()==Size)
     { Settings->SaveSettings();return; }
@@ -285,6 +306,7 @@ void FACEDesktopDisplay::ApplyModeChange(AACEPlayerController* PC,EWindowMode::T
     // Never enter an unconfirmed mode without an independent, reachable prompt.
     if (!Viewport || !FSlateApplication::IsInitialized()) return;
     Preview.PreviousMode=Settings->GetFullscreenMode();Preview.PreviousSize=Settings->GetScreenResolution();
+    Preview.RequestedMode=Mode; Preview.RequestedSize=Size;
     Preview.Controller=PC;Preview.Viewport=Viewport;Preview.Pending=true;
     Preview.Deadline=FPlatformTime::Seconds()+15.;
     Preview.Prompt=SNew(SBorder).HAlign(HAlign_Center).VAlign(VAlign_Center)
@@ -293,7 +315,8 @@ void FACEDesktopDisplay::ApplyModeChange(AACEPlayerController* PC,EWindowMode::T
          [SNew(SVerticalBox)
           +SVerticalBox::Slot().AutoHeight().Padding(12)
            [SNew(STextBlock).AutoWrapText(true).Justification(ETextJustify::Center)
-            .Text_Lambda([]{return FText::FromString(FString::Printf(TEXT("Keep these display settings?\nReverting in %d seconds."),
+            .Text_Lambda([]{return FText::FromString(FString::Printf(TEXT("Keep %d x %d (%s)?\nReverting in %d seconds."),
+                Preview.RequestedSize.X,Preview.RequestedSize.Y,Preview.RequestedMode==EWindowMode::Windowed?TEXT("Windowed"):Preview.RequestedMode==EWindowMode::Fullscreen?TEXT("Fullscreen"):TEXT("Borderless"),
                 FMath::Max(0,FMath::CeilToInt(Preview.Deadline-FPlatformTime::Seconds()))));})]
           +SVerticalBox::Slot().AutoHeight().Padding(12)
            [SNew(SHorizontalBox)
@@ -391,6 +414,8 @@ bool FACEDisplayRecoveryTest::RunTest(const FString&)
     FACEDesktopDisplay::FinishModeChange(false);
     TestEqual(TEXT("Revert restores windowed mode"),Settings->GetFullscreenMode(),EWindowMode::Windowed);
     FACEDesktopDisplay::ApplyModeChange(PC,EWindowMode::Windowed,FIntPoint(1280,720));
+    // Simulate a delayed compositor resize notification for the previous window.
+    Settings->SetScreenResolution(FIntPoint(2648,1461));
     FACEDesktopDisplay::FinishModeChange(true);
     GConfig->GetInt(TEXT("/Script/Engine.GameUserSettings"),TEXT("ResolutionSizeX"),SavedX,GGameUserSettingsIni);
     TestEqual(TEXT("Keep persists the confirmed resolution"),SavedX,1280);

@@ -29,6 +29,9 @@
 #include "Dat/ACEDatTextureResolver.h"
 #include "Dat/ACELandTextureMipProvider.h"
 #include "Engine/Texture2D.h"
+#include "DeviceProfiles/DeviceProfileManager.h"
+#include "DeviceProfiles/DeviceProfile.h"
+#include "Engine/TextureLODSettings.h"
 #include "TextureResource.h"
 #include "RenderingThread.h"
 #include "UObject/StrongObjectPtr.h"
@@ -136,6 +139,13 @@ bool FACELowEndVideoSettingsTest::RunTest(const FString&)
     auto Blend=MakeShared<FACETerrainBlend,ESPMode::ThreadSafe>();Blend->Width=128;Blend->Height=64;Blend->Pixels=Pixels;
     TestTrue(TEXT("Terrain source mips prepared"),Blend->PrepareUploadMips());
     TStrongObjectPtr<UTexture2D> Terrain(UACELandTextureMipProvider::CreateTexture(Dat,Blend));
+    const auto* TextureSettings=UDeviceProfileManager::Get().GetActiveProfile()->GetTextureLODSettings();
+    for(auto* Texture:{Object.Get(),Terrain.Get()})
+    {
+        const auto Filter=TextureSettings->GetSamplerFilter(Texture);
+        TestTrue(TEXT("World and terrain textures honor anisotropic filtering at shallow view angles"),
+            Filter==ETextureSamplerFilter::AnisotropicPoint || Filter==ETextureSamplerFilter::AnisotropicLinear);
+    }
     auto GPUSize=[](UTexture2D* Texture) {return Texture->GetResource()->TextureRHI->GetSizeXY();};
     for(int32 Quality:{0,1,2,3,4,0,2})
     {

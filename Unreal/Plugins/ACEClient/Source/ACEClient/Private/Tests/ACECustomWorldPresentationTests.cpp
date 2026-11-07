@@ -27,12 +27,18 @@
 #include "Scalability.h"
 #include "Dat/ACEWorldTextureMipProvider.h"
 #include "SceneView.h"
+#include "PrimitiveSceneProxy.h"
+#include "EngineUtils.h"
+#include "ACEPlayerController.h"
+#include "ACEOrbitCameraBoom.h"
+#include "ACECameraRetail.h"
 #include "Dat/ACECellTransit.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECustomWorldPresentationTest,"ACE.RetailParity.CustomWorldPresentation",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FACECustomWorldPresentationTest::RunTest(const FString&)
 {
+    TGuardValue<uint64> FrameGuard(GFrameCounter,GFrameCounter);
     const auto Values = UWorld::InitializationValues().AllowAudioPlayback(false).CreatePhysicsScene(true)
         .CreateNavigation(false).CreateAISystem(false);
     auto* World = UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);
@@ -168,6 +174,10 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
                     auto* Room=World->SpawnActor<AACEEnvCellActor>();
                     Room->LoadEnvCell(Id,FACEPosition::AceVectorToUnreal(FVector((Block>>24)*192,((Block>>16)&255)*192,0),100),100);
                     Room->SetEnvCellCollisionActive(true);Room->SetEnvCellHiddenInGame(false);Rooms.Add(Room);
+                    for(const auto& Stab:Cell->StaticObjects)Dat->GetOrBuildSetupMesh(Stab.Id,100,UACEDatSubsystem::ACEPlacementResting);
+                    Room->EnsureStaticObjectsQueued();
+                    for(int32 Frame=0;Frame<64 && Room->HasPendingStaticObjects();++Frame){++GFrameCounter;Room->Tick(1.f/60);}
+                    TestFalse(TEXT("Nearby room scenery finishes loading"),Room->HasPendingStaticObjects());
                 }
             auto* CaptureOwner=World->SpawnActor<AActor>();
             auto* Capture=NewObject<USceneCaptureComponent2D>(CaptureOwner);
@@ -185,7 +195,6 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
             for(int32 Part=0;Part<Actor->Appearance->GetPartCount();++Part)
                 if(auto* Mesh=Cast<UPrimitiveComponent>(Actor->Appearance->GetPartMesh(Part)))Capture->ShowOnlyComponent(Mesh);
             for(auto* Room:Rooms)Capture->ShowOnlyComponent(Room->CellMesh);
-            TGuardValue<uint64> FrameGuard(GFrameCounter,GFrameCounter);
             auto CaptureFrames=[&]
             {
                 for(int32 Frame=0;Frame<4;++Frame)
@@ -200,6 +209,17 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
                 Capture->SetWorldLocationAndRotation(Eye,(Center-Eye).Rotation());
                 if(GShaderCompilingManager)GShaderCompilingManager->FinishAllCompilation();
                 CaptureFrames();
+                for(int32 Part=0;Part<Actor->Appearance->GetPartCount();++Part)
+                    if(auto* Mesh=Cast<UProceduralMeshComponent>(Actor->Appearance->GetPartMesh(Part));Mesh && Mesh->SceneProxy)
+                    {
+                        auto* Proxy=Mesh->SceneProxy;
+                        bool Drawn=false; FVector RenderOrigin;
+                        ENQUEUE_RENDER_COMMAND(ACECheckApostateDrawState)([Proxy,&Drawn,&RenderOrigin](FRHICommandListImmediate&)
+                        { Drawn=Proxy->IsDrawnInGame();RenderOrigin=Proxy->GetLocalToWorld().GetOrigin(); });
+                        FlushRenderingCommands();
+                        TestTrue(FString::Printf(TEXT("%s %s part %d render proxy is drawn"),*Gateway.Name,Label,Part),Drawn);
+                        TestTrue(TEXT("Render origin matches the visible component"),RenderOrigin.Equals(Mesh->GetComponentLocation(),.1));
+                    }
                 TArray<FColor> Pixels;RenderTarget->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
                 Actor->SetActorHiddenInGame(true);CaptureFrames();
                 TArray<FColor> Without;RenderTarget->GameThread_GetRenderTargetResource()->ReadPixels(Without);
@@ -215,6 +235,95 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
             };
             const FVector CloseEye=Center+FVector(200,0,150);
             Snap(CloseEye,TEXT("close"));
+            // Streamed appearances can be registered/rebuilt while their room
+            // is hidden for actual rendered frames, not only simulated ticks.
+            Actor->SetCellVisible(false);
+            for(int32 Part=0;Part<Actor->Appearance->GetPartCount();++Part)
+                Actor->Appearance->GetPartMesh(Part)->MarkRenderStateDirty();
+            CaptureFrames();
+            Actor->SetCellVisible(true);
+            Snap(CloseEye,TEXT("rebuilt-hidden"));
+            Capture->FOVAngle=110.01f;
+            Snap(Center+FVector(644,0,0),TEXT("reported-distance-fov"));
+            Capture->FOVAngle=90;
+            if(!Deposit)
+            {
+                // Stock 0110 pit includes an acid surface and a door above it.
+                // Rendering just the rooms misses inter-object depth/placement
+                // errors that can conceal an otherwise valid gateway mesh.
+                TArray<AACEWorldEntityActor*> PitObjects;
+                for(bool Acid:{true,false})
+                {
+                    FACEWorldObject Pit;
+                    Pit.Guid=Acid?0x7011005C:0x7011006B;Pit.WeenieClassId=Acid?6122:278;
+                    Pit.Name=Acid?TEXT("Acid"):TEXT("Door");Pit.ItemType=ACEItemType::Misc;
+                    Pit.bHasPosition=true;Pit.bHasServerPhysicsDescription=true;
+                    Pit.SetupId=Acid?0x020007A7:0x0200024F;Pit.MotionTableId=Acid?0:0x09000016;
+                    Pit.PhysicsState=Acid?12:24;
+                    Pit.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck|(Acid?ACEObjectDescFlag::UiHidden:ACEObjectDescFlag::Openable);
+                    Pit.Position.CellId=Acid?0x0110028A:0x011002C6;
+                    Pit.Position.Location=Acid?FVector(40,-140,12):FVector(40.01,-145,24);
+                    if(!Acid){Pit.Position.RotationW=0;Pit.Position.RotationXYZ=FVector(0,0,-1);}
+                    auto* PitActor=World->SpawnActor<AACEWorldEntityActor>();
+                    PitActor->InitializeFromObject(Pit,100,true);PitObjects.Add(PitActor);
+                    TestTrue(TEXT("Pit object has its DAT appearance"),PitActor->Appearance && PitActor->Appearance->HasAppearance());
+                    for(int32 Frame=0;Frame<120;++Frame)
+                    {
+                        PitActor->Tick(1.f/60);
+                        PitActor->Appearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+                        if(PitActor->ScriptComponent->IsComponentTickEnabled())PitActor->ScriptComponent->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+                    }
+                    TestTrue(TEXT("Pit object retains authored position"),PitActor->GetActorLocation().Equals(Pit.Position.ToUnrealLocation(),1));
+                    if(PitActor->Appearance) for(int32 Part=0;Part<PitActor->Appearance->GetPartCount();++Part)
+                        if(auto* Mesh=Cast<UPrimitiveComponent>(PitActor->Appearance->GetPartMesh(Part)))Capture->ShowOnlyComponent(Mesh);
+                }
+                for(auto* Room:Rooms)
+                {
+                    Capture->ShowOnlyActorComponents(Room);
+                    for(TActorIterator<AActor> It(World);It;++It)
+                        if(It->GetOwner()==Room)Capture->ShowOnlyActorComponents(*It);
+                }
+                Capture->FOVAngle=110.01f;
+                for(int32 Yaw:{0,90,180,270})
+                    Snap(Center+FRotator(0,Yaw,0).RotateVector(FVector(450,0,460)),
+                        *FString::Printf(TEXT("full-pit-%d"),Yaw));
+                auto* PC=World->SpawnActor<AACEPlayerController>();PC->DispatchBeginPlay();
+                auto* CameraPawn=World->SpawnActor<APawn>();
+                auto* Boom=NewObject<UACEOrbitCameraBoom>(CameraPawn);
+                CameraPawn->SetRootComponent(Boom);Boom->RegisterComponent();PC->Possess(CameraPawn);
+                Boom->ProbeSize=ACECameraRetail::ViewerRadiusAc*100;
+                Boom->bEnableCameraLag=false;Boom->bEnableCameraRotationLag=false;
+                TGuardValue<FACEPosition> PlayerPosition(Session->PlayerPosition,Gateway.Position);
+                for(bool Ledge:{false,true})
+                {
+                    Session->PlayerPosition=Gateway.Position;
+                    Session->PlayerPosition.Location+=FVector(0,0,Bounds.GetExtent().Z/100);
+                    if(Ledge){Session->PlayerPosition.CellId=0x011002E7;Session->PlayerPosition.Location=FVector(45.227190,-136.856896,24.006001);}
+                    const FVector Pivot=Session->PlayerPosition.ToUnrealLocation()+FVector(0,0,ACECameraRetail::DefaultPivotZAc*100);
+                    CameraPawn->SetActorLocation(Pivot);
+                    for(float Length:{261.f,600.f})for(int32 Yaw:{0,90,180,270})
+                    {
+                        Boom->TargetArmLength=Length;Boom->SetWorldRotation(FRotator(-55,Yaw,0));
+                        Boom->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+                        const FVector Eye=Boom->GetSocketLocation(USpringArmComponent::SocketName);
+                        uint32 ViewCell=0;
+                        TestTrue(TEXT("Orbit eye remains in a valid dungeon cell"),
+                            Dat->ResolveContainingEnvCell(Session->PlayerPosition.CellId,Eye,100,ViewCell));
+                        if(!Ledge)
+                            Snap(Eye,*FString::Printf(TEXT("standing-on-gateway-%.0f-%d"),Length,Yaw));
+                    }
+                }
+                PC->UnPossess();CameraPawn->Destroy();PC->Destroy();
+                Capture->FOVAngle=90;
+                for(auto* PitActor:PitObjects)PitActor->Destroy();
+            }
+            for(int32 Part=0;Part<Actor->Appearance->GetPartCount();++Part)
+                if(auto* Mesh=Cast<UProceduralMeshComponent>(Actor->Appearance->GetPartMesh(Part)))
+                    for(int32 Section=0;Section<Mesh->GetNumSections();++Section)
+                        if(auto* Material=Mesh->GetMaterial(Section))
+                            AddInfo(FString::Printf(TEXT("%s section %d material=%s base=%s blend=%d two-sided=%d"),
+                                *Gateway.Name,Section,*Material->GetName(),*Material->GetMaterial()->GetName(),
+                                int32(Material->GetBlendMode()),Material->IsTwoSided()));
             if(FParse::Param(FCommandLine::Get(),TEXT("ACEApostateGraphicsMatrix")))
             {
                 // The missing-object screenshots also show much longer sessions.

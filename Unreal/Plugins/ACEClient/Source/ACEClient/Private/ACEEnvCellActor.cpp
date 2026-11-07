@@ -215,6 +215,7 @@ void AACEEnvCellActor::SetEnvCellCollisionActive(bool bActive, bool bWalkableDra
 void AACEEnvCellActor::ApplyStabPawnCollision(bool bEnable)
 {
 	// Attached actors do not inherit their owner's collision-enabled flag.
+	if (StaticSceneryActor) StaticSceneryActor->SetActorEnableCollision(bEnable);
 	for (AACERegionSceneryActor* Scenery : AnimatedStabs)
 	{
 		if (Scenery) Scenery->SetActorEnableCollision(bEnable);
@@ -223,11 +224,9 @@ void AACEEnvCellActor::ApplyStabPawnCollision(bool bEnable)
 
 void AACEEnvCellActor::SetEnvCellHiddenInGame(bool bHide)
 {
-	if (IsHidden() == bHide)
-	{
-		return;
-	}
-	SetActorHiddenInGame(bHide);
+	if (IsHidden()==bHide) return;
+	if (IsHidden() != bHide) SetActorHiddenInGame(bHide);
+	if (StaticSceneryActor) StaticSceneryActor->SetActorHiddenInGame(bHide);
 	for (AACERegionSceneryActor* Scenery : AnimatedStabs)
 	{
 		if (!Scenery)
@@ -241,6 +240,58 @@ void AACEEnvCellActor::SetEnvCellHiddenInGame(bool bHide)
 			if (bHide)
 			{
 				Scripts->StopAllSounds();
+			}
+		}
+	}
+}
+
+USceneComponent* AACEEnvCellActor::GetStaticSceneryRoot()
+{
+	if (!StaticSceneryActor && GetWorld())
+	{
+		FActorSpawnParameters Params; Params.Owner=this;
+		Params.SpawnCollisionHandlingOverride=ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		StaticSceneryActor=GetWorld()->SpawnActor<AActor>(AActor::StaticClass(),GetActorTransform(),Params);
+		if (StaticSceneryActor)
+		{
+			auto* Root=NewObject<USceneComponent>(StaticSceneryActor);
+			StaticSceneryActor->SetRootComponent(Root); Root->RegisterComponent();
+			StaticSceneryActor->SetActorTransform(GetActorTransform());
+			StaticSceneryActor->AttachToActor(this,FAttachmentTransformRules::KeepWorldTransform);
+			StaticSceneryActor->SetActorHiddenInGame(IsHidden());
+			StaticSceneryActor->SetActorEnableCollision(GetActorEnableCollision());
+		}
+	}
+	return StaticSceneryActor ? StaticSceneryActor->GetRootComponent() : nullptr;
+}
+
+void AACEEnvCellActor::RefreshStaticVisibility(TFunctionRef<bool(const FBox&)> IsVisible)
+{
+	// Retail adds scenery to every intersected cell. Room polygons retain their
+	// portal visibility; the object's origin alone must not hide a long stair.
+	bool Any=false;
+	auto Show=[&](UPrimitiveComponent* Part)
+	{
+		if (!Part) return;
+		const bool Visible=!IsHidden() || IsVisible(Part->Bounds.GetBox());
+		Part->SetVisibility(Visible); Any|=Visible;
+	};
+	for (const auto& Pair:StaticObjectHisms) Show(Pair.Value);
+	for (UProceduralMeshComponent* Part:StaticObjectMeshes) Show(Part);
+	if (StaticSceneryActor) StaticSceneryActor->SetActorHiddenInGame(!Any);
+	for (AACERegionSceneryActor* Scenery:AnimatedStabs)
+	{
+		if (!Scenery) continue;
+		FBox Bounds(ForceInit);
+		if (Scenery->Appearance) Scenery->Appearance->GetVisualWorldBounds(Bounds);
+		const bool Visible=!IsHidden() || (Bounds.IsValid && IsVisible(Bounds));
+		if (Scenery->IsHidden()==Visible)
+		{
+			Scenery->SetActorHiddenInGame(!Visible);
+			if (UACEScriptComponent* Scripts=Scenery->ScriptComponent)
+			{
+				Scripts->SetComponentTickEnabled(Visible);
+				if (!Visible) Scripts->StopAllSounds();
 			}
 		}
 	}
@@ -577,6 +628,7 @@ void AACEEnvCellActor::ClearStaticObjects()
 		}
 	}
 	StaticObjectHisms.Reset();
+	if (StaticSceneryActor) { StaticSceneryActor->Destroy(); StaticSceneryActor=nullptr; }
 	for (AACERegionSceneryActor* Scenery : AnimatedStabs)
 	{
 		if (Scenery)
@@ -602,12 +654,13 @@ UInstancedStaticMeshComponent* AACEEnvCellActor::GetOrCreateStaticHism(
 		return nullptr;
 	}
 	const FName CompName = *FString::Printf(TEXT("EnvStabISM_%08X"), SetupId);
-	UInstancedStaticMeshComponent* Hism = NewObject<UInstancedStaticMeshComponent>(this, CompName);
+	auto* SceneryRoot=GetStaticSceneryRoot(); if (!SceneryRoot) return nullptr;
+	UInstancedStaticMeshComponent* Hism = NewObject<UInstancedStaticMeshComponent>(StaticSceneryActor, CompName);
 	if (!Hism)
 	{
 		return nullptr;
 	}
-	Hism->SetupAttachment(GetRootComponent());
+	Hism->SetupAttachment(SceneryRoot);
 	Hism->SetStaticMesh(StaticMesh);
 	// Root is Movable (actors relocate with streaming) — Static ISM cannot attach to it.
 	Hism->SetMobility(EComponentMobility::Movable);
@@ -730,12 +783,13 @@ bool AACEEnvCellActor::TrySpawnOneStaticObject(UACEDatSubsystem* Dat, const FACE
 
 	// ProceduralMesh fallback when StaticMesh cook fails.
 	const FName CompName = *FString::Printf(TEXT("EnvStab_%08X_%d"), Stab.Id, StaticObjectMeshes.Num());
-	UProceduralMeshComponent* Proc = NewObject<UProceduralMeshComponent>(this, CompName);
+	auto* SceneryRoot=GetStaticSceneryRoot(); if (!SceneryRoot) return false;
+	UProceduralMeshComponent* Proc = NewObject<UProceduralMeshComponent>(StaticSceneryActor, CompName);
 	if (!Proc)
 	{
 		return true;
 	}
-	Proc->SetupAttachment(GetRootComponent());
+	Proc->SetupAttachment(SceneryRoot);
 	Proc->bAlwaysCreatePhysicsState = true;
 	Proc->RegisterComponent();
 	Proc->bUseAsyncCooking = !bAppliedCollisionActive;

@@ -211,6 +211,7 @@ def build_release(root, args):
     verify_binary_version(exe, args.windows_version)
     verify_client_plugin_boundary(windows)
     require((windows / 'Update-Client.ps1').is_file(), 'Updater helper missing from Windows package')
+    require((windows / 'Update-Client.exe').is_file(), 'Native updater helper missing from Windows package')
     if args.linux_version:
         # Preflight before creating an immutable release directory or copying GBs.
         verify_binary_version(linux / LINUX_EXE, args.linux_version, linux=True)
@@ -230,7 +231,7 @@ def build_release(root, args):
                 continue
             if path.suffix.lower() in {'.pdb', '.log', '.dat', '.dmp'} or path.name.startswith('Manifest_'):
                 continue
-            if rel.parts[0] not in {'ACUnreal', 'Engine', 'ACUnreal.exe', 'Launch-VR.ps1', 'Launch-VR.bat', 'AC-Unreal.bat', 'AC-VR.bat', 'Update-Client.ps1', 'NOTICES.txt'}:
+            if rel.parts[0] not in {'ACUnreal', 'Engine', 'ACUnreal.exe', 'Launch-VR.ps1', 'Launch-VR.bat', 'AC-Unreal.bat', 'AC-VR.bat', 'Update-Client.ps1', 'Update-Client.exe', 'NOTICES.txt'}:
                 continue
             require(path.name.lower() not in {'config.js', 'log4net.config'}, 'Local server config in runtime')
             archive.write(path, prefix + rel.as_posix())

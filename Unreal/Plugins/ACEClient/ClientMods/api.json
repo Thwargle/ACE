@@ -1,5 +1,95 @@
 {
   "lua_api": 2,
+  "host": {
+    "plugin_limit": {
+      "setting": "Plugin Manager > Enabled plugin limit",
+      "settings_key": "plugins.enabled_limit",
+      "default": 16,
+      "minimum": 0,
+      "maximum": 2147483647,
+      "unlimited_value": 0,
+      "counts": "enabled plugins, including stopped plugins and UI-only tools",
+      "disabled_count": false,
+      "discovery_limit": null,
+      "persistent": true,
+      "lua_configurable": false,
+      "lowering": "Rejected below the enabled count; existing plugins remain enabled",
+      "independent_limits": "Does not change per-VM quotas, world plates or the single automation driver"
+    },
+    "plugin_snapshot": "plugins[id] = {enabled,running}; include plugins in selective snapshot_fields; no configured limit or private peer state",
+    "platforms": ["Windows", "Linux", "PC VR", "Quest", "Android phones/tablets"],
+    "platform_notes": "Shared Lua API and native UI; individual native services may have narrower platform support"
+  },
+  "lua_helpers": {
+    "lootmatch": {
+      "signature": "lootmatch(rule, item, snapshot, scan)",
+      "parameters": {
+        "rule": "one validated native loot rule, not a profile or rule array",
+        "item": "one host item snapshot with identified and property maps",
+        "snapshot": "current callback snapshot; imported character conditions use level, skills and main_pack_slots",
+        "scan": "required mutable table; start empty and retain only while this rule/item returns pending"
+      },
+      "returns": ["true: matches", "false: does not match", "nil: appraisal data needed", "pending: resume next callback"],
+      "pending_type": "string",
+      "side_effects": "Updates scan only; no appraisal, inventory action or chat output",
+      "cursor_invalidation": "Reset after a completed result or changes to rule, item, appraisal/inventory revision, or referenced character data",
+      "name_modes": ["prefix", "exact", "contains", "any", "all", "regex"],
+      "name_mode_default": "prefix",
+      "conditions_modes": ["all", "any"],
+      "conditions_mode_default": "all",
+      "condition_fields": ["int", "float", "string", "spells", "legacy"],
+      "numeric_operators": ["eq", "ne", "ge", "le", "bits", "in"],
+      "numeric_in_max_values": 64,
+      "max_profile_rules": 2048,
+      "max_conditions_per_rule": 64,
+      "documentation": "Docs/Plugins/LootMatching.md"
+    },
+    "spellindex": {
+      "signature": "spellindex(spells, inventory, time, skill_margin, unavailable_until, components_required)",
+      "returns": ["by_id", "supplied", "usable", "groups"],
+      "groups": ["offense", "instant_self", "other_buffs", "by_category", "buffs"],
+      "components_required_default": true,
+      "components_required_usage": "Pass snapshot.components_required ~= false; only explicit false bypasses components",
+      "unavailable_until": "numeric spell ID keys with monotonic retry times",
+      "supplied": "booleans keyed by numeric spell ID",
+      "limits": {"spells":16384,"inventory_entries":4096,"native_visits_per_callback":131072}
+    },
+    "string.contains": {
+      "signature": "string.contains(text, value)",
+      "returns": "case-sensitive literal match boolean",
+      "limits": {"text_bytes":4096,"value_bytes":256}
+    },
+    "string.findplain": {
+      "signature": "string.findplain(text, value, start=1)",
+      "returns": "one-based byte position or nil; one return value",
+      "limits": {"text_bytes":16384,"value_bytes":8192}
+    },
+    "regextest": {
+      "signature": "regextest(text, pattern)",
+      "returns": "boolean",
+      "limits": {"text_bytes":16384,"pattern_bytes":8192,"regex_seconds_per_callback":0.02},
+      "errors": "Unsupported pattern or exceeded quota raises a script error"
+    },
+    "regexmatch": {
+      "signature": "regexmatch(text, pattern)",
+      "returns": "capture object with string keys, or nil; key 0 is the whole match",
+      "limits": {"text_bytes":16384,"pattern_bytes":8192,"regex_seconds_per_callback":0.02},
+      "errors": "Unsupported pattern or exceeded quota raises a script error"
+    },
+    "ucmcommand": {
+      "signature": "ucmcommand(text)",
+      "aliases": ["vtcommand"],
+      "returns": "compiled policy command record; does not execute it",
+      "max_text_bytes": 4096,
+      "errors": "Unsupported commands raise a script error"
+    },
+    "workavailable": {
+      "signature": "workavailable()",
+      "returns": "boolean; return from callback when false and resume later",
+      "cooperative_limits": {"instructions":200000,"regex_seconds":0.005},
+      "extends_hard_limits": false
+    }
+  },
   "companion_manifest_options": {
     "update_interval": {"type":"number","minimum":0.5,"maximum":60,"default":0.5,"units":"seconds"},
     "snapshot_fields": {"api":2,"type":"array","items":"top-level snapshot field name","max_items":128,"default":"all permitted fields"},
@@ -80,6 +170,7 @@
   "companion_api": 1,
   "companion": {
     "mode": "companion",
+    "api2_additional_permissions": ["profiles", "data", "say"],
     "permissions": [
       "chat",
       "chat_filter",
@@ -233,6 +324,7 @@
       "frame"
     ],
     "ui_layout": {
+      "text_scale": "Native labels, buttons and editable text respect the player's Lua Plugin Text Scale, independently of chat scale; use flexible layouts",
       "width_height": "optional fixed logical dimensions 0..2048; image aspect ratio is preserved",
       "align": "text justification: left, center or right",
       "progress_colors": "color sets bar fill; text_color sets overlaid label, light by default",

@@ -22,6 +22,7 @@ class ACECLIENT_API AACEEnvCellActor : public AActor
 	friend class FACERetailInteriorStreamingTest;
 	friend class FACEBridgeEntryCollisionTest;
 	friend class FACERetailRuntimeRegressionTest;
+	friend class FACEStaticCellVisibilityTest;
 
 public:
 	AACEEnvCellActor();
@@ -108,6 +109,8 @@ public:
 
 	/** Hide cell mesh + live stab actors (fountains/lamps) together. */
 	void SetEnvCellHiddenInGame(bool bHide);
+	/** Stabs can occupy a visible neighboring room even when their origin cell is hidden. */
+	void RefreshStaticVisibility(TFunctionRef<bool(const FBox&)> IsVisible);
 
 	/** Outdoor StabList peeks (Yaraq shop facades) cast into CSM. Indoor/dungeon cells stay off. */
 	void SetSunCastShadow(bool bCast);
@@ -155,6 +158,8 @@ protected:
 	/** Indoor stabs with DefaultScript / DefaultAnimation (fountains, lamps). */
 	UPROPERTY()
 	TArray<TObjectPtr<AACERegionSceneryActor>> AnimatedStabs;
+	UPROPERTY(Transient) TObjectPtr<AActor> StaticSceneryActor;
+	USceneComponent* GetStaticSceneryRoot();
 	UPROPERTY() TArray<TObjectPtr<class UPointLightComponent>> DoorwayLights;
 	bool bRequestedSunCastShadow = false;
 	/** Cell-owned lifetime, independent of the room's view-dependent draw visibility. */

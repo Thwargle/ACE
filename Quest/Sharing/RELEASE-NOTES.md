@@ -1,40 +1,47 @@
-# AC:Unreal / AC:VR release 150
+# AC:Unreal / AC:VR release 151
 
 Windows desktop, PC VR, native Linux x86_64, standalone Quest, and the Android
-phone/tablet preview share **2026.11.05.150**. Android version code: 150.
-Quest installer revision: 9. These notes cover changes since v149.
+phone/tablet preview share **2026.11.06.151**. Android version code: 151.
+Quest installer revision: 9. These notes cover changes since v150.
 
-## Networking and combat UI
+## Interface and world visibility
 
-- Improve network catch-up during heavy traffic. When dispatchable updates wait
-  at least 100 ms, temporarily increase the receive/dispatch budget from 0.5 ms
-  to 8 ms per frame, retaining packet limits and ordered delivery.
-- Expand /acueperf diagnostics to distinguish socket backlog, dispatch queues,
-  and updates waiting for missing packets or objects.
-- Restore the Recklessness range indicator on the melee attack bar for trained
-  and specialized characters, using the end-of-retail 10-90% range.
+- Keep large indoor scenery, including stairs, visible when its bounds extend
+  into a visible room even if its origin cell is hidden.
+- Restore horizontal resizing for vendor and salvage windows, sharing their width.
+- Preserve spellbook school/level filters when learning a spell; reveal the new
+  spell only when those filters admit it.
+- Fix spell hotkeys 11 and 12 and display available-house replies from the server.
 
-## Linux
+## UCM and plugins
 
-- Expand resolution selection beyond the saved 1080p entry: detect monitor modes
-  and offer suitable 1440p, 4K, ultrawide, and common window sizes.
-- Refresh the resolution list when opened, retain custom/saved selections, and
-  default fresh installations to desktop resolution. Keep the 15-second
-  confirmation/revert safeguard.
-- Add optional password saving on the Accounts tab. Off by default; Linux
-  passwords are stored unencrypted in a file restricted to the current user.
-  Turning it off removes saved passwords.
+- Use a player-targeted bane for equipped armor when refreshing partial coverage.
+- Skip identified items without workmanship during automatic salvage.
+- Make the enabled-plugin limit configurable; disabled plugins no longer consume
+  the limit, and all discovered plugins remain available in the manager.
+- Expand Lua API documentation, including loot matching, capabilities, settings,
+  snapshots, custom graphics, and plugin limits.
 
-## Validation and packaging
+## Display and updates
 
-Automated validation covers sustained ordered network traffic, recovery from
-backlogs, Recklessness/UI rendering, login persistence, resolution selection,
-settings save/reload/revert, launchers and updates. Native Linux display mode
-queries passed under WSLg X11 and Wayland. Controlled traffic tests drained all
-events in order without duplicates; live crowded-event improvement still needs
-player verification. No physical Linux monitor, Quest or phone acceptance test
-was performed for this release.
+- Preserve the confirmed Linux resolution during delayed window resize events;
+  use fullscreen when the requested decorated window cannot fit the monitor.
+- Apply the selected texture filtering to terrain and world textures instead of
+  forcing trilinear filtering.
+- Replace the Windows updater's PowerShell dependency with a native helper for
+  update/restart compatibility under Wine/Proton.
+  Older builds with a broken updater may need one manual installation to acquire it.
 
-Packages exclude retail DATs, personal settings, server data and generated
-MeshCache files. Android phones/tablets remain a preview with a separate APK
-from Quest. Detailed release validation results accompany the local artifacts.
+## Diagnostics and validation
+
+- Expand /acueobject with renderer-side draw state, bounds, geometry counts, and
+  camera/interior diagnostics. The reported invisible Apostate Nexus Gateway is
+  still under investigation; this release does not claim a confirmed gateway fix.
+
+Automated checks cover the changed behavior, packaged clients, APK contents,
+upgrade preservation, and public download integrity. Validation results accompany
+the local release artifacts. Physical Linux 4K displays, a live Faugus restart,
+Quest/phone hardware, and the affected gateway session were not acceptance-tested.
+
+Packages exclude retail DATs, personal settings, server data, and generated
+MeshCache files. Android phones/tablets remain a separate preview APK.

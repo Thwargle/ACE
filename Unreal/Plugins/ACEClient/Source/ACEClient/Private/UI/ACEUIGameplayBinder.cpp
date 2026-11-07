@@ -3830,7 +3830,7 @@ bool UACEUIGameplayBinder::ShouldPreserveShortcutSelection(int32 Guid) const
 
 void UACEUIGameplayBinder::ActivateHotbarSlot(int32 SlotIndex)
 {
-	if (!Client || SlotIndex < 0 || SlotIndex >= 10)
+	if (!Client || SlotIndex < 0 || SlotIndex >= 12)
 	{
 		return;
 	}
@@ -3841,7 +3841,7 @@ void UACEUIGameplayBinder::ActivateHotbarSlot(int32 SlotIndex)
 	const bool bSpellBarOpen = bMagic && CombatRoot.IsValid() && CombatRoot->bVisible;
 	if (bSpellBarOpen)
 	{
-		// Scrolling changes the view, never the first ten key bindings.
+		// Scrolling changes the view, never the twelve spell key bindings.
 		const TArray<int32> Bar = Client->GetSpellBar(Client->GetActiveSpellBar());
 		const int32 SpellId = Bar.IsValidIndex(SlotIndex) ? Bar[SlotIndex] : 0;
 		if (SpellId != 0)
@@ -3855,7 +3855,7 @@ void UACEUIGameplayBinder::ActivateHotbarSlot(int32 SlotIndex)
 		}
 		return;
 	}
-	UseShortcutSlot(SlotIndex + 1);
+	if (SlotIndex < 10) UseShortcutSlot(SlotIndex + 1);
 }
 
 void UACEUIGameplayBinder::SelectInventoryGuid(int32 Guid)

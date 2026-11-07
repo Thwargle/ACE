@@ -1,8 +1,14 @@
 # Client plugins - API 2
 
 AC:Unreal hosts portable Lua plugins. The same source and native management panel
-are used on Windows, Linux, PC VR and standalone Quest. This is a new API, not a
+are used on Windows, Linux, PC VR, standalone Quest and Android phones/tablets. This is a new API, not a
 loader for Decal DLLs or Virindi View Services assemblies.
+
+For Lua developers, start with [Public API 2](PublicAPI.md), the
+[loot-matching reference](LootMatching.md), and [companion lifecycle](Companions.md).
+The [machine-readable catalog](../../ClientMods/api.json) ships with the client.
+The API reference links working examples for trackers, custom graphics, target
+plates, chat tools and independent automation.
 
 ## Client chat commands
 
@@ -205,6 +211,15 @@ resize it. Its width and list height survive pinning and logins, along with posi
 visibility and the permanent UI lock.
 Enable or disable the ledgers
 in **Plugin Manager**. Five-minute history uses a fixed-size buffer.
+
+Plugin Manager lists every valid installed plugin, including disabled plugins.
+**Enabled plugin limit** defaults to 16; raise it as needed, or enter **0** for
+unlimited. Only enabled plugins count, including enabled tools without a running
+script. Disabled plugins never use a slot. The count and limit are shown together
+and the setting survives restarts. Disable a plugin to free a slot immediately;
+lowering the limit below the enabled count leaves your current plugins unchanged.
+This setting does not change the separate rule that only one automation policy
+can run at a time, alongside companion plugins.
 
 The plugin bar uses original 26-pixel vector emblems; hover for the full plugin name and
 status. Its **gear** opens Plugin Manager. Its grip still moves when the UI is unlocked, and its minus button
@@ -1016,8 +1031,11 @@ The Metas page edits these rules without JSON. Unknown states produce a visible 
 }
 ```
 
-These are UCM-native profiles. VT `.usd`, `.nav`, `.met`, loot profiles, and VVS XML
-are not imported. More complex conditions or behavior can be authored in Lua.
+These are UCM-native profiles. Supported VT `.usd`, `.nav`, `.met` and loot
+profiles can be converted through the import service; see the
+[compatibility reference](VirindiCompatibility.md) for supported constructs and
+rejected features. VVS XML is not a native UI loader. More complex conditions or
+behavior can be authored in Lua.
 
 ## Runtime and references
 
@@ -1038,14 +1056,22 @@ exhausting the callback's work allowance. It becomes false after 200,000 Lua
 instructions or 5 ms of regex work. Calling it never resets or extends the hard
 250,000-instruction and 20 ms regex limits. Each callback gets a fresh allowance.
 
-`spellindex(spells, inventory, time, skill_margin, unavailable_until)` returns
-three tables: spells keyed by ID, component availability keyed by ID, and the
-ordered castable spell list. Records reference the supplied snapshot; no spell
+`spellindex(spells, inventory, time, skill_margin, unavailable_until, components_required)`
+returns four tables: spells keyed by ID, component availability keyed by ID, the
+ordered castable spell list, and categorized groups. The optional sixth argument
+defaults to true; pass `snapshot.components_required ~= false` for server exemptions.
+See [helper functions and groups](PublicAPI.md#reuse-or-replace-the-built-in-policies).
+Records reference the supplied snapshot; no spell
 records are copied. It combines component stacks and checks known spells, school
 skill, component knowledge and temporary exclusions. UCM shares this index within
 one decision and rebuilds it for the next snapshot. Native indexing is capped at
 16,384 spells, 4,096 inventory entries and 131,072 total entry/component visits per
 callback, independently of the unchanged Lua instruction limit.
+
+`lootmatch(rule, item, snapshot, scan)` evaluates one rule and can return true,
+false, nil (appraisal needed), or `"pending"` (resume next callback). It performs
+no item action itself. See [Loot matching](LootMatching.md) for parameters,
+AND/OR conditions, property IDs and cursor lifetime.
 
 The decompiled VT material was consulted for behavior boundaries (profiles,
 spell categories, rule scheduling, navigation and view abstraction). Its source

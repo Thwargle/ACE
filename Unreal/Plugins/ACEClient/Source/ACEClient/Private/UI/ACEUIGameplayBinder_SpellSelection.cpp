@@ -16,21 +16,14 @@ void UACEUIGameplayBinder::HandleSpellLearned(int32 SpellId)
 	if (!Session || Session->GetState() != EACESessionState::InWorld || !Session->GetKnownSpells().Contains(SpellId)) return;
 	if (PlayerController)
 		if (auto* VR = PlayerController->GetVRComponent(); VR && VR->RevealLearnedSpellInMenu(SpellId)) return;
-	// Reveal the learned spell even if its school/level was unchecked. Retain
-	// all other filter choices instead of resetting the player's book filters.
-	if (auto* Dat = Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr)
-	{
-		uint32 School = 0, Level = 0;
-		if (Dat->TryGetSpellSchoolAndLevel(SpellId, School, Level))
-		{
-			const uint32 OldSchools = SpellbookSchoolFilterMask, OldLevels = SpellbookLevelFilterMask;
-			if (School >= 1 && School <= 5) SpellbookSchoolFilterMask |= 1u << (School - 1);
-			if (Level >= 1 && Level <= 8) SpellbookLevelFilterMask |= 1u << (Level - 1);
-			if (OldSchools != SpellbookSchoolFilterMask || OldLevels != SpellbookLevelFilterMask)
-				Session->SendSpellbookFilters(ACESpellbookFilters::ToWire(
-					SpellbookSchoolFilterMask, SpellbookLevelFilterMask, Session->GetSpellbookFilters()));
-		}
-	}
+	// gmSpellbookUI::RecvNotice_SpellAdded reveals only spells admitted by the
+	// existing filters. Learning must never change the player's filter choices.
+	auto* Dat = Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr;
+	uint32 School = 0, Level = 0;
+	if (!Dat || !Dat->TryGetSpellSchoolAndLevel(SpellId, School, Level)
+		|| School < 1 || School > 5 || Level < 1 || Level > 8
+		|| !(SpellbookSchoolFilterMask & (1u << (School - 1)))
+		|| !(SpellbookLevelFilterMask & (1u << (Level - 1)))) return;
 	SelectedSpellbookId = SpellId;
 	ShowPanelPage(TEXT("SpellManagementPanel_Field"));
 	SyncSpellPanelTab(TEXT("SpellbookPage"));

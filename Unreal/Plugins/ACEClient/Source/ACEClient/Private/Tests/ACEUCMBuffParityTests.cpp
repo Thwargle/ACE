@@ -87,6 +87,29 @@ bool FACEUCMBuffParityTest::RunTest(const FString&)
         P->SetArrayField(TEXT("buffs"),{MakeShared<FJsonValueNumber>(10)});
         TestTrue(TEXT("Explicit fellowship buff is allowed in a fellowship"),Step(VM,S,P)->HasField(TEXT("spell")));
     }
+    // Missing worn pieces still use the retail all-armor target. A shield is
+    // tested separately because equipping the casting wand removes it.
+    for(bool Explicit:{false,true})
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();
+        auto Spell=S->GetArrayField(TEXT("spells"))[0]->AsObject();
+        Spell->SetNumberField(TEXT("school"),3);Spell->SetNumberField(TEXT("category"),162);Spell->SetNumberField(TEXT("target_type"),6);
+        auto Timer=BuffJson(TEXT(R"({"target":1,"category":162,"power":100,"duration":1800,"expires":1900,"missing_equipment":[50,51]})"));
+        auto Items=S->GetArrayField(TEXT("inventory"));
+        Items.Add(MakeShared<FJsonValueObject>(BuffJson(TEXT(R"({"id":50,"type":2,"slots":256,"equipped":true,"identified":true})"))));
+        Items.Add(MakeShared<FJsonValueObject>(BuffJson(TEXT(R"({"id":51,"type":2,"slots":512,"equipped":true,"identified":true})"))));
+        S->SetArrayField(TEXT("inventory"),Items);S->SetArrayField(TEXT("item_buffs"),{MakeShared<FJsonValueObject>(Timer)});
+        if(Explicit)
+        {
+            P->SetBoolField(TEXT("auto_buffs"),false);
+            P->SetArrayField(TEXT("item_buff_targets"),{MakeShared<FJsonValueObject>(BuffJson(TEXT(R"({"item":50,"spell":10})")))});
+        }
+        TestEqual(TEXT("Multiple missing worn armor pieces receive one all-armor cast"),Step(VM,S,P)->GetNumberField(TEXT("target")),1.);
+        Timer->RemoveField(TEXT("missing_equipment"));S->SetNumberField(TEXT("action_serial"),1);
+        S->SetNumberField(TEXT("last_spell"),10);S->SetBoolField(TEXT("last_spell_confirmed"),true);
+        S->SetNumberField(TEXT("time"),101);
+        TestFalse(TEXT("Confirmed all-armor cast does not separately buff the next piece"),Step(VM,S,P)->HasField(TEXT("spell")));
+    }
     // Consumable maintenance must use the same capped window as NeedBuff.
     {
         FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("auto_buffs"),false);P->SetNumberField(TEXT("refresh_seconds"),300);
@@ -131,7 +154,7 @@ bool FACEUCMBuffParityTest::RunTest(const FString&)
         auto Spell=S->GetArrayField(TEXT("spells"))[0]->AsObject();
         Spell->SetNumberField(TEXT("school"),3);Spell->SetNumberField(TEXT("category"),162);Spell->SetNumberField(TEXT("target_type"),6);
         auto ArmorTimer=BuffJson(TEXT(R"({"target":1,"category":162,"power":100,"duration":1800,"expires":1900,"missing_equipment":[50]})"));
-        auto Shield=BuffJson(TEXT(R"({"id":50,"type":2,"name":"Shield","equipped":true,"can_wield":true})"));
+        auto Shield=BuffJson(TEXT(R"({"id":50,"type":2,"slots":2097152,"name":"Shield","equipped":true,"can_wield":true})"));
         auto Inventory=S->GetArrayField(TEXT("inventory"));Inventory.Add(MakeShared<FJsonValueObject>(Shield));S->SetArrayField(TEXT("inventory"),Inventory);
         S->SetArrayField(TEXT("item_buffs"),{MakeShared<FJsonValueObject>(ArmorTimer)});
         TestEqual(TEXT("New shield receives a direct buff without recasting all armor"),Step(VM,S,P)->GetNumberField(TEXT("target")),50.);
@@ -175,7 +198,7 @@ bool FACEUCMUnenchantableEquipmentTest::RunTest(const FString&)
         FACEPluginVM VM;TestTrue(TEXT("Buff policy loads"),VM.Load(Source,Error));
         auto S=BuffJson(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"action_serial":0,"action_error":0,"combat_mode":8,"components_required":false,"spells":[{"id":10,"category":162,"power":100,"skill":300,"school":3,"duration":1800,"self_buff":true,"beneficial":true,"caster_target":true,"target_type":6}],"item_buffs":[{"target":1,"category":162,"power":100,"duration":1800,"expires":1900,"missing_equipment":[50]}],"inventory":[{"id":99,"type":32768,"name":"Wand","equipped":true,"identified":true,"can_wield":true}]})"));
         auto P=BuffJson(TEXT(R"({"buffing":true,"recovery":false,"combat":"off","refresh_seconds":60})"));
-        auto Shield=BuffJson(TEXT(R"({"id":50,"type":2,"name":"Any shield","identified":true,"can_wield":true})"));
+        auto Shield=BuffJson(TEXT(R"({"id":50,"type":2,"slots":2097152,"name":"Any shield","identified":true,"can_wield":true})"));
         auto Ints=MakeShared<FJsonObject>();Ints->SetNumberField(TEXT("36"),Resist);Shield->SetObjectField(TEXT("int_properties"),Ints);
         Shield->SetBoolField(TEXT("equipped"),Equipped);
         auto Inventory=S->GetArrayField(TEXT("inventory"));Inventory.Add(MakeShared<FJsonValueObject>(Shield));S->SetArrayField(TEXT("inventory"),Inventory);

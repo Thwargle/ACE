@@ -31,6 +31,12 @@
 #include "Dat/ACEDatTextLayout.h"
 #include "Slate/WidgetRenderer.h"
 #include "Misc/App.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
+#include "ACEWorldEntityActor.h"
+#include "ACECharacterAppearanceComponent.h"
+#include "ProceduralMeshComponent.h"
+#include "RenderingThread.h"
 
 
 namespace
@@ -391,6 +397,28 @@ bool FACEChatParityTest::RunTest(const FString&)
     Session.WorldObjects.Add(Crystal.Guid,Crystal); Client->SelectObject(Crystal.Guid);
     Session.CachedC2SPackets.Reset();
     TestTrue(TEXT("Object report handles unloaded world actors"),Binder->TryDispatchChatCommand(TEXT("/acueobject")));
+    {
+        const auto Values=UWorld::InitializationValues().AllowAudioPlayback(false).CreatePhysicsScene(true)
+            .CreateNavigation(false).CreateAISystem(false);
+        auto* World=UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);
+        auto& Context=GEngine->CreateNewWorldContext(EWorldType::Game);Context.SetCurrentWorld(World);
+        World->SetGameInstance(GI);Context.OwningGameInstance=GI;GI->OnWorldChanged(nullptr,World);GI->Init();
+        ON_SCOPE_EXIT { GI->Shutdown();GI->OnWorldChanged(World,nullptr);GEngine->DestroyWorldContext(World);World->DestroyWorld(false); };
+        auto* WorldDat=GI->GetSubsystem<UACEDatSubsystem>();
+        TestTrue(TEXT("Diagnostic fixture opens retail DAT"),WorldDat->LoadDatDirectory(ACEChatTestsDatDirectory()));
+        Crystal.bHasPosition=true;Crystal.Position.CellId=0x0110028A;Crystal.Position.Location=FVector(40,-140,12.055);
+        Crystal.SetupId=0x02000443;Session.WorldObjects[Crystal.Guid]=Crystal;
+        auto* Actor=World->SpawnActor<AACEWorldEntityActor>();Actor->InitializeFromObject(Crystal,100,true);
+        World->SendAllEndOfFrameUpdates();FlushRenderingCommands();
+        auto* Part=Cast<UProceduralMeshComponent>(Actor->Appearance->GetPartMesh(0));
+        if(TestNotNull(TEXT("Diagnostic fixture has a loaded mesh"),Part))
+        {
+            const auto* Proxy=Part->SceneProxy;const FVector Origin=Actor->GetActorLocation();
+            TestTrue(TEXT("Object report can read a live render proxy"),Binder->TryDispatchChatCommand(TEXT("/acueobject")));
+            TestTrue(TEXT("Diagnostic leaves resident render geometry intact"),Part->SceneProxy==Proxy && !Part->IsRenderStateDirty());
+            TestTrue(TEXT("Diagnostic does not move or hide the selected actor"),Actor->GetActorLocation().Equals(Origin) && !Actor->IsHidden());
+        }
+    }
     TestEqual(TEXT("Object report never sends diagnostics or an action to the server"),Session.CachedC2SPackets.Num(),0);
     TestEqual(TEXT("Object report preserves the selected crystal"),Client->GetSelectedObject().Guid,Crystal.Guid);
     Client->SelectObject(0); Session.WorldObjects.Remove(Crystal.Guid);

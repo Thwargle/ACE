@@ -51,6 +51,7 @@ namespace ACEPluginPanelPrivate
         void Construct(const FArguments& Args)
         {
             Host = Args._Host; Id = Args._PluginId; FACEPluginStyle::Use(Args._Host,Id.IsEmpty()?TEXT("__manager"):Id); PluginOnly = !Id.IsEmpty();
+            if(Host.IsValid())ManagerNotice=Host->Notice;
             Body=SNew(SVerticalBox);
             Rebuild();
         }
@@ -149,6 +150,21 @@ namespace ACEPluginPanelPrivate
                     .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Reload installed plugins. Running plugins will stop."))))
                     .OnClicked_Lambda([this](){Host->Discover();ManagerNotice=Host->Notice;Rebuild();return FReply::Handled();})[Label(TEXT("Refresh"),16)]];
                 Add(Header);
+                Add(SNew(SHorizontalBox)
+                    +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[Label(TEXT("Enabled plugin limit (0 = unlimited)"),16)]
+                    +SHorizontalBox::Slot().AutoWidth().Padding(8,0)[SNew(SBox).WidthOverride(110)
+                        [SNew(SACEPluginSpinBox<int32>).Tag(TEXT("PluginEnabledLimit")).Style(&FACEPluginStyle::Current()->Spin)
+                            .Font(FACEPluginStyle::NativeFont("Regular",16)).MinValue(0).MaxValue(MAX_int32).EnableSlider(false)
+                            .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Maximum enabled plugins. Disabled plugins do not count. Saved across logins; 0 removes the limit."))))
+                            .Value_Lambda([this](){return Host->GetEnabledPluginLimit();})
+                            .OnValueCommitted_Lambda([this](int32 Limit,ETextCommit::Type){Host->SetEnabledPluginLimit(Limit);ManagerNotice=Host->Notice;})]]);
+                Add(SNew(SACEPluginText).Tag(TEXT("PluginEnabledCount")).Font(FACEPluginStyle::NativeFont("Regular",14))
+                    .Text_Lambda([this](){const int32 Limit=Host->GetEnabledPluginLimit();return FText::FromString(Limit==0
+                        ? FString::Printf(TEXT("%d enabled / unlimited. Disabled plugins do not count."),Host->GetEnabledPluginCount())
+                        : FString::Printf(TEXT("%d / %d enabled. Disabled plugins do not count."),Host->GetEnabledPluginCount(),Limit));}).AutoWrapText(true));
+                Add(SNew(SACEPluginText).Tag(TEXT("PluginManagerNotice")).Font(FACEPluginStyle::NativeFont("Regular",16)).AutoWrapText(true)
+                    .Visibility_Lambda([this](){return ManagerNotice.IsEmpty()?EVisibility::Collapsed:EVisibility::Visible;})
+                    .Text_Lambda([this](){return FText::FromString(ManagerNotice);}));
                 auto BarControls=SNew(SHorizontalBox);
                 BarControls->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).Padding(FMargin(4,8))
                     .IsChecked_Lambda([this](){return Host->IsPluginBarVisible()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
@@ -188,7 +204,7 @@ namespace ACEPluginPanelPrivate
                     Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,12,0)[SNew(SCheckBox).Tag(FName(*(TEXT("PluginEnabled.")+P->Id))).Style(&FACEPluginStyle::Current()->Check).Padding(4)
                         .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(Capabilities)))
                         .IsChecked_Lambda([P](){return P->Enabled?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
-                        .OnCheckStateChanged_Lambda([this,P](ECheckBoxState S){Host->SetEnabled(P->Id,S==ECheckBoxState::Checked);})[Label(TEXT("Enabled"),14)]];
+                        .OnCheckStateChanged_Lambda([this,P](ECheckBoxState S){Host->SetEnabled(P->Id,S==ECheckBoxState::Checked);ManagerNotice=Host->Notice;})[Label(TEXT("Enabled"),14)]];
                     Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).Tag(FName(*(TEXT("PluginOpen.")+P->Id))).ButtonStyle(&PluginButtonStyle()).IsFocusable(false)
                         .IsEnabled_Lambda([P](){return P->Enabled;})
                         .OnClicked_Lambda([this,PluginId=P->Id](){Open(PluginId);return FReply::Handled();})[Label(TEXT("Open"),16)]];
@@ -201,7 +217,6 @@ namespace ACEPluginPanelPrivate
                 }
                 OrderRows();
                 if(Host->Plugins.IsEmpty())Add(Label(TEXT("No plugins installed."),16));
-                if(!ManagerNotice.IsEmpty())Add(Label(ManagerNotice,16));
                 return;
             }
             if(!PluginOnly)Add(Button(TEXT("Back to plugins"),[this](){Id.Empty();Rebuild();}));

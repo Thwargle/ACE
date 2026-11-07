@@ -3276,6 +3276,11 @@ void UACETerrainPresenterComponent::UpdateCameraVisibility()
 	for (const auto& Pair : SpawnedChunks)
 		if (Pair.Value) Pair.Value->SetOutdoorTerrainHiddenInGame(bWcBakedTerrainMode || !bOutside);
 	bShowOutdoorEntities = bOutside;
+	for (const auto& Pair:SpawnedEnvCells)
+		if (Pair.Value) Pair.Value->RefreshStaticVisibility([&](const FBox& Bounds)
+		{
+			return IsWorldObjectVisible(Pair.Key,Bounds);
+		});
 	if (auto* Entities = GetOwner()->FindComponentByClass<UACEWorldPresenterComponent>())
 		Entities->RefreshCellVisibility();
 }
@@ -3423,6 +3428,7 @@ void UACETerrainPresenterComponent::UpdateBuildingVisibility()
 				Env->SetEnvCellCollisionActive(bRequired);
 				if (bRequired) Env->EnsureStaticObjectsQueued();
 				Env->SetEnvCellHiddenInGame(true);
+				Env->RefreshStaticVisibility([](const FBox&){return false;});
 			}
 		}
 		// SmartBox::Hide affects presentation, not destination collision preparation.

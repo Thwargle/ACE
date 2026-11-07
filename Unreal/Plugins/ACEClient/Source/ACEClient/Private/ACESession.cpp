@@ -2800,6 +2800,7 @@ void FACESession::HandleGameEvent(FACEBinaryReader& Reader)
 	switch (EventType)
 	{
 	case 0x021D: HandleHouseProfile(Reader); break;
+	case 0x0271: HandleAvailableHouses(Reader); break;
 	case 0x0075: // StartBarber: publish only a complete retail appearance.
 		if(Reader.CanRead(FACEBarberProfile::Count*4))
 		{

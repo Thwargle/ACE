@@ -148,6 +148,7 @@ end
 local function salvage_candidate(item)
  local material=item.material or 0
  return not item.equipped and not item.retained and item.resource_available~=false
+  and (not item.identified or item.workmanship~=nil)
   and item.object_class~=39 and item.object_class~=40 and item.object_class~=10
   and item.object_class~=38 and material>0 and material<=77
   and material~=3 and material~=9 and material~=56 and material~=65 and material~=72
@@ -368,7 +369,11 @@ local function compute_buff(s,p)
   if v and e.target==id and confirmed[tostring(id)..':'..e.category] then
    for _,item in ipairs(e.missing_equipment or {}) do
     if item_enchantable(owned[item]) and (confirmed[tostring(item)..':'..e.category] or -1)<v.power and not buff_skipped(s,item,e.category) then
-     missing[e.category]=missing[e.category] or item
+     -- Worn armor is covered by one player-targeted bane, including after a
+     -- gear swap or a partial timer restored at login. A shield taken off to
+     -- hold the wand still needs a direct cast while it is in the backpack.
+     local worn=owned[item].equipped and band(owned[item].slots or 0,0x200000)==0
+     if worn then missing[e.category]=id else missing[e.category]=missing[e.category] or item end
     end
    end
   end

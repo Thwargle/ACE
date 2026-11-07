@@ -813,6 +813,42 @@ metadata. Tou-Tou's sphere-less model also retains height when Gravity is set.
 Shared Quest source verification passed. This is an automated reproduction
 using the reported state; no packaged release or affected live session was tested.
 
+### Apostate gateway render-state follow-up: 2026-11-06
+
+The v150 report for gateway `800031CF` / WCID 40810 has zero actor displacement,
+normal scale, a registered opaque mesh, and bounds inside the camera frustum.
+The player also reported standing on the invisible gateway. This does not match
+the earlier falling-object failure. The supplied inside-pit screenshot means a
+camera above the opening cannot alone explain the report. Game-thread visibility
+flags and collision do not establish that the renderer actually drew the mesh.
+
+`CustomWorldPresentation` now loads the surrounding static scenery plus the
+stock acid and door at their authored placements. Pixel comparisons cover the
+reported 6.44-unit distance / 110.01-degree FOV, four views of the populated pit,
+and real camera-boom endpoints above the gateway. Camera collision is exercised
+from both the gateway and ledge, at two distances and four orientations. Hidden
+mesh rebuilds now advance actual rendered frames before revealing the object.
+These local tests still render the gateway; they have not reproduced the live
+failure or established a rendering fix.
+
+`/acueobject` additionally reads the resident render-thread draw flag, transform,
+bounds, and occlusion eligibility without rebuilding the proxy. It reports
+triangle/vertex counts, material, draw-distance limits, recent rendering, camera
+position/cell, near clip, boom collision settings, and two camera collision rays.
+The rays describe collision only, since a PhysicsBSP hit need not correspond to
+visible geometry. The diagnostic remains local and on demand. An affected
+session should capture this expanded report and `/acueperf` before resetting
+graphics or reconnecting; the old report cannot distinguish stale renderer
+state from a camera/occlusion failure.
+
+Validation: Windows editor build and five D3D12 SM5 suites passed in
+`TestOutput/GatewayVisibility/final-d3d12-tests`: `CustomWorldPresentation`,
+`ChatInputAndCommands`, `CameraAndEdges`, `CachedWorldDraws`, and
+`IdleBodyTransforms`. The chat test invokes the diagnostic on a live mesh and
+checks that it does not rebuild, move, or hide it, change selection, or send a
+server packet. Offscreen captures do not reproduce a live fullscreen transition
+or the affected player's hardware/session. No packaged release was tested.
+
 ## Stat colors without active spells: 2026-10-20
 
 The Attributes panel painted all three vital values green unconditionally.

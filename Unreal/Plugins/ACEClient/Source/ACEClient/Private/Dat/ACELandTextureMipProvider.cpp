@@ -19,7 +19,9 @@ UTexture2D* UACELandTextureMipProvider::CreateTexture(UObject* Outer, FACETerrai
     auto* Texture=UTexture2D::CreateTransient(Source->Width,Source->Height,PF_B8G8R8A8);
     if (!Texture) return nullptr;
     Texture->Rename(nullptr,Outer);
-    Texture->SRGB=true; Texture->NeverStream=true; Texture->Filter=TF_Trilinear;
+    // Let the World texture group's anisotropic sampler honor Texture Filtering.
+    // Forcing trilinear made ground/walls blur at oblique angles even at 16x/4K.
+    Texture->SRGB=true; Texture->NeverStream=true; Texture->Filter=TF_Default;
     Texture->AddressX=Texture->AddressY=TA_Clamp;
     auto* Data=Texture->GetPlatformData(); Data->Mips.Empty();
     int32 W=Source->Width,H=Source->Height;

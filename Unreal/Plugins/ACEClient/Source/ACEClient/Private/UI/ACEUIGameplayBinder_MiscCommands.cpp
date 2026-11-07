@@ -15,6 +15,12 @@
 #include "ProceduralMeshComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Dat/ACEOutdoorPortalPlan.h"
+#include "Dat/ACECellTransit.h"
+#include "PrimitiveSceneProxy.h"
+#include "RenderingThread.h"
+#include "Engine/GameInstance.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/SpringArmComponent.h"
 #include "Camera/PlayerCameraManager.h"
 #include "EngineUtils.h"
 #include "Misc/FileHelper.h"
@@ -78,6 +84,27 @@ bool UACEUIGameplayBinder::TryDispatchMiscCommand(const FString& Cmd, const FStr
         {
             if (It->GetACEGuid() != Object.Guid) continue;
             const float Units = FMath::Max(It->WorldScale, SMALL_NUMBER);
+            if (HasView)
+            {
+                FACEPosition Player=Client->GetPlayerPosition();
+                if (PlayerController) PlayerController->TryGetLocallyPredictedPosition(Player);
+                auto* Dat=World->GetGameInstance() ? World->GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr;
+                uint32 ViewCell=Player.CellId;
+                const bool Resolved=Dat && ACECellTransit::ResolveViewerCellId(*Dat,Player.CellId,Player.ToUnrealLocation(Units),Eye,Units,ViewCell);
+                const bool Inside=Resolved && ACECellTransit::IsIndoorCell(ViewCell) && Dat->IsPointInsideEnvCell(ViewCell,Eye,Units);
+                const uint32 Block=uint32(P.CellId);
+                const FVector EyeLocal=FACEPosition::AceVectorToUnreal(Eye,1.f/Units)-FVector((Block>>24)*192.,((Block>>16)&255)*192.,0);
+                Report(FString::Printf(TEXT("Camera (object block local) [%s] Player %08X [%s] View cell %08X Resolved %d Inside %d"),
+                    *EyeLocal.ToString(),uint32(Player.CellId),*Player.Location.ToString(),ViewCell,Resolved,Inside));
+                if (PlayerController && PlayerController->PlayerCameraManager)
+                    Report(FString::Printf(TEXT("Camera rotation [%s] Near clip %.3f AC units"),
+                        *PlayerController->PlayerCameraManager->GetCameraRotation().ToString(),GNearClippingPlane/Units));
+                if (APawn* Pawn=PlayerController ? PlayerController->GetPawn() : nullptr)
+                    if (auto* Boom=Pawn->FindComponentByClass<USpringArmComponent>())
+                        Report(FString::Printf(TEXT("Camera boom requested %.3f actual %.3f probe %.3f collision %d"),
+                            Boom->TargetArmLength/Units,FVector::Distance(Boom->GetComponentLocation()+Boom->TargetOffset,Eye)/Units,
+                            Boom->ProbeSize/Units,Boom->bDoCollisionTest));
+            }
             const FVector Delta = (It->GetActorLocation() - P.ToUnrealLocation(Units)) / Units;
             const FVector Scale = It->GetActorScale3D();
             Report(FString::Printf(TEXT("Actor delta (UE axes/AC units) [%.4f %.4f %.4f] Scale [%.4f %.4f %.4f]"),
@@ -90,10 +117,25 @@ bool UACEUIGameplayBinder::TryDispatchMiscCommand(const FString& Cmd, const FStr
                     Appearance->GetPartCount(), Appearance->IsComponentTickEnabled(), It->IsCellVisible(), It->bUsingDatMesh));
                 FBox Bounds(ForceInit);
                 if (Appearance->GetVisualWorldBounds(Bounds))
+                {
                     Report(FString::Printf(TEXT("Bounds offset [%s] Extent [%s] (AC units) In frustum %d Distance %.2f"),
                         *((Bounds.GetCenter()-It->GetActorLocation())/Units).ToString(),*(Bounds.GetExtent()/Units).ToString(),
                         HasView ? int32(View.IntersectBox(Bounds.GetCenter(),Bounds.GetExtent())) : -1,
                         HasView ? FVector::Distance(Eye,Bounds.GetCenter())/Units : -1.));
+                    if(HasView) for(int32 Sample=0;Sample<2;++Sample)
+                    {
+                        const FVector Point=Bounds.GetCenter()+FVector(0,0,Sample?Bounds.GetExtent().Z*.75:0);
+                        FCollisionQueryParams Query(SCENE_QUERY_STAT(ACEObjectReport),true,*It);
+                        if(PlayerController && PlayerController->GetPawn())Query.AddIgnoredActor(PlayerController->GetPawn());
+                        FHitResult Hit;
+                        const bool Blocked=World->LineTraceSingleByChannel(Hit,Eye,Point,ECC_Camera,Query);
+                        // Collision evidence only: invisible PhysicsBSP can span
+                        // a drawn opening. Do not label this as GPU visibility.
+                        Report(FString::Printf(TEXT("Camera collision ray %s: %s component=%s distance=%.3f"),
+                            Sample?TEXT("upper"):TEXT("center"),Blocked?*GetNameSafe(Hit.GetActor()):TEXT("clear"),
+                            *GetNameSafe(Hit.GetComponent()),Blocked?Hit.Distance/Units:0));
+                    }
+                }
                 if (auto* Part = Appearance->GetPartMesh(0))
                 {
                     const FVector Local = Part->GetRelativeLocation() / Units;
@@ -101,6 +143,28 @@ bool UACEUIGameplayBinder::TryDispatchMiscCommand(const FString& Cmd, const FStr
                         Local.X, Local.Y, Local.Z, (Part->GetComponentLocation().Z - P.ToUnrealLocation(Units).Z) / Units));
                 }
                 // Bound chat/log volume even for creatures with many body parts.
+                struct FRenderPart
+                {
+                    FPrimitiveSceneProxy* Proxy=nullptr;
+                    bool Drawn=false,Occlusion=false;
+                    FVector Origin=FVector::ZeroVector,BoundsOrigin=FVector::ZeroVector,Extent=FVector::ZeroVector;
+                };
+                TArray<FRenderPart> RenderParts;
+                RenderParts.SetNum(FMath::Min(Appearance->GetPartCount(),8));
+                for(int32 Index=0;Index<RenderParts.Num();++Index)
+                    if(auto* Part=Cast<UPrimitiveComponent>(Appearance->GetPartMesh(Index)))RenderParts[Index].Proxy=Part->SceneProxy;
+                // Read the resident render state without rebuilding it: resetting
+                // graphics first can erase precisely the failure being reported.
+                ENQUEUE_RENDER_COMMAND(ACEObjectReportRenderState)([&RenderParts](FRHICommandListImmediate&)
+                {
+                    for(auto& Part:RenderParts) if(auto* Proxy=Part.Proxy)
+                    {
+                        Part.Drawn=Proxy->IsDrawnInGame();Part.Occlusion=Proxy->CanBeOccluded();
+                        Part.Origin=Proxy->GetLocalToWorld().GetOrigin();
+                        Part.BoundsOrigin=Proxy->GetBounds().Origin;Part.Extent=Proxy->GetBounds().BoxExtent;
+                    }
+                });
+                FlushRenderingCommands();
                 for (int32 Index=0;Index<FMath::Min(Appearance->GetPartCount(),8);++Index)
                 {
                     auto* Part=Cast<UProceduralMeshComponent>(Appearance->GetPartMesh(Index));
@@ -108,21 +172,30 @@ bool UACEUIGameplayBinder::TryDispatchMiscCommand(const FString& Cmd, const FStr
                     Report(FString::Printf(TEXT("Part %d Registered %d Visible %d Hidden %d Main %d Capture-only %d Owner-no-see %d Proxy %d Dirty %d"),
                         Index,Part->IsRegistered(),Part->IsVisible(),Part->bHiddenInGame,Part->bRenderInMainPass,
                         Part->bVisibleInSceneCaptureOnly,Part->bOwnerNoSee,Part->SceneProxy!=nullptr,Part->IsRenderStateDirty()));
+                    const auto& Render=RenderParts[Index];
+                    if(Render.Proxy)
+                        Report(FString::Printf(TEXT("Part %d Render drawn %d Occlusion %d Transform delta [%s] Bounds offset [%s] Extent [%s]"),
+                            Index,Render.Drawn,Render.Occlusion,*((Render.Origin-Part->GetComponentLocation())/Units).ToString(),
+                            *((Render.BoundsOrigin-It->GetActorLocation())/Units).ToString(),*(Render.Extent/Units).ToString()));
+                    Report(FString::Printf(TEXT("Part %d Draw distance %.3f/%.3f Detail %d Recently rendered %d Material %s"),
+                        Index,Part->MinDrawDistance/Units,Part->CachedMaxDrawDistance/Units,int32(Part->DetailMode),
+                        Part->WasRecentlyRendered(.2f),*GetNameSafe(Part->GetMaterial(0))));
                     const int32 Level=HasView ? Part->GetDistanceLevel(Eye) : INDEX_NONE;
-                    int32 VisibleSections=0; float MinimumOpacity=1.f; bool HasOpacity=false;
+                    int32 VisibleSections=0,Triangles=0,Vertices=0; float MinimumOpacity=1.f; bool HasOpacity=false;
                     for (int32 Section=0;Section<Part->GetNumSections();++Section)
                     {
                         const auto* Geometry=Part->GetProcMeshSection(Section);
                         if (!Geometry || !Geometry->bSectionVisible || Geometry->ProcIndexBuffer.IsEmpty()) continue;
                         ++VisibleSections;
+                        Triangles+=Geometry->GetRenderIndexCount()/3;Vertices+=Geometry->ProcVertexBuffer.Num();
                         float Opacity=1.f;
                         if (auto* Material=Part->GetMaterial(Section); Material && Material->GetScalarParameterValue(FMaterialParameterInfo(TEXT("OpacityMul")),Opacity))
                         { MinimumOpacity=FMath::Min(MinimumOpacity,Opacity); HasOpacity=true; }
                     }
-                    Report(FString::Printf(TEXT("Part %d Sections %d/%d LOD %d LOD sections %d Minimum opacity %.3f"),
+                    Report(FString::Printf(TEXT("Part %d Sections %d/%d LOD %d LOD sections %d Minimum opacity %.3f Triangles %d Vertices %d"),
                         Index,VisibleSections,Part->GetNumSections(),Level,
                         Level==INDEX_NONE ? Part->GetNumSections() : Part->GetDistanceLevels()[Level].SectionCount,
-                        HasOpacity ? MinimumOpacity : -1.f));
+                        HasOpacity ? MinimumOpacity : -1.f,Triangles,Vertices));
                 }
             }
             return true;

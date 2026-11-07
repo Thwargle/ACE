@@ -242,6 +242,7 @@ bool FACEFortTethStairsTest::RunTest(const FString&)
   const FVector FlightXY=Start+Entry.Down*125;
   World->LineTraceSingleByChannel(Flight,FlightXY+FVector(0,0,100),FlightXY-FVector(0,0,400),ECC_Pawn,FCollisionQueryParams(NAME_None,true,Pawn));
   const auto* FlightOwner=Cast<AACEEnvCellActor>(Flight.GetActor());
+  if(!FlightOwner&&Flight.GetActor())FlightOwner=Cast<AACEEnvCellActor>(Flight.GetActor()->GetOwner());
   if(!TestNotNull(TEXT("Top flight has its authored stair collision"),FlightOwner))return false;
   const int32 StairCell=FlightOwner->EnvCellId;
   const FVector Side=FVector::CrossProduct(Entry.Down,FVector::UpVector)*Lane;

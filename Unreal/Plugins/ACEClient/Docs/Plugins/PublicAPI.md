@@ -13,7 +13,38 @@ then Start. The example's activities start off. It has its own profiles and does
 not edit the built-in UCM configuration. The machine-readable action/field catalog is
 [`ClientMods/api.json`](../../ClientMods/api.json).
 
+## Find the functionality you need
+
+- Installation, enabled limits and execution: [lifecycle](#lifecycle-and-ownership).
+- Character, inventory, equipment and action results: [snapshots and permissions](#permissions-and-snapshots).
+- Item classification: [Loot matching](LootMatching.md), including appraisal and resumable evaluation.
+- Trackers that read server messages: [chat delivery and filters](#read-and-filter-chat).
+- Custom PNGs, gauges, timers, animation and controls: [native UI](#native-ui) and [Graphics Gallery](Examples/graphics_gallery/main.lua).
+- Target health, effects and opaque/translucent nameplates: [target data and world plates](#target-data-and-object-attached-plates).
+- Casting, combat, equipment, transfers and navigation: [game intents](#game-intents) and [built-in policies](#reuse-or-replace-the-built-in-policies).
+- Configuration, imports, outgoing chat and sounds: [services](#services-and-profiles).
+- Terrain navigation overlays: [terrain API](#optional-terrain-overlays-api-2).
+- Administrative content tools: [content service](#administrative-content-service-api-2).
+- Local appearance conversion: the separate [Local Cosmetics service](LocalCosmetics.md).
+
 ## Lifecycle and ownership
+
+The host discovers every valid installed plugin; disabled plugins no longer hide
+later folders. **Plugin Manager > Enabled plugin limit** defaults to **16**.
+Players may raise it or set **0** for unlimited. Only enabled plugins count;
+disabled plugins take no slot. An enabled but stopped plugin still counts, as
+does an enabled UI-only tool. Closing a window does not disable its plugin.
+Disabling frees a slot immediately. The limit is saved across restarts, and the
+manager rejects lowering it below the current enabled count without stopping
+any plugin. Bundled and third-party plugins use the same allowance.
+
+This is a host preference, not a manifest property or Lua setter. Plugins cannot
+raise the limit, enable themselves, or grant permissions. `snapshot.plugins`
+lists discovered IDs with `{enabled, running}`; request `plugins` explicitly when
+using `snapshot_fields`. This map does not include the configured limit or other
+plugins' private data. The machine-readable catalog's `host.plugin_limit`
+describes the setting; it is not a live settings query. Increasing this allowance
+does not change VM memory/work quotas, world-plate limits, or automation ownership.
 
 Use `"api":2` with either `"mode":"automation"` or `"mode":"companion"`.
 Automation explicitly starts, owns game actions, and stops on logout/character
@@ -51,8 +82,9 @@ target scans, and vendor data. With no list, the existing full snapshot remains
 available. `api`, `time`, `unix_time`, `player`, `server`, `state`, `error`,
 `events`, and `capabilities` are always retained. Permissions still apply;
 listing a field never grants access. Character qualities, `character_name`,
-`level`, and action results require `data`. Inventory and other full automation
-fields currently build the shared full snapshot before filtering; use only
+`level`, and action results require `data`. Inventory-only observers use the
+cached inventory path described below. Other full automation fields can build
+the shared full snapshot before filtering; use only
 the fields your observer needs to reduce native work and Lua allocations.
 
 ## Plugin title and toolbar icon
@@ -403,7 +435,7 @@ running, the first eligible plugin supplies its settings. Only the stock recharg
 policy runs then; the author's stopped callback is not invoked.
 
 The sandbox also supplies `lootmatch`, `spellindex`, `regexmatch`, `regextest`,
-`string.contains`, `ucmcommand` (legacy alias `vtcommand`) and `workavailable`.
+`string.contains`, `string.findplain`, `ucmcommand` (legacy alias `vtcommand`) and `workavailable`.
 These are the same bounded helpers used by UCM. A command returned by
 `ucmcommand()` is a policy command record, not a host intent: pass it to a
 policy-command request or process the record in your own Lua code.
@@ -420,6 +452,50 @@ blocked by skill, supplies or retry delay, so a policy can apply its separate
 buff margin and report unavailable families. Groups retain every tier and
 reference the original records; they do not choose which spell to cast.
 Indexing remains subject to the per-callback native work and memory limits.
+
+The optional sixth `components_required` argument defaults to true. Pass
+`s.components_required ~= false` to honor an explicit server exemption; do not
+infer an exemption from missing component data. `unavailable_until` is a table
+keyed by numeric spell IDs with monotonic retry times. Indexing accepts at most
+16,384 spells and 4,096 inventory entries, with 131,072 combined native visits per
+callback. `supplied[id]` is a boolean, not an inventory count. Eligibility is not
+a guarantee of line of sight, target validity, or server acceptance.
+
+## Sandbox helper functions
+
+These helpers are available without loading a module or enabling UCM. They run
+inside the same quota as the plugin; they do not grant game-action permissions.
+
+- `lootmatch(rule, item, snapshot, scan)` evaluates one rule. Returns **true**,
+  **false**, **nil** (needs assessment data), or **"pending"** (resume next callback).
+  Always pass a mutable `scan` table and compare explicitly with `true` before
+  acting. See the [full signature, conditions and example](LootMatching.md).
+- `string.contains(text, value)` returns a case-sensitive literal-match boolean.
+  Text is limited to 4,096 UTF-8 bytes and the search value to 256 bytes.
+- `string.findplain(text, value, start)` returns the first literal match's one-based
+  byte position, or nil. `start` defaults to 1 and is clamped to at least 1.
+  Text/search limits are 16,384/8,192 UTF-8 bytes. This returns one index, not the
+  start/end pair of the standard Lua `string.find` function.
+- `regextest(text, pattern)` returns a boolean; `regexmatch(text, pattern)` returns
+  a capture object or nil. Capture keys are strings, including `"0"` for the whole
+  match. Text/pattern limits are 16,384/8,192 UTF-8 bytes. Use the supported bounded
+  [VT regex subset](VirindiCompatibility.md); invalid expressions and exceeding
+  the cumulative 20 ms regex allowance raise an error and stop the plugin.
+- `ucmcommand(text)` compiles up to 4,096 UTF-8 bytes into a policy command record;
+  `vtcommand` is the compatibility alias. It does not execute the command.
+  Unsupported commands raise an error. The [policy service](#services-and-profiles)
+  provides the corresponding command-queue bridge.
+- `workavailable()` becomes false at 200,000 Lua instructions or 5 ms of cumulative
+  regex work. Preserve your cursor and return to resume on the next callback;
+  spinning until it becomes true cannot work. It never extends the hard limits.
+- `spellindex(...)`: the [indexing helper above](#reuse-or-replace-the-built-in-policies)
+  returns four tables and leaves the decision of what to cast to your policy.
+
+The VM exposes base functions plus `table`, `math`, `utf8`, and bounded `string`
+operations. There is no `require`, `io`, `os`, `debug`, coroutine API, dynamic
+loading, `pcall`/`xpcall`, metatable access, `collectgarbage`, or `print`. Standard
+Lua pattern functions `string.find`, `match`, `gmatch`, `gsub`, and `dump` are
+removed. Use the helpers above and the notice/log services for output.
 
 ## Permissions and snapshots
 
@@ -593,10 +669,17 @@ ui = {
 ```
 
 Controls: text, button, checkbox, slider, number, input, select, progress, icon,
-image, row, column, section, tabs, overlay and frame. Containers use `children`; tabs use each
+item_icon, image, row, column, section, tabs, overlay and frame. Containers use `children`; tabs use each
 child's text as its tab title. Sections have `expanded`; their expansion state
 and selected tab are retained while the window is open. Common options are text,
 tooltip, enabled, padding, size (font/icon), bold and color (green/red/yellow/blue).
+The player's **Lua Plugin Text Scale** setting applies to native labels, button
+captions and editable text, including already open third-party windows. It is
+independent of chat text scale. Do not multiply font sizes by chat scale yourself.
+Prefer flexible widths and wrapping; fixed-size panels must allow for larger
+text. The same Lua UI runs on desktop, VR/Quest and Android phones/tablets, but
+test touch targets and layout at each intended screen size.
+
 Rows normally divide their width equally. Use `compact=true` on a row to size
 all its children to their content, or `auto_width=true` on individual children
 to reserve just their natural width while siblings fill the remainder. Row
@@ -747,7 +830,7 @@ PublicAPI regression creates a third-party ID with UCM disabled, verifies full
 snapshots, target-death wakes, native route geometry, force buffs, failure
 isolation, state restoration, nested UI events, profile archive/permission checks,
 and the shipped policy module. Existing UCM/VM/companion regressions remain in use.
-Source is shared with Windows/Linux/VR/Quest. Platform-specific live gameplay and
+Source is shared with Windows/Linux/VR/Quest and Android phones/tablets. Platform-specific live gameplay and
 server behavior still require testing; an editor automation pass does not prove
 all plugins or servers behave identically.
 

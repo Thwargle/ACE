@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACETestDatDirectory.h"
 #include "Misc/ScopeExit.h"
 #include "Misc/Paths.h"
 #include "Misc/FileHelper.h"
@@ -34,6 +35,31 @@ bool FACEHousingTest::RunTest(const FString&)
 	auto* GI=NewObject<UGameInstance>();
 	auto* Client=NewObject<UACEClientSubsystem>(GI); Client->Session=MakeShared<FACESession>();
 	auto& S=*Client->Session; S.PlayerGuid=1234; S.State=EACESessionState::InWorld;
+	TArray<FString> AvailableMessages;
+	const auto AvailableHandle=S.OnChatMessage.AddLambda([&](const FString& Text,const FString&,int32){AvailableMessages.Add(Text);});
+	auto Available=[&](uint32 Type,uint32 Count,int32 Total)
+	{
+		FACEBinaryWriter W; W.WriteUInt32(1234); W.WriteUInt32(1); W.WriteUInt32(0x0271);
+		W.WriteUInt32(Type); W.WriteUInt32(Count);
+		for(uint32 I=0;I<Count;++I)W.WriteUInt32(0x7F7F0001);
+		W.WriteInt32(Total);return W.GetData();
+	};
+	for(uint32 Type=1;Type<=4;++Type)
+	{
+		AvailableMessages.Reset();auto B=Available(Type,1,1);FACEBinaryReader R(B);S.HandleGameEvent(R);
+		TestEqual(TEXT("Available houses response consumed"),R.Remaining(),0);
+		TestEqual(TEXT("Retail apartments print only the count; other types include coordinates"),AvailableMessages.Num(),Type==4?1:2);
+		if(Type!=4 && AvailableMessages.Num()>1)TestEqual(TEXT("Retail outdoor-cell coordinate conversion"),AvailableMessages[1],FString(TEXT("     0.3S, 0.3W")));
+	}
+	const auto FullAvailable=Available(2,401,501);
+	for(int32 Cut=0;Cut<FullAvailable.Num();++Cut)
+	{
+		AvailableMessages.Reset();auto B=FullAvailable;B.SetNum(Cut);FACEBinaryReader R(B);S.HandleGameEvent(R);
+		TestTrue(TEXT("Truncated house lists never emit partial chat"),AvailableMessages.IsEmpty());
+	}
+	AvailableMessages.Reset();FACEBinaryReader AvailableReader(FullAvailable);S.HandleGameEvent(AvailableReader);
+	TestEqual(TEXT("Retail output caps location spam at 400 plus count and notice"),AvailableMessages.Num(),402);
+	S.OnChatMessage.Remove(AvailableHandle);
 	FACEWorldObject Self; Self.Guid=1234; Self.Name=TEXT("Housing regression"); Self.ItemsCapacity=120;Self.ContainersCapacity=7;S.WorldObjects.Add(1234,Self);
 	// Independent fixture from HouseProfile::Pack / CM_House::RecvNotice_HouseProfile.
 	auto Profile=[&](int32 Owner,int32 Type=1)
@@ -93,7 +119,7 @@ bool FACEHousingTest::RunTest(const FString&)
 	S.StageHousePayment(201,false);
 
 	auto* Dat=NewObject<UACEDatSubsystem>(GI);
-	if(!TestTrue(TEXT("Retail DAT opens"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+	if(!TestTrue(TEXT("Retail DAT opens"),Dat->LoadDatDirectory(ACETestDatDirectory()))) return false;
 	ON_SCOPE_EXIT {Dat->Deinitialize();};
 	auto* Resources=NewObject<UACEUIResourceResolver>(); Resources->Initialize(Dat);
 	auto* Manager=NewObject<UACEUIElementManager>(); Manager->Initialize();

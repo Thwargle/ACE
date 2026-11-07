@@ -1898,7 +1898,11 @@ bool AACEWorldEntityActor::TraceGroundZ(const FVector& AtLocation, float& OutGro
 			{
 				continue;
 			}
-			if (const AACEEnvCellActor* Env = Cast<AACEEnvCellActor>(Hit.GetActor()))
+			// Indoor scenery has its own draw-visibility owner so a stair can
+			// span rooms. Keep the originating cell for floor-support filtering.
+			const AACEEnvCellActor* Env = Cast<AACEEnvCellActor>(Hit.GetActor());
+			if (!Env && Hit.GetActor()) Env = Cast<AACEEnvCellActor>(Hit.GetActor()->GetOwner());
+			if (Env)
 			{
 				// Outdoor pets/NPCs must never seat on EnvCells — Yaraq dungeon lids under
 				// plaza footprints sit meters below grade and yanked summons under the world.

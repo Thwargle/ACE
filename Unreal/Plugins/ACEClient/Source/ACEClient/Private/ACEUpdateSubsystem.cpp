@@ -388,14 +388,15 @@ void UACEUpdateSubsystem::LaunchInstaller()
     FPlatformMisc::RequestExit(false); return;
 #elif PLATFORM_WINDOWS
     const FString Root = FPaths::ConvertRelativePathToFull(FString(FPlatformProcess::BaseDir()) / TEXT("../../.."));
-    const FString Script = Root / TEXT("Update-Client.ps1");
-    const FString Helper = CacheDirectory() / TEXT("Update-Client.ps1");
+    const FString Script = Root / TEXT("Update-Client.exe");
+    const FString Helper = CacheDirectory() / TEXT("Update-Client.exe");
     if (!FPaths::FileExists(Root / TEXT("ACUnreal.exe")) || IFileManager::Get().Copy(*Helper, *Script, true, true) != COPY_OK)
     { Fail(TEXT("The update helper is missing. Please use the installer from thwargle.com.")); return; }
-    FString Shell = FPlatformMisc::GetEnvironmentVariable(TEXT("SystemRoot")) / TEXT("System32/WindowsPowerShell/v1.0/powershell.exe");
-    const FString Args = FString::Printf(TEXT("-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%s\" -Installer \"%s\" -ExpectedSha256 %s -InstallDirectory \"%s\" -GameProcessId %u -Mode %s"),
-        *Helper, *PayloadPath(), *Release.Sha256, *Root, FPlatformProcess::GetCurrentProcessId(), bInstallVR ? TEXT("VR") : TEXT("Desktop"));
-    auto Handle = FPlatformProcess::CreateProc(*Shell, *Args, true, true, true, nullptr, 0, *CacheDirectory(), nullptr);
+    // Wine installations may provide a PowerShell stub that starts without
+    // running scripts. Keep update/restart in the existing Wine/Proton prefix.
+    const FString Args = FString::Printf(TEXT("-Installer \"%s\" -ExpectedSha256 %s -InstallDirectory \"%s\" -GameProcessId %u -Mode %s"),
+        *PayloadPath(), *Release.Sha256, *Root, FPlatformProcess::GetCurrentProcessId(), bInstallVR ? TEXT("VR") : TEXT("Desktop"));
+    auto Handle = FPlatformProcess::CreateProc(*Helper, *Args, true, true, true, nullptr, 0, *CacheDirectory(), nullptr);
     if (!Handle.IsValid()) { Fail(TEXT("Could not start the updater. Please try again.")); return; }
     FPlatformProcess::CloseProc(Handle); State = EACEUpdateState::Installing;
     FPlatformMisc::RequestExit(false); return;

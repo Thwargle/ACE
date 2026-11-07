@@ -44,6 +44,8 @@ and restart. The client reopens in the same desktop or PC VR mode. Older builds
 need one manual update to enable this. Website installers remain available. Saved accounts and
 settings are stored separately; keep your DAT backup. The community Windows
 installer is unsigned; SHA256SUMS.txt contains file verification hashes.
+Windows builds running under Wine/Proton use a native update helper from v151.
+If an earlier build fails to update, install v151 or later manually once.
 See RELEASE-NOTES.md for exact validation and remaining preview limitations.
 https://thwargle.com/unreal/
 https://thwargle.com/unreal-vr/

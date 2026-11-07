@@ -858,6 +858,7 @@ private:
 	void HandleSetSquelchDB(FACEBinaryReader& Reader);
 	void HandleHouseData(FACEBinaryReader& Reader);
 	void HandleHouseProfile(FACEBinaryReader& Reader);
+	void HandleAvailableHouses(FACEBinaryReader& Reader);
 	bool IsHousePaymentOwned(int32 Guid) const;
 	TArray<int32> CollectHousePaymentItems(int32 Guid, bool bRent) const;
 	void HandleHouseStatus(FACEBinaryReader& Reader);

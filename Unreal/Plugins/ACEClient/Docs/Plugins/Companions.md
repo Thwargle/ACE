@@ -22,6 +22,13 @@ Plugins > Refresh**, enable it and enter the game. The installed client's
 `ClientMods/api.json` advertises `companion_api: 1`; earlier releases do not have
 this extension. These features do not require UCM to be enabled.
 
+Every valid installed plugin remains listed, including disabled plugins.
+Plugin Manager's **Enabled plugin limit** defaults to 16 and can be raised or
+set to **0** for unlimited. Disabled plugins use no slot; an enabled companion
+still counts while stopped or with its window closed. The setting persists
+across restarts and is controlled by the player, not Lua. See
+[host lifecycle and limits](PublicAPI.md#lifecycle-and-ownership).
+
 - [Kill tracker example](Examples/kill_tracker/main.lua): configurable progress
   regex, persisted count, NPC and monster markers, clickable selection, and NAV.
 - [Nearby targets / Vsense example](Examples/vsense/main.lua): click any listed

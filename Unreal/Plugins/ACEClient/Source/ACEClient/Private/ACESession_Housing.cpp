@@ -1,5 +1,36 @@
 #include "ACESession.h"
 
+void FACESession::HandleAvailableHouses(FACEBinaryReader& R)
+{
+	// ClientHousingSystem::Handle_House__Recv_AvailableHouses: type,
+	// PackableList<uint32> outdoor cells, total (which may exceed the list).
+	if (!R.CanRead(12)) return;
+	const uint32 Type = R.ReadUInt32(), Count = R.ReadUInt32();
+	if (Type < 1 || Type > 4 || Count > uint32((R.Remaining()-4)/4)) return;
+	TArray<uint32> Cells;
+	for (uint32 I=0; I<Count; ++I)
+	{
+		const uint32 Cell=R.ReadUInt32();
+		if (I<400) Cells.Add(Cell);
+	}
+	const int32 Total=R.ReadInt32();
+	if (Total<0) return;
+	const TCHAR* Names[]={TEXT("cottages"),TEXT("villas"),TEXT("mansions"),TEXT("apartments")};
+	EmitChatMessage(FString::Printf(TEXT("There are %d %s available."),Total,Names[Type-1]),FString(),0);
+	if (Type==4) return; // Retail reports apartment counts without locations.
+	for (const uint32 Cell:Cells)
+	{
+		const uint32 Local=Cell&0xFFFF, X=(Cell>>24)&0xFF, Y=(Cell>>16)&0xFF;
+		if (Local<1 || Local>64 || X>=255 || Y>=255) continue;
+		const int32 East=8*X+((Local-1)>>3), North=8*Y+((Local-1)&7);
+		EmitChatMessage(FString::Printf(TEXT("     %.1f%s, %.1f%s"),
+			FMath::Abs((North-1024)*.1+.5),North<1024?TEXT("S"):TEXT("N"),
+			FMath::Abs((East-1024)*.1+.5),East<1024?TEXT("W"):TEXT("E")),FString(),0);
+	}
+	if (Total>400)
+		EmitChatMessage(TEXT("There were too many houses to display all the locations. Only the first 400 locations are displayed here."),FString(),0);
+}
+
 namespace
 {
 bool ReadHouseString(FACEBinaryReader& R, FString& Text)

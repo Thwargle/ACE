@@ -10,6 +10,12 @@ verifies the installer again, installs into the existing directory, and restarts
 in desktop or VR mode. Portable updates suppress shortcuts and uninstall
 registration. No uninstall, DAT deletion, or settings reset is performed.
 
+From v151, Windows launches the packaged `Update-Client.exe` helper instead of
+requiring PowerShell. This also avoids Wine/Proton installations whose PowerShell
+stub exits without executing the update. An older client still uses its old
+helper to install v151: if that fails under Wine/Proton, install v151 manually
+once. Live Faugus restart acceptance remains outstanding.
+
 Quest downloads a direct APK into private app storage. Android owns the update
 confirmation and package replacement. Installation requires the same package and
 signing certificate and a newer version code. The player may need to grant the
@@ -54,7 +60,7 @@ does not downgrade an installed client. Keep old downloads for manual rollback.
 ## Verification
 
 - Unreal automation: `ACE.Updates` and `ACE.Launcher` in editor and packaged builds.
-- `Test-UpdateClient.ps1`: isolated fixture executables cover desktop/VR restart,
+- `Test-UpdateClient.ps1 -NativeHelper <path-to-Update-Client.exe>`: isolated fixture executables cover desktop/VR restart,
   quoted paths, portable arguments, and rejection of corrupt installers.
 - Test an actual installer against an isolated copy of the previous portable
   release; verify saved configuration and DAT fixtures survive unchanged.

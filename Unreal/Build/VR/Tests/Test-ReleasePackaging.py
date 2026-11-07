@@ -75,6 +75,7 @@ class ReleasePackagingTests(unittest.TestCase):
         put(self.root, 'Unreal/Saved/VRWindowsArchive/Windows/ACUnreal/Binaries/Win64/ACUnreal.exe',
             b'MZ' + (display + '\0ACE.LocalCosmetics/1\0').encode('utf-16-le'))
         put(self.root, 'Unreal/Saved/VRWindowsArchive/Windows/Update-Client.ps1')
+        put(self.root, 'Unreal/Saved/VRWindowsArchive/Windows/Update-Client.exe')
         put(self.root, 'Unreal/Saved/VRWindowsArchive/Windows/ACUnreal/Content/Paks/game.pak')
         put(self.root, 'Unreal/Build/VR/README-WINDOWS.txt')
         put(self.root, 'Unreal/Build/VR/README-LINUX.txt', 'Linux launch and manual update instructions')

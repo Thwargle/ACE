@@ -158,7 +158,7 @@ public:
 		int32 Width, int32 Height, const TArray<FColor>& Pixels, bool bUsesAlpha,
 		TextureAddress AddressX = TA_Wrap, TextureAddress AddressY = TA_Wrap,
 		bool bPremultiplyAlpha = false, bool bDilateRgbIntoTransparent = true,
-        int32 MaxMipLevels = 0, TextureFilter Filter = TF_Trilinear, bool bApplyWorldSizeLimit = true);
+        int32 MaxMipLevels = 0, TextureFilter Filter = TF_Default, bool bApplyWorldSizeLimit = true);
 	/** Single-mip UI texture (bitmap fonts) — no dilate / mip soften. */
 	static UTexture2D* CreateTransientRgbaUi(int32 Width, int32 Height, const TArray<FColor>& Pixels);
 	/** Final icon upload: preserve coverage and visible artwork, extend edge RGB into alpha-zero texels.

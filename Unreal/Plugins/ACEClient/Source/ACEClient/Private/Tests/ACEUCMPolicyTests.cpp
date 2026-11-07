@@ -717,7 +717,7 @@ bool FACEUCMInventorySalvageTest::RunTest(const FString&)
     auto Profile=[](){return ParseUCM(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","salvage_inventory":true,"loot_rules":[{"action":"keep","name":"Keepsake","name_mode":"exact"},{"action":"salvage","material":59,"min_workmanship":7}]})"));};
     auto Snapshot=[](){return ParseUCM(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"mana":100,"max_mana":100,"inventory_revision":1,"appraisal_revision":1,"inventory":[{"id":9,"name":"Ust","object_class":40,"resource_available":true},{"id":20,"wcid":200,"name":"Copper Ring","material":59,"workmanship":7.5,"count":1,"identified":true,"container":99,"resource_available":true}]})"));};
     auto Step=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
-    for(int Protection=0;Protection<8;++Protection)
+    for(int Protection=0;Protection<9;++Protection)
     {
         FACEPluginVM VM;TestTrue(TEXT("Inventory salvage policy loads"),VM.Load(Source,Error));auto S=Snapshot(),P=Profile();auto Item=S->GetArrayField(TEXT("inventory"))[1]->AsObject();
         if(Protection==0)P->RemoveField(TEXT("salvage_inventory"));
@@ -728,6 +728,7 @@ bool FACEUCMInventorySalvageTest::RunTest(const FString&)
         if(Protection==5)Item->SetObjectField(TEXT("int_properties"),ParseUCM(TEXT(R"({"171":1})")));
         if(Protection==6)Item->SetObjectField(TEXT("string_properties"),ParseUCM(TEXT(R"({"8":"Owner"})")));
         if(Protection==7)Item->SetNumberField(TEXT("object_class"),39);
+        if(Protection==8)Item->RemoveField(TEXT("workmanship"));
         for(int Tick=0;Tick<2;++Tick)TestFalse(TEXT("Existing possessions remain protected without opt-in or when excluded"),Step(VM,S,P)->HasField(TEXT("action")));
     }
     for(bool Available:{true,false})

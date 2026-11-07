@@ -513,6 +513,12 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     Session.SpellBars.SetNum(8);
     for (int32 I=1;I<=20;++I) { Session.SpellBars[0].Add(I); Session.SpellBars[1].Add(I+20); }
     Binder->ApplyCombatMode(int32(ACECombatMode::Magic));
+    Binder->SetCombatSpellBar(0);
+    for(int32 Slot:{10,11})
+    {
+        Binder->ActivateHotbarSlot(Slot);
+        TestEqual(TEXT("Spell keys 11 and 12 select their absolute favorites"),Binder->SelectedCombatSpellSlot,Slot);
+    }
     Binder->SetCombatSpellBar(0); Binder->SelectVRSpell(7); Binder->RefreshSpellHotbarOverlays();
     Binder->HandleNamedClick(TEXT("Spellcast_Tab2"));
     TestEqual(TEXT("First visit selects the first spell"),Binder->SelectedCombatSpellSlot,0);
@@ -607,6 +613,33 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
             TestTrue(TEXT("Cast does not overlap a visible slot after reflow"),CastButton->GetScreenOrigin().X>=SlotBackground->GetCachedGeometry().GetAbsolutePosition().X+32);
     Combat->UserResizeW=0; Binder->RefreshSpellHotbarOverlays(); Manager->SetUiLocked(true);
 
+    // Vendors and the Ust share the retail environment frame and its saved width.
+    {
+        auto Env=Manager->FindElementByName(TEXT("RootGameplay_FloatyEnvPanel_Field"));
+        Binder->ShowVendorPanel(90001);
+        Manager->SetUiLocked(false);Manager->BringFloatyToFront(Env);
+        Env->UserDragX+=200-Env->GetScreenOrigin().X;Env->UserDragY+=400-Env->GetScreenOrigin().Y;Env->RecomputeLayoutOffset();
+        Draw(TEXT("VendorResizeBefore"));
+        auto Right=Manager->FindElementByName(TEXT("EnvPanelRightBorder"));
+        const auto Point=Canvas->LayoutToViewport(FVector2D(Right->GetScreenOrigin())+FVector2D(Right->Width,Right->Height)*.5);
+        const int32 Width=Env->Width,Height=Env->Height;
+        TestTrue(TEXT("Vendor edge exposes horizontal resizing"),Manager->GetWindowCursor(Point,ResizeCanvasSize)==EMouseCursor::ResizeLeftRight);
+        Manager->NotifyMouseDown(Point,ResizeCanvasSize,EKeys::LeftMouseButton);
+        const auto End=Point+FVector2D(120*Canvas->GetLastScaleX(),0);
+        Manager->NotifyMouseMove(End,ResizeCanvasSize);Manager->NotifyMouseUp(End,ResizeCanvasSize,EKeys::LeftMouseButton);
+        Draw(TEXT("VendorResizeAfter"));
+        TestEqual(TEXT("Vendor width follows an unlocked edge drag"),Env->Width,Width+120);
+        TestEqual(TEXT("Environment frame retains retail fixed height"),Env->Height,Height);
+        FACEWorldObject Ust;Ust.Guid=90002;Ust.ItemType=0x20000000;Ust.ContainerId=Session.PlayerGuid;Session.WorldObjects.Add(Ust.Guid,Ust);
+        Binder->ShowSalvagePanel(Ust.Guid);Draw(TEXT("SalvageSharedWidth"));
+        TestEqual(TEXT("Ust opens in the vendor's resized frame"),Binder->OpenSalvageToolGuid,Ust.Guid);
+        TestEqual(TEXT("Salvage and vendor retain a shared width"),Env->Width,Width+120);
+        Manager->SetUiLocked(true);
+        const auto LockedPoint=Canvas->LayoutToViewport(FVector2D(Right->GetScreenOrigin())+FVector2D(Right->Width,Right->Height)*.5);
+        TestFalse(TEXT("Locked frame does not advertise resizing"),Manager->GetWindowCursor(LockedPoint,ResizeCanvasSize)==EMouseCursor::ResizeLeftRight);
+        Binder->HideSalvagePanel();Env->UserResizeW=0;Manager->ApplyFloatyResizeLayout(Env);
+    }
+
     // DAT-backed retail compatibility, not spell-name heuristics. Buffs,
     // debuffs and heals use the same formula target rules in every school.
     auto Other=Self; Other.Guid=1235; Other.Name=TEXT("Other player"); Session.WorldObjects.Add(Other.Guid,Other);
@@ -683,6 +716,16 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
         FACEBinaryWriter W; W.WriteUInt32(1234); W.WriteUInt32(1); W.WriteUInt32(ACEGameEvent::MagicUpdateSpell);
         W.WriteUInt16(Id); W.WriteUInt16(0); FACEBinaryReader R(W.GetData()); Session.HandleGameEvent(R);
     };
+    Learn(NewSpell);
+    TestEqual(TEXT("Filtered learned spells do not open the book"),Binder->ActivePanelPage,FString(TEXT("InventoryPanel_Field")));
+    TestEqual(TEXT("Learning preserves school filters"),Binder->SpellbookSchoolFilterMask,0x1Fu & ~(1u<<(NewSchool-1)));
+    TestEqual(TEXT("Learning preserves level filters"),Binder->SpellbookLevelFilterMask,0xFFu & ~(1u<<(NewLevel-1)));
+    Session.KnownSpells.Remove(NewSpell);
+    Binder->SpellbookSchoolFilterMask=Binder->SpellbookLevelFilterMask=0;
+    Learn(NewSpell);
+    TestEqual(TEXT("All filters disabled prevents automatic opening"),Binder->ActivePanelPage,FString(TEXT("InventoryPanel_Field")));
+    Session.KnownSpells.Remove(NewSpell);
+    Binder->SpellbookSchoolFilterMask=0x1F; Binder->SpellbookLevelFilterMask=0xFF;
     Learn(NewSpell);
     TestEqual(TEXT("Learning opens spell management"),Binder->ActivePanelPage,FString(TEXT("SpellManagementPanel_Field")));
     TestEqual(TEXT("Learning switches from components to the spellbook"),Binder->ActiveSpellPanelTab,FString(TEXT("SpellbookPage")));

@@ -1300,6 +1300,8 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
         const auto* SalvageAppraisal=Appraisals.Find(Id);
         if(!SalvageAppraisal||!SalvageAppraisal->bSuccess||SalvageAppraisal->IntProperties.FindRef(171)>0||!SalvageAppraisal->StringProperties.FindRef(8).IsEmpty())
         {ReportActivityFailure(P,I,TEXT("Automatic salvage requires appraisal and skips tinkered or inscribed items"));return true;}
+        if(!SalvageAppraisal->IntProperties.Contains(105) && Item.SalvageWorkmanship<0)
+        {ReportActivityFailure(P,I,TEXT("Item has no workmanship and cannot be salvaged"));return true;}
         if(ToolId<=0||ToolId>MAX_uint32||FMath::FloorToDouble(ToolId)!=ToolId||!C->GetWorldObject(int32(uint32(ToolId)),Tool)||!SalvageToolAvailable(C,Tool)||Item.Guid==Tool.Guid||Item.ItemsCapacity>0||(ACEVTObjectClass::Classify(Item)==39&&Item.Structure>=100)||Item.MaterialType<1||Item.MaterialType>77||TArray<int>{3,9,56,65,72}.Contains(Item.MaterialType))
         {ReportActivityFailure(P,I,TEXT("Item is not salvageable or no owned Ust is available"));return true;}
         if(!PrepareCombatAction(P,I,1))return true;

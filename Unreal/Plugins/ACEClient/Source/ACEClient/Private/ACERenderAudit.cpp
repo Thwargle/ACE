@@ -49,6 +49,7 @@ namespace
 		if (A->IsA<AACELandblockActor>() || A->IsA<AACETerrainChunkActor>()) return TEXT("Terrain / outdoor scenery");
 		if (A->IsA<AACEEnvCellActor>()) return TEXT("Interiors");
 		if (A->IsA<AACERegionSceneryActor>()) return TEXT("Animated scenery");
+		if (A->GetOwner() && A->GetOwner()->IsA<AACEEnvCellActor>()) return TEXT("Interiors");
 		if (A->IsA<AACESkyDomeActor>()) return TEXT("Sky / weather");
 		if (A->IsA<AACELoadingScreenActor>()) return TEXT("Portal tunnel");
 		return A->GetClass()->GetName();
