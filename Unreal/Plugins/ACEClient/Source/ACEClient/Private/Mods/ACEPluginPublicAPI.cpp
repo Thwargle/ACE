@@ -1,4 +1,5 @@
 #include "Mods/ACEPluginSubsystem.h"
+#include "Mods/ACEPluginColor.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
 #include "ACESession.h"
@@ -170,25 +171,31 @@ bool UACEPluginSubsystem::ValidatePluginUI(const TArray<TSharedPtr<FJsonValue>>&
             auto R=V->AsObject();const FString Id=S(R,TEXT("id")),Type=S(R,TEXT("type"),S(R,TEXT("action")).IsEmpty()?TEXT("text"):TEXT("button"));
             if(Id.IsEmpty()||Id.Len()>64||Ids.Contains(Id)||S(R,TEXT("text")).Len()>4096||S(R,TEXT("tooltip")).Len()>1024)
             {Error=TEXT("UI controls need unique IDs and bounded text");return false;}Ids.Add(Id);
-            if(!TArray<FString>{TEXT("text"),TEXT("button"),TEXT("checkbox"),TEXT("slider"),TEXT("number"),TEXT("input"),TEXT("select"),TEXT("progress"),TEXT("icon"),TEXT("item_icon"),TEXT("image"),TEXT("row"),TEXT("column"),TEXT("section"),TEXT("tabs"),TEXT("overlay"),TEXT("frame")}.Contains(Type))
+            if(!TArray<FString>{TEXT("text"),TEXT("button"),TEXT("checkbox"),TEXT("slider"),TEXT("number"),TEXT("input"),TEXT("select"),TEXT("color"),TEXT("progress"),TEXT("icon"),TEXT("item_icon"),TEXT("image"),TEXT("row"),TEXT("column"),TEXT("section"),TEXT("tabs"),TEXT("overlay"),TEXT("frame")}.Contains(Type))
             {Error=TEXT("Unknown UI control: ")+Type;return false;}
             for(const TCHAR* Field:{TEXT("compact"),TEXT("auto_width"),TEXT("wrap"),TEXT("clickable"),TEXT("hide_when_pinned")})
                 if(R->HasField(Field)&&!R->HasTypedField<EJson::Boolean>(Field))
                 {Error=FString(Field)+TEXT(" must be a boolean");return false;}
-            for(const TCHAR* Field:{TEXT("width"),TEXT("height"),TEXT("opacity"),TEXT("min_opacity"),TEXT("period"),TEXT("rotation"),TEXT("outline"),TEXT("glow")})
+            for(const TCHAR* Field:{TEXT("width"),TEXT("height"),TEXT("opacity"),TEXT("min_opacity"),TEXT("period"),TEXT("rotation"),TEXT("outline"),TEXT("glow"),TEXT("scale"),TEXT("offset_x"),TEXT("offset_y")})
             {
                 if(!R->HasField(Field))continue;
                 double Value=0;const FString Key(Field);
-                const double Min=Key==TEXT("period")?.1:Key==TEXT("rotation")?-360.:0.;
-                const double Max=Key==TEXT("opacity")||Key==TEXT("min_opacity")?1.:Key==TEXT("period")?60.:Key==TEXT("outline")||Key==TEXT("glow")?8.:Key==TEXT("rotation")?360.:2048.;
+                const double Min=Key==TEXT("period")?.1:Key==TEXT("rotation")?-360.:Key==TEXT("scale")?.25:Key.StartsWith(TEXT("offset_"))?-2048.:0.;
+                const double Max=Key==TEXT("opacity")||Key==TEXT("min_opacity")?1.:Key==TEXT("period")?60.:Key==TEXT("outline")||Key==TEXT("glow")?8.:Key==TEXT("rotation")?360.:Key==TEXT("scale")?4.:2048.;
                 if(!R->HasTypedField<EJson::Number>(Field)||!R->TryGetNumberField(Field,Value)||!FMath::IsFinite(Value)||Value<Min||Value>Max)
                 {Error=TEXT("Invalid visual field: ")+Key;return false;}
             }
             if(!TArray<FString>{TEXT(""),TEXT("blink"),TEXT("pulse"),TEXT("rotate")}.Contains(S(R,TEXT("effect")))){Error=TEXT("Unknown visual effect");return false;}
             if(!TArray<FString>{TEXT(""),TEXT("left"),TEXT("center"),TEXT("right")}.Contains(S(R,TEXT("align")))){Error=TEXT("Unknown text alignment");return false;}
             const FString Action=S(R,TEXT("action"));
-            if(!Action.IsEmpty()&&!TArray<FString>{TEXT("event"),TEXT("select"),TEXT("waypoint"),TEXT("command"),TEXT("content_folder")}.Contains(Action))
+            if(!Action.IsEmpty()&&!TArray<FString>{TEXT("event"),TEXT("select"),TEXT("select_item"),TEXT("waypoint"),TEXT("command"),TEXT("content_folder")}.Contains(Action))
             {Error=TEXT("Unknown UI button action");return false;}
+            if(Type==TEXT("color"))
+            {
+                FString Value; FLinearColor Parsed;
+                if(!R->TryGetStringField(TEXT("value"),Value)||!ACEPluginColor::Parse(Value,Parsed))
+                {Error=TEXT("Color controls need a named color, #RRGGBB or #RRGGBBAA value");return false;}
+            }
             if(Type==TEXT("slider")||Type==TEXT("number"))
             {
                 if(N(R,TEXT("min"))>N(R,TEXT("max"),100)||FMath::Abs(N(R,TEXT("min")))>1.e9||FMath::Abs(N(R,TEXT("max"),100))>1.e9||N(R,TEXT("step"),1)<=0)
@@ -251,6 +258,12 @@ bool UACEPluginSubsystem::ChangePluginControl(const FString& Plugin,const FStrin
     auto R=Control(P->PanelRows,Id);if(!R||!B(R,TEXT("enabled")))return false;
     auto Accepted=Value;const FString Type=S(R,TEXT("type"));
     if(Type==TEXT("checkbox")){if(Value->Type!=EJson::Boolean)return false;}
+    else if(Type==TEXT("color"))
+    {
+        FLinearColor Parsed;
+        if(Value->Type!=EJson::String||!ACEPluginColor::Parse(Value->AsString(),Parsed))return false;
+        Accepted=MakeShared<FJsonValueString>(ACEPluginColor::Encode(Parsed));
+    }
     else if(Type==TEXT("input")||Type==TEXT("select"))
     {
         if(Value->Type!=EJson::String||Value->AsString().Len()>1024)return false;

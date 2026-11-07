@@ -8725,11 +8725,15 @@ bool UACEDatSubsystem::TryGetSpellExamination(uint32 SpellId, FString& OutDetail
 		if(Spell->School>0 && Spell->School<UE_ARRAY_COUNT(FocusWcid))
 		{
 			HasFocus=Client->GetPlayerVitals().StatQualityInts.FindRef(FocusAug[Spell->School])>0;
-			if(!HasFocus)for(const auto& Item:Client->GetPackItems(Client->GetPlayerGuid()))
+			// Retail ClientMagicSystem::GetAppropriateSpellFormula calls
+			// ACCWeenieObject::MagicPackIsOwned, which searches the player's
+			// container slots. GetPackItems deliberately excludes those slots,
+			// including foci; a foci inside another container does not qualify.
+			if(!HasFocus)for(const auto& Item:Client->GetPlayerPacks())
 				if(uint32(Item.WeenieClassId)==FocusWcid[Spell->School]){HasFocus=true;break;}
 		}
 	}
-	const auto Formula=HasFocus?ACESpellFormula::WithFocus(Spell->Formula,Spell->IconPowerLevel)
+	const auto Formula=HasFocus?ACESpellFormula::WithFocus(Spell->Formula)
 		:ACESpellFormula::Customize(Spell->Formula,Spell->FormulaVersion,Account);
 	TArray<uint32> Order;TMap<uint32,int32> Counts;
 	for(uint32 Component:Formula){if(!Counts.Contains(Component))Order.Add(Component);++Counts.FindOrAdd(Component);}

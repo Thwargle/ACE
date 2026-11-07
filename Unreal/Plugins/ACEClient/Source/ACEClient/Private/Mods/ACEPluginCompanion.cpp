@@ -263,7 +263,7 @@ bool UACEPluginSubsystem::CompanionAction(FACEClientPlugin& P,const TSharedPtr<F
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     if(!P.Enabled||!P.Running||C->GetSessionState()!=EACESessionState::InWorld||C->GetPlayerGuid()!=P.Player||C->GetServerName()!=P.Server)
     {Error=TEXT("Plugin is not active on this character");return false;}
-    const FString Permission=Kind==TEXT("identify")?TEXT("identify"):Kind==TEXT("select")?TEXT("ui"):Kind==TEXT("waypoint")?TEXT("waypoint"):Kind==TEXT("command")?TEXT("commands"):FString();
+    const FString Permission=Kind==TEXT("identify")?TEXT("identify"):(Kind==TEXT("select")||Kind==TEXT("select_item"))?TEXT("ui"):Kind==TEXT("waypoint")?TEXT("waypoint"):Kind==TEXT("command")?TEXT("commands"):FString();
     if(Permission.IsEmpty()||!P.Permissions.Contains(Permission)){Error=TEXT("Companion action not permitted: ")+Kind;return false;}
     if(Kind==TEXT("identify"))
     {
@@ -278,14 +278,52 @@ bool UACEPluginSubsystem::CompanionAction(FACEClientPlugin& P,const TSharedPtr<F
         // or changing the player's selection/examination panel.
         C->GetSession()->SendIdentifyObject(Item.Guid,true);return true;
     }
-    if(Kind==TEXT("select")||Kind==TEXT("waypoint"))
+    if(Kind==TEXT("select")||Kind==TEXT("select_item")||Kind==TEXT("waypoint"))
     {
         FACEWorldObject O;
-        const bool Found=C->GetWorldObject(Id(A,TEXT("target")),O),Owned=Found&&P.Api>=2&&Kind==TEXT("select")&&IsOwnedPluginItem(O);
-        if(!Found||(!Owned&&(!O.IsSelectableWorldObject()||!SameArea(C->GetPlayerPosition(),O.Position)
+        const bool Selecting=Kind!=TEXT("waypoint");
+        const bool Found=C->GetWorldObject(Id(A,TEXT("target")),O),Owned=Found&&P.Api>=2&&Selecting&&IsOwnedPluginItem(O);
+        bool InContainer=false;
+        if(Found && P.Api>=2 && Selecting)
+        {
+            const auto Session=C->GetSession();
+            int32 Container=O.ContainerId;
+            const int32 Requested=Id(A,TEXT("container"));
+            if(A->HasField(TEXT("container")))
+            {
+                if(!Requested||!A->HasTypedField<EJson::Number>(TEXT("container")))
+                {Error=TEXT("container must be a positive object ID");return false;}
+                const auto* Contents=Session->GetContainerContents(Requested);
+                // When present, the server's contents list is authoritative.
+                const bool Member=Contents?Contents->ContainsByPredicate([&](const auto& Item){return Item.ItemGuid==O.Guid;}):Container==Requested;
+                if(!Member){Error=TEXT("Item is no longer in the requested container");return false;}
+                Container=Requested;
+            }
+            TSet<int32> Seen;int32 Child=O.Guid;
+            for(int32 Depth=0;Container && Depth<32 && !Seen.Contains(Container);++Depth)
+            {
+                Seen.Add(Container);
+                if(const auto* Contents=Session->GetContainerContents(Container))
+                    if(!Contents->ContainsByPredicate([&](const auto& Item){return Item.ItemGuid==Child;}))
+                    {Error=TEXT("Item is no longer in the container");return false;}
+                if(Container==C->GetPlayerGuid() || Container==C->GetOpenExternalContainerGuid())
+                {InContainer=true;break;}
+                FACEWorldObject Parent;
+                if(!C->GetWorldObject(Container,Parent))break;
+                Child=Container;Container=Parent.ContainerId;
+            }
+        }
+        if(Kind==TEXT("select_item")&&!InContainer)
+        {Error=TEXT("Item must be in your inventory or a currently open container");return false;}
+        if(!Found||(!Owned&&!InContainer&&(!O.IsSelectableWorldObject()||!SameArea(C->GetPlayerPosition(),O.Position)
             ||FVector::DistSquared(C->GetPlayerPosition().ToUnrealLocation(),O.Position.ToUnrealLocation())>FMath::Square(24000.))))
         {Error=TEXT("Target is no longer nearby");return false;}
-        if(Kind==TEXT("select")){C->SelectObject(O.Guid);return true;}
+        if(Selecting)
+        {
+            if(O.IsUiHidden()||O.IsUnnamedDecoration()){Error=TEXT("Item cannot be selected");return false;}
+            if(Owned||InContainer)C->SelectInventoryObject(O.Guid);else C->SelectObject(O.Guid);
+            return C->GetSelectedObject().Guid==O.Guid;
+        }
         if(!IsWaypointEnabled()){Error=TEXT("Enable Waypoint to show the navigation arrow");return false;}
         const FVector2D Coordinates=ACEWaypoint::Coordinates(O.Position);const uint32 Dungeon=(uint32(O.Position.CellId)&65535)>=256?uint32(O.Position.CellId)>>16:0;
         FVector2D Previous;uint32 PreviousDungeon=0;
@@ -402,7 +440,7 @@ bool UACEPluginSubsystem::ApplyCompanionOutput(FACEClientPlugin& P,const TShared
     }
     if(O->HasField(TEXT("status")))P.Status=S(O,TEXT("status"));
     if(P.Companion&&S(O,TEXT("action"))==TEXT("stop")){StopCompanion(P,P.Status);return true;}
-    FString ActionError;if((P.Companion||S(O,TEXT("action"))==TEXT("command")||S(O,TEXT("action"))==TEXT("waypoint"))&&!CompanionAction(P,O,ActionError))P.CompanionError=ActionError;
+    FString ActionError;if((P.Companion||S(O,TEXT("action"))==TEXT("command")||S(O,TEXT("action"))==TEXT("waypoint")||S(O,TEXT("action"))==TEXT("select_item"))&&!CompanionAction(P,O,ActionError))P.CompanionError=ActionError;
     return true;
 }
 

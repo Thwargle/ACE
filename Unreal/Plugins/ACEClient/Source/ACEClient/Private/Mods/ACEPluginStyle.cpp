@@ -455,7 +455,9 @@ int32 SACEPluginText::OnPaint(const FPaintArgs& A,const FGeometry& G,const FSlat
     const float RasterScale=Scale*G.GetAccumulatedLayoutTransform().GetScale();
     const auto Effects=(ShouldBeEnabled(Enabled)?ESlateDrawEffect::None:ESlateDrawEffect::DisabledEffect)
         | (FMath::IsNearlyEqual(RasterScale,FMath::RoundToFloat(RasterScale),1.e-4f)?ESlateDrawEffect::None:ESlateDrawEffect::NoPixelSnapping);
-    E.PushClip(FSlateClippingZone(G.GetLayoutBoundingRect().IntersectionWith(Clip)));
+    // Glyphs use the accumulated render transform, so their clipping must too.
+    // A layout-space rectangle cuts off labels after plugin scale/offset/rotation.
+    E.PushClip(FSlateClippingZone(G));
     for(int32 N=0;N<Lines.Num();++N)
     {
         const auto& L=Lines[N];float X=M.Left;const float Spare=FMath::Max(0.f,Available-L.Width*Scale);

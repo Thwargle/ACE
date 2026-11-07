@@ -744,6 +744,7 @@ private:
 	friend class FACEPortalRetirementTest;
 	friend class FACELandblockInfoTest;
 	friend class FACERetailSpellLevelTest;
+	friend class FACERetailSpellComponentsTest;
 	friend class FACERetailStatsTest;
 	// Entries cannot move with TMap growth while a renderer is consuming their parts.
 	TMap<uint64, TSharedPtr<const FACEBuiltSetupMesh>> SetupMeshCache;

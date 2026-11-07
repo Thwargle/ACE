@@ -17,11 +17,17 @@ struct FACEPluginWorldPlate
     int32 Id=0, Level=0;
     FString Name, Role;
     FLinearColor Color=FLinearColor(1,.8f,.15f);
+    FLinearColor TextColor=FLinearColor::White, BackgroundColor=FLinearColor::Black;
+    FLinearColor HealthColor={.65f,.015f,.04f}, StaminaColor={.75f,.5f,0}, ManaColor={0,.35f,.85f};
     bool SelectionOnly=true, Refresh=true;
     // Opacity is applied once to the composed plate, independently of mesh selection tint.
     double Opacity=1, BackgroundOpacity=1, VROpacity=-1, VRBackgroundOpacity=-1;
     double OpacityFor(bool VR) const { return VR && VROpacity>=0 ? VROpacity : Opacity; }
     double BackgroundOpacityFor(bool VR) const { return VR && VRBackgroundOpacity>=0 ? VRBackgroundOpacity : BackgroundOpacity; }
+    double Scale=1, OffsetX=0, OffsetY=0;
+    TOptional<double> VRScale, VROffsetX, VROffsetY;
+    double ScaleFor(bool VR) const { return VR && VRScale.IsSet() ? VRScale.GetValue() : Scale; }
+    FVector2D OffsetFor(bool VR) const { return {VR && VROffsetX.IsSet()?VROffsetX.GetValue():OffsetX,VR && VROffsetY.IsSet()?VROffsetY.GetValue():OffsetY}; }
     FACEPluginPlateVital Health, Stamina, Mana;
     TArray<FACEPluginPlateEffect> Effects;
 };

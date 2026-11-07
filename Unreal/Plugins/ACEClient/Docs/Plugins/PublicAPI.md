@@ -20,6 +20,7 @@ not edit the built-in UCM configuration. The machine-readable action/field catal
 - Item classification: [Loot matching](LootMatching.md), including appraisal and resumable evaluation.
 - Trackers that read server messages: [chat delivery and filters](#read-and-filter-chat).
 - Custom PNGs, gauges, timers, animation and controls: [native UI](#native-ui) and [Graphics Gallery](Examples/graphics_gallery/main.lua).
+- Color pickers, scale, offsets and container item selection: [Appearance Controls](Examples/appearance_controls/main.lua).
 - Target health, effects and opaque/translucent nameplates: [target data and world plates](#target-data-and-object-attached-plates).
 - Casting, combat, equipment, transfers and navigation: [game intents](#game-intents) and [built-in policies](#reuse-or-replace-the-built-in-policies).
 - Configuration, imports, outgoing chat and sounds: [services](#services-and-profiles).
@@ -353,6 +354,23 @@ never change the selected creature's yellow mesh tint or selection settings.
 For solid text with a softer backing, keep `opacity=1` and lower
 `background_opacity`. Set both to 1 for an opaque nameplate.
 
+Plate colors accept `green`, `yellow`, `red`, `blue`, `white`, `purple`, `black`,
+`transparent`, `#RRGGBB`, or `#RRGGBBAA` (sRGB RGB, linear alpha). `color` styles
+the name and brackets; `text_color` styles role, level, vital numbers and timers.
+`background_color` styles the backing, multiplied by `background_opacity`.
+`health_color`, `stamina_color`, and `mana_color` style their respective bar fills.
+Omitting these fields preserves the existing palette. Overall `opacity` also
+multiplies each chosen color's alpha; use `FF` alpha for fully opaque content.
+
+`scale` is a uniform multiplier from 0.25 to 4 (default 1). `offset_x` and
+`offset_y` are finite plate-local logical pixels from -2,048 to 2,048 (default 0):
+positive X moves right and positive Y moves down in the camera-facing plane.
+Offsets scale with the plate; the whole plate, including brackets, moves together.
+Optional `vr_scale`, `vr_offset_x`, and `vr_offset_y` override individual values
+in VR; each omitted override inherits the corresponding desktop value. These
+controls affect the plugin's plate only, never the actor or its selection tint.
+Use native `type="color"` and slider controls below to expose addon preferences.
+
 An omitted `world_plates` retains this plugin's list; `{}` clears it. A supplied
 list atomically replaces it. `selection_only` defaults to true, hiding the old
 target immediately when selection changes; set false for an additional tracked
@@ -668,7 +686,7 @@ ui = {
 }
 ```
 
-Controls: text, button, checkbox, slider, number, input, select, progress, icon,
+Controls: text, button, checkbox, slider, number, input, select, color, progress, icon,
 item_icon, image, row, column, section, tabs, overlay and frame. Containers use `children`; tabs use each
 child's text as its tab title. Sections have `expanded`; their expansion state
 and selected tab are retained while the window is open. Common options are text,
@@ -697,10 +715,24 @@ slider accept min/max/step; native code clamps/snaps the returned value.
 For progress controls, `color` sets the fill and `text_color` sets the label
 (light text by default).
 
+`type="color"` provides a swatch, editable hex value, and an expandable color
+wheel with brightness and opacity sliders. `value` is required and accepts a
+named color or `#RRGGBB`/`#RRGGBBAA`; `expanded=true` initially opens the wheel.
+Changes emit `{type="change", id=..., value="#RRGGBBAA"}` using uppercase hex,
+including alpha. Malformed values are rejected. Handle the event and return
+the new value, just like other controls; save it with `state` (requires `state`
+permission) or a profile to persist it. The picker requires `ui` permission.
+
+```lua
+{id="tint", type="color", text="Nameplate color", value="#FFC040FF"}
+```
+
 `width` and `height` reserve fixed logical dimensions (0–2,048), including on
 columns and row children. Text accepts `align="left"`, `"center"`, or `"right"`.
 `overlay` draws children in order in the same space; `frame` adds a colored backing
 (default `#00000080`). Colors also accept `#RRGGBB` and `#RRGGBBAA`.
+The panel palette includes green, red, yellow, blue, purple, white, black and
+transparent. Hex RGB is sRGB; alpha is linear.
 Any frame, image, text or progress control may set `clickable=true` to emit the
 normal click event, or use the same action fields as buttons.
 
@@ -709,6 +741,15 @@ restores it during Quick-show immediately, without waiting for Lua. The same sta
 is available as `window_chrome_hidden` in the snapshot.
 
 Custom images preserve their source aspect ratio inside their width/height box.
+All controls and containers accept `scale` (0.25–4, default 1), `offset_x` and
+`offset_y` (-2,048–2,048, default 0). These are render transforms: scale and
+rotation are applied around the control's center, then offsets move it in its
+parent's logical pixels (right/down positive). Child controls and their hit
+targets transform together. Nesting a transformed column scales its whole panel
+content. Render transforms do not resize the window or reserve extra layout
+space; provide sufficient surrounding space and avoid overlapping controls or
+clipping at panel edges. Use width/height/padding for layout allocation. These
+values multiply the normal UI scale and coexist with Lua Plugin Text Scale.
 All controls accept `opacity` (0–1), `rotation` (degrees, -360–360), and
 `effect="blink"`, `"pulse"`, or `"rotate"`. `period` is 0.1–60 seconds;
 `min_opacity` defaults to 0.2 for blink/pulse. Native Slate animation advances each
@@ -719,7 +760,7 @@ materials. See [Graphics Gallery](Examples/graphics_gallery/main.lua) for layere
 artwork, a vital gauge, a countdown, native effects and clickable controls.
 
 Buttons default to `{type="click",id=...}` events. Optional `action` is event,
-select, waypoint or command; a command button uses `command="/acueucm ..."`. Native
+select, select_item, waypoint or command; a command button uses `command="/acueucm ..."`. Native
 buttons revalidate their current target at click time. Inputs and other editable
 controls emit `{type="change",id=...,value=...}`. Input commits on Enter/focus loss;
 `live=true` also emits while typing. Input is capped at 1,024 characters. The host
@@ -729,6 +770,31 @@ Use stable IDs: removing a control or changing its type replaces that control.
 Focused text edits are preserved; an open select keeps its current options until
 it closes. Handle events and return the updated value yourself. Event delivery
 does not automatically save configuration.
+
+`action="select_item", target=item.id` selects a known item in your main pack,
+a nested owned pack, or the currently open external container (chest/corpse).
+Optional `container=item.container` verifies its **direct** containing object;
+IDs are positive unsigned 32-bit numbers, not inventory slot indexes or WCIDs.
+The current server contents list takes precedence over stale object metadata.
+Missing items, closed external containers, stale membership and containment
+cycles are rejected. It requires API 2 and `ui` permission; no inventory/action
+ownership is needed. Selection updates the existing inventory selection and
+highlight; it does not open another pack, scroll its panel, use, equip, loot,
+move or attack. `action="select"` on a UI button or companion also supports
+accessible container items and retains its world-target behavior.
+
+```lua
+{id="pick", type="button", text="Select item", action="select_item",
+ target=item.id, container=item.container}
+```
+
+A click reports `{type="click",id="pick",ok=...,error=...}`. Companions and
+API 2 automation plugins can also return `{action="select_item",target=id,
+container=container_id}` directly; failures appear in `s.error`. Prefer explicit
+user clicks over reselecting every update. Read current inventory via the `data`
+permission and `snapshot_fields={"inventory"}`; never save session-local GUIDs.
+See [Appearance Controls](Examples/appearance_controls/main.lua) for saved color,
+scale and offset settings applied to panels and nameplates, plus item selection.
 
 `icon` uses a numeric DAT `icon` ID (available on inventory/spell records).
 `image` uses `asset="my_icon.png"` from your own plugin's `images` folder. No

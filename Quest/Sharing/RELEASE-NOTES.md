@@ -1,47 +1,38 @@
-# AC:Unreal / AC:VR release 151
+# AC:Unreal / AC:VR release 152
 
 Windows desktop, PC VR, native Linux x86_64, standalone Quest, and the Android
-phone/tablet preview share **2026.11.06.151**. Android version code: 151.
-Quest installer revision: 9. These notes cover changes since v150.
+phone/tablet preview share **2026.11.07.152**. Android version code: 152.
+Quest installer revision: 9. These notes cover changes since v151.
 
-## Interface and world visibility
+## Spell inspection
 
-- Keep large indoor scenery, including stairs, visible when its bounds extend
-  into a visible room even if its origin cell is hidden.
-- Restore horizontal resizing for vendor and salvage windows, sharing their width.
-- Preserve spellbook school/level filters when learning a spell; reveal the new
-  spell only when those filters admit it.
-- Fix spell hotkeys 11 and 12 and display available-house replies from the server.
+- Show the correct component requirements when the matching school's foci is
+  in a player backpack slot, or the character has its infused augmentation.
+- Refresh an open spell inspection when foci ownership or augmentations change.
+- Correct prismatic taper counts for formulas with multiple scarabs while
+  retaining required scarabs and chorizite.
 
-## UCM and plugins
+## Lua plugin APIs
 
-- Use a player-targeted bane for equipped armor when refreshing partial coverage.
-- Skip identified items without workmanship during automatic salvage.
-- Make the enabled-plugin limit configurable; disabled plugins no longer consume
-  the limit, and all discovered plugins remain available in the manager.
-- Expand Lua API documentation, including loot matching, capabilities, settings,
-  snapshots, custom graphics, and plugin limits.
+- Add a native color picker with hex entry, color wheel, brightness and opacity.
+- Add scale and X/Y offsets for plugin controls, including entire panel contents.
+- Add custom nameplate text, backing and vital-bar colors, plus scale and offsets
+  with independent VR placement overrides. The selected actor's tint is unchanged.
+- Add item selection in owned packs and open chests/corpses, with current
+  container membership checked before selecting; selection never uses or moves items.
+- Fix clipping of plugin text when controls are scaled, moved or rotated.
+- Expand the Lua API documentation and machine-readable catalog; include an
+  optional Appearance Controls example demonstrating saved preferences.
 
-## Display and updates
+## Validation and scope
 
-- Preserve the confirmed Linux resolution during delayed window resize events;
-  use fullscreen when the requested decorated window cannot fit the monitor.
-- Apply the selected texture filtering to terrain and world textures instead of
-  forcing trilinear filtering.
-- Replace the Windows updater's PowerShell dependency with a native helper for
-  update/restart compatibility under Wine/Proton.
-  Older builds with a broken updater may need one manual installation to acquire it.
+Automated checks cover spell formulas and login ordering, plugin input/rendering,
+saved preferences, container-selection packets, packaged clients, APK contents,
+upgrade preservation and public download integrity. Results accompany the local
+release artifacts. Quest and phone hardware were not acceptance-tested for v152.
 
-## Diagnostics and validation
+The intermittent Levistras casting rejection with foci remains unconfirmed; the
+inspection correction is not a claimed fix for that server-side warning.
 
-- Expand /acueobject with renderer-side draw state, bounds, geometry counts, and
-  camera/interior diagnostics. The reported invisible Apostate Nexus Gateway is
-  still under investigation; this release does not claim a confirmed gateway fix.
-
-Automated checks cover the changed behavior, packaged clients, APK contents,
-upgrade preservation, and public download integrity. Validation results accompany
-the local release artifacts. Physical Linux 4K displays, a live Faugus restart,
-Quest/phone hardware, and the affected gateway session were not acceptance-tested.
-
-Packages exclude retail DATs, personal settings, server data, and generated
+Packages exclude retail DATs, personal settings, server data and generated
 MeshCache files. Android phones/tablets remain a separate preview APK.

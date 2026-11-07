@@ -156,6 +156,15 @@ the object at click time. A vanished or out-of-area target is rejected. `command
 uses the separate `command` field so its button caption can be friendly text.
 Button clicks never implicitly attack or use a selected object.
 
+API 2 companions can use `action="select_item", target=item_id` with optional
+`container=direct_container_id` to select items in owned packs or a currently
+open chest/corpse. This requires `ui` permission. The current container and item
+membership are checked on every click; closed/stale containers are rejected.
+This only changes selection, without opening, using, moving or looting items.
+API 2 `select` also accepts these accessible container items. See the
+[Public API](PublicAPI.md#native-ui) for the color picker, scale/offset fields,
+selection rules and complete example.
+
 The same actions can be returned directly as flat fields:
 `{action="waypoint",target=id}`, `{action="select",target=id}`, or
 `{action="command",text="/myquests"}`. Direct repeated actions are the author's

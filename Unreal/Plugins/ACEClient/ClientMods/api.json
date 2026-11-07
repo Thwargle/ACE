@@ -286,8 +286,10 @@
     "world_plates": {
       "permissions": ["ui", "markers"],
       "output": "world_plates",
-      "fields": ["id", "name", "role", "level", "color", "selection_only", "refresh", "vitals", "effects", "opacity", "background_opacity", "vr_opacity", "vr_background_opacity"],
-      "opacity": "Numbers in [0,1]. opacity controls the whole composed plate; background_opacity controls its black backing. Both default to 1 (opaque). Optional vr_opacity and vr_background_opacity override the corresponding desktop value in VR. Mesh selection tint is unaffected; unused canvas stays transparent.",
+      "fields": ["id", "name", "role", "level", "color", "text_color", "background_color", "health_color", "stamina_color", "mana_color", "selection_only", "refresh", "vitals", "effects", "opacity", "background_opacity", "vr_opacity", "vr_background_opacity", "scale", "offset_x", "offset_y", "vr_scale", "vr_offset_x", "vr_offset_y"],
+      "opacity": "Numbers in [0,1]. opacity controls the whole composed plate; background_opacity multiplies backing alpha. Both default to 1 (opaque). Optional vr_opacity and vr_background_opacity override desktop values. Mesh selection tint is unaffected; unused canvas stays transparent.",
+      "colors": "green/red/yellow/blue/white/purple/black/transparent or #RRGGBB/#RRGGBBAA (sRGB RGB, linear alpha). color: name/brackets; text_color: role/level/numbers/timers; background_color: backing; health_color/stamina_color/mana_color: bar fills. Omission preserves existing colors.",
+      "transforms": "scale 0.25..4 (default 1), offset_x/offset_y -2048..2048 (default 0). Plate-local logical pixels, right/down positive, multiplied by scale; whole plate including brackets moves. vr_scale/vr_offset_x/vr_offset_y override individually, otherwise inherit desktop.",
       "selection_only_default": true,
       "refresh_default": true,
       "refresh": "Background assessments share one request per second globally, alternate seconds with running automation; no QueryHealth selection changes. Unknown or denied fields remain absent.",
@@ -312,6 +314,7 @@
       "number",
       "input",
       "select",
+      "color",
       "progress",
       "icon",
       "item_icon",
@@ -326,6 +329,8 @@
     "ui_layout": {
       "text_scale": "Native labels, buttons and editable text respect the player's Lua Plugin Text Scale, independently of chat scale; use flexible layouts",
       "width_height": "optional fixed logical dimensions 0..2048; image aspect ratio is preserved",
+      "transforms": "scale 0.25..4 (default 1), offset_x/offset_y -2048..2048 (default 0). Render scale/rotation about center, then parent logical-pixel offsets right/down. Transforms children and hit targets; does not reserve layout space or resize window.",
+      "color_picker": "type=color, required value named color or #RRGGBB/#RRGGBBAA; expandable wheel, brightness/opacity sliders and hex input; expanded defaults false. change events return uppercase #RRGGBBAA; author persists state.",
       "align": "text justification: left, center or right",
       "progress_colors": "color sets bar fill; text_color sets overlaid label, light by default",
       "hide_when_pinned": "boolean, native immediate visibility using window_chrome_hidden (includes Quick-show)",
@@ -491,6 +496,11 @@
         "fields": [
           "target"
         ]
+      },
+      "select_item": {
+        "permission": "ui",
+        "fields": ["target", "container"],
+        "rules": "API 2 companions and automation; also a UI button action. target is an item GUID, container is an optional direct container GUID. Selects owned/nested inventory or a currently open external container; current contents revalidated. Never opens, scrolls, uses, moves, equips or loots. Button click returns ok/error; direct failure appears in snapshot.error. IDs must be positive unsigned 32-bit values."
       },
       "logout": {
         "permission": "navigation",

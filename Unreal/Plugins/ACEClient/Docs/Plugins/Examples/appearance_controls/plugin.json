@@ -1,0 +1,12 @@
+{
+  "api": 2,
+  "mode": "companion",
+  "id": "appearance_controls",
+  "name": "Appearance Controls Example",
+  "version": "1.0.0",
+  "description": "Saved panel and nameplate colors, scale, offsets, and container item selection.",
+  "permissions": ["ui", "markers", "state", "data"],
+  "snapshot_fields": ["selection", "inventory"],
+  "update_interval": 0.5,
+  "presentation": {"controls": "none", "settings": false}
+}

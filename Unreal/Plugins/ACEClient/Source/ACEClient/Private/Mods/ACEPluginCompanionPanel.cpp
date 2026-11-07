@@ -1,4 +1,5 @@
 #include "Mods/ACEPluginPresentation.h"
+#include "Mods/ACEPluginColor.h"
 #include "Mods/ACEPluginStyle.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEDatSubsystem.h"
@@ -27,6 +28,8 @@
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/Images/SImage.h"
+#include "Widgets/Colors/SColorWheel.h"
+#include "Widgets/Colors/SColorBlock.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Styling/CoreStyle.h"
@@ -43,12 +46,8 @@ namespace ACEPluginCompanionPanelPrivate
     {bool V;return O->TryGetBoolField(K,V)?V:D;}
     FLinearColor Color(const FString& Name)
     {
-        if(Name==TEXT("green"))return FLinearColor(.2f,1,.4f);
-        if(Name==TEXT("red"))return FLinearColor(1,.3f,.2f);
-        if(Name==TEXT("yellow"))return FLinearColor(1,.85f,.25f);
-        if(Name==TEXT("blue"))return FLinearColor(.25f,.7f,1);
-        if(Name.StartsWith(TEXT("#"))&&(Name.Len()==7||Name.Len()==9))return FLinearColor(FColor::FromHex(Name));
-        return FLinearColor(1.f,.98f,.92f);
+        FLinearColor Parsed;
+        return ACEPluginColor::Parse(Name,Parsed)?Parsed:FLinearColor(1.f,.98f,.92f);
     }
     // Effects advance on Slate's frame clock, independent of Lua's callback rate.
     class SACECompanionVisual : public SCompoundWidget
@@ -69,7 +68,8 @@ namespace ACEPluginCompanionPanelPrivate
         {
             Effect=S(Data,TEXT("effect"));Period=N(Data,TEXT("period"),1);Opacity=N(Data,TEXT("opacity"),1);
             Minimum=N(Data,TEXT("min_opacity"),.2);Rotation=FMath::DegreesToRadians(float(N(Data,TEXT("rotation"))));
-            SetRenderOpacity(Opacity);SetRenderTransform(FSlateRenderTransform(FQuat2D(Rotation)));
+            Scale=N(Data,TEXT("scale"),1);Offset={N(Data,TEXT("offset_x")),N(Data,TEXT("offset_y"))};
+            SetRenderOpacity(Opacity);SetRenderTransform(Concatenate(FScale2D(Scale),FQuat2D(Rotation),Offset));
             SetCanTick(!Effect.IsEmpty());
         }
         void Tick(const FGeometry& G,double Time,float Dt) override
@@ -81,11 +81,11 @@ namespace ACEPluginCompanionPanelPrivate
             if(Effect==TEXT("pulse"))Alpha*=FMath::Lerp(Minimum,1.f,float(.5-.5*FMath::Cos(Phase*2*PI)));
             SetRenderOpacity(Alpha);
             const float Angle=Rotation+(Effect==TEXT("rotate")?float(Phase*2*PI):0.f);
-            SetRenderTransform(FSlateRenderTransform(FQuat2D(Angle)));
+            SetRenderTransform(Concatenate(FScale2D(Scale),FQuat2D(Angle),Offset));
         }
     private:
         TSharedPtr<FJsonObject> Data;TWeakObjectPtr<UACEPluginSubsystem> Host;FString Plugin;
-        FString Effect;double Period=1;float Opacity=1,Minimum=.2f,Rotation=0;
+        FString Effect;double Period=1;float Opacity=1,Minimum=.2f,Rotation=0,Scale=1;FVector2D Offset=FVector2D::ZeroVector;
     };
     // Stable Lua control IDs are also stable Slate identities. Only structural
     // changes touch slots; ordinary snapshots update the retained row data.
@@ -258,6 +258,43 @@ namespace ACEPluginCompanionPanelPrivate
                 Node->Sync=[R,Input,Applying](){if(Input->HasAnyUserFocusOrFocusedDescendants())return false;
                     const FString Value=S(R,TEXT("value"));if(Input->GetText().ToString()!=Value){TGuardValue<bool> Guard(*Applying,true);Input->SetText(FText::FromString(Value));}return true;};
                 Content=SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[Label(R)]+SVerticalBox::Slot().AutoHeight()[Input];
+            }
+            else if(Type==TEXT("color"))
+            {
+                auto Value=[R](){return Color(S(R,TEXT("value")));};
+                auto Commit=[Changed](FLinearColor C){Changed(MakeShared<FJsonValueString>(ACEPluginColor::Encode(C)));};
+                auto Weak=MakeShared<TWeakPtr<SEditableTextBox>>();
+                auto Input=SNew(SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit)
+                    .Font(FACEPluginStyle::NativeFont("Regular",15)).Text(FText::FromString(S(R,TEXT("value"))))
+                    .SelectAllTextWhenFocused(false)
+                    .OnTextCommitted_Lambda([Changed,Weak](const FText& Text,ETextCommit::Type)
+                {
+                    FLinearColor C;const bool Valid=ACEPluginColor::Parse(Text.ToString(),C);
+                    if(auto Edit=Weak->Pin())Edit->SetError(Valid?FText::GetEmpty():FText::FromString(TEXT("Use #RRGGBB or #RRGGBBAA")));
+                    if(Valid)Changed(MakeShared<FJsonValueString>(ACEPluginColor::Encode(C)));
+                });
+                *Weak=Input;
+                Node->Sync=[R,Input](){if(Input->HasAnyUserFocusOrFocusedDescendants())return false;
+                    Input->SetText(FText::FromString(S(R,TEXT("value"))));Input->SetError(FText::GetEmpty());return true;};
+                auto Body=SNew(SVerticalBox);
+                Body->AddSlot().AutoHeight().HAlign(HAlign_Center)
+                    [SNew(SBox).WidthOverride(128).HeightOverride(128)[SNew(SColorWheel)
+                        .SelectedColor_Lambda([Value](){return Value().LinearRGBToHSV();})
+                        .OnValueChanged_Lambda([Commit](FLinearColor HSV){Commit(HSV.HSVToLinearRGB());})]];
+                for(bool Alpha:{false,true})
+                    Body->AddSlot().AutoHeight().Padding(2)
+                        [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()
+                            [SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",13)).Text(FText::FromString(Alpha?TEXT("Opacity"):TEXT("Brightness")))]
+                            +SVerticalBox::Slot().AutoHeight()[SNew(SSlider).Style(&FACEPluginStyle::Current()->Slider)
+                                .Value_Lambda([Value,Alpha](){return Alpha?Value().A:Value().LinearRGBToHSV().B;})
+                                .OnValueChanged_Lambda([Value,Commit,Alpha](float V){auto C=Value().LinearRGBToHSV();if(Alpha)C.A=V;else C.B=V;Commit(C.HSVToLinearRGB());})]];
+                Content=SNew(SExpandableArea).BorderImage(&FACEPluginStyle::Current()->SectionHeader)
+                    .BodyBorderImage(&FACEPluginStyle::Current()->TitleBackground).InitiallyCollapsed(!B(R,TEXT("expanded"),false))
+                    .HeaderContent()[SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[Label(R)]
+                        +SVerticalBox::Slot().AutoHeight()[SNew(SHorizontalBox)+SHorizontalBox::Slot().AutoWidth().Padding(0,0,6,0)
+                            [SNew(SBox).WidthOverride(32).HeightOverride(28)[SNew(SColorBlock).Color_Lambda(Value).ShowBackgroundForAlpha(true)]]
+                            +SHorizontalBox::Slot().FillWidth(1)[Input]]]
+                    .BodyContent()[Body];
             }
             else if(Type==TEXT("number"))
             {

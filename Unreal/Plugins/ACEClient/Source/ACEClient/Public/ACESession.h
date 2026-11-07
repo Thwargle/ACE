@@ -119,6 +119,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEPlayerModuleParityTest;
 	friend class FACEUILayoutCommandsTest;
 	friend class FACEUIInteractionParityTest;
+	friend class FACERetailSpellComponentsTest;
 	friend class FACEPanelResizeSocialTest;
 	friend class FACEMovementReviewTest;
 	friend class FACERemoteMovementReplayTest;

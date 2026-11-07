@@ -90,6 +90,7 @@ class ACECLIENT_API UACEClientSubsystem : public UGameInstanceSubsystem, public 
 	friend class FACEChatParityTest;
 	friend class FACEUILayoutCommandsTest;
 	friend class FACEUIInteractionParityTest;
+	friend class FACERetailSpellComponentsTest;
 	friend class FACEPanelResizeSocialTest;
 	friend class FACEMovementReviewTest;
 

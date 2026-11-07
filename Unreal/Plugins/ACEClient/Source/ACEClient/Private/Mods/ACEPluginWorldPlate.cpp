@@ -1,4 +1,5 @@
 #include "Mods/ACEPluginWorldPlate.h"
+#include "Mods/ACEPluginColor.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEPluginStyle.h"
 #include "ACEClientSubsystem.h"
@@ -59,17 +60,36 @@ bool ACEPluginWorldPlate::Parse(const TArray<TSharedPtr<FJsonValue>>& Values,TAr
             {TEXT("vr_opacity"),&P.VROpacity},{TEXT("vr_background_opacity"),&P.VRBackgroundOpacity}})
             if(J->HasField(Field.Key)&&!PlateNumber(J,Field.Key,*Field.Value,0,1))
             {Error=TEXT("World plate opacity must be a number in [0,1]");return false;}
+        for(const auto& Field:TArray<TPair<const TCHAR*,double*>>{
+            {TEXT("scale"),&P.Scale},{TEXT("offset_x"),&P.OffsetX},{TEXT("offset_y"),&P.OffsetY}})
+            if(J->HasField(Field.Key)&&!PlateNumber(J,Field.Key,*Field.Value,Field.Value==&P.Scale?.25:-2048.,Field.Value==&P.Scale?4.:2048.))
+            {Error=TEXT("World plate scale must be .25..4 and offsets -2048..2048");return false;}
+        for(const auto& Field:TArray<TPair<const TCHAR*,TOptional<double>*>>{
+            {TEXT("vr_scale"),&P.VRScale},{TEXT("vr_offset_x"),&P.VROffsetX},{TEXT("vr_offset_y"),&P.VROffsetY}})
+            if(J->HasField(Field.Key))
+            {
+                double Number=0;const bool Scale=Field.Value==&P.VRScale;
+                if(!PlateNumber(J,Field.Key,Number,Scale?.25:-2048.,Scale?4.:2048.))
+                {Error=TEXT("Invalid VR world plate scale or offset");return false;}
+                *Field.Value=Number;
+            }
         if(Ids.Contains(P.Id)){Error=TEXT("Duplicate world plate object");return false;}Ids.Add(P.Id);
         if(J->HasField(TEXT("selection_only"))&&(J->Values[TEXT("selection_only")]->Type!=EJson::Boolean||!J->TryGetBoolField(TEXT("selection_only"),P.SelectionOnly)))
         {Error=TEXT("selection_only must be boolean");return false;}
         if(J->HasField(TEXT("refresh"))&&!J->TryGetBoolField(TEXT("refresh"),P.Refresh))
         {Error=TEXT("refresh must be boolean");return false;}
-        if(J->HasField(TEXT("color")))
+        for(const auto& Field:TArray<TPair<const TCHAR*,FLinearColor*>>{
+            {TEXT("color"),&P.Color},{TEXT("text_color"),&P.TextColor},{TEXT("background_color"),&P.BackgroundColor},
+            {TEXT("health_color"),&P.HealthColor},{TEXT("stamina_color"),&P.StaminaColor},{TEXT("mana_color"),&P.ManaColor}})
+        if(J->HasField(Field.Key))
         {
             FString Color;
             static const TMap<FString,FLinearColor> Colors={{TEXT("yellow"),{1,.8f,.15f}},{TEXT("red"),{1,.15f,.1f}},
-                {TEXT("blue"),{.15f,.6f,1}},{TEXT("green"),{.15f,1,.3f}},{TEXT("white"),FLinearColor::White},{TEXT("purple"),{.8f,.3f,1}}};
-            if(!J->TryGetStringField(TEXT("color"),Color)||!Colors.Contains(Color)){Error=TEXT("Invalid world plate color");return false;}P.Color=Colors[Color];
+                {TEXT("blue"),{.15f,.6f,1}},{TEXT("green"),{.15f,1,.3f}},{TEXT("white"),FLinearColor::White},{TEXT("purple"),{.8f,.3f,1}},
+                {TEXT("black"),FLinearColor::Black},{TEXT("transparent"),FLinearColor::Transparent}};
+            if(!J->TryGetStringField(Field.Key,Color)){Error=TEXT("Invalid world plate color");return false;}
+            if(const auto* Named=Colors.Find(Color))*Field.Value=*Named;
+            else if(!ACEPluginColor::Hex(Color,*Field.Value)){Error=TEXT("World plate colors must be named colors, #RRGGBB or #RRGGBBAA");return false;}
         }
         if(J->HasField(TEXT("vitals")))
         {
@@ -117,7 +137,7 @@ public:
     {
         const auto* White=FCoreStyle::Get().GetBrush("WhiteBrush");
         const auto Measure=FSlateApplication::Get().GetRenderer()->GetFontMeasureService();
-        const FLinearColor Background(0,0,0,float(Plate.BackgroundOpacityFor(VRPresentation)));
+        FLinearColor Background=Plate.BackgroundColor;Background.A*=float(Plate.BackgroundOpacityFor(VRPresentation));
         auto Box=[&](FVector2D At,FVector2D Size,FLinearColor Color)
         {FSlateDrawElement::MakeBox(Elements,Layer,G.ToPaintGeometry(Size,FSlateLayoutTransform(At)),White,ESlateDrawEffect::None,Color);};
         auto Text=[&](FString Value,FVector2D At,int Size,FLinearColor Color,double Width=400.,bool Center=false)
@@ -126,7 +146,7 @@ public:
             if(Measure->Measure(Value,Font).X>Width)
             {while(Value.Len()>1&&Measure->Measure(Value+TEXT("…"),Font).X>Width)Value.LeftChopInline(1);Value+=TEXT("…");}
             if(Center)At.X+=(Width-Measure->Measure(Value,Font).X)*.5;
-            FSlateDrawElement::MakeText(Elements,Layer+1,G.ToPaintGeometry(FVector2D(Width,30),FSlateLayoutTransform(At+FVector2D(1,1))),Value,Font,ESlateDrawEffect::None,FLinearColor::Black);
+            FSlateDrawElement::MakeText(Elements,Layer+1,G.ToPaintGeometry(FVector2D(Width,30),FSlateLayoutTransform(At+FVector2D(1,1))),Value,Font,ESlateDrawEffect::None,FLinearColor(0,0,0,Color.A));
             FSlateDrawElement::MakeText(Elements,Layer+2,G.ToPaintGeometry(FVector2D(Width,30),FSlateLayoutTransform(At)),Value,Font,ESlateDrawEffect::None,Color);
         };
         const double Left=512-Body.X*.5,Right=512+Body.X*.5,Top=280-Body.Y*.5,Bottom=280+Body.Y*.5;
@@ -134,9 +154,9 @@ public:
         {Box({X==Left?X:X-20,Y},{20,2},Plate.Color);Box({X,Y==Top?Y:Y-20},{2,20},Plate.Color);}
         const double LabelWidth=FMath::Max(240.,Body.X);
         Box({Left,Top-72},{LabelWidth,66},Background);
-        Text(Plate.Role,{Left+6,Top-70},14,FLinearColor::White,LabelWidth-12);
+        Text(Plate.Role,{Left+6,Top-70},14,Plate.TextColor,LabelWidth-12);
         Text(Plate.Name,{Left+6,Top-49},20,Plate.Color,LabelWidth-12);
-        if(Plate.Level>0)Text(FString::Printf(TEXT("Level %d"),Plate.Level),{Left+6,Top-23},14,FLinearColor::White,LabelWidth-12);
+        if(Plate.Level>0)Text(FString::Printf(TEXT("Level %d"),Plate.Level),{Left+6,Top-23},14,Plate.TextColor,LabelWidth-12);
         double Y=Bottom-78;
         auto Bar=[&](const FACEPluginPlateVital& V,FLinearColor Color)
         {
@@ -144,9 +164,9 @@ public:
             const FVector2D At(Left+6,Y);Box(At,{184,23},Background);
             Box(At+FVector2D(2,2),{180*FMath::Clamp(V.Ratio(),0.,1.),19},Color);
             const FString Label=V.Current>=0?FString::Printf(TEXT("%.0f / %.0f"),V.Current,V.Maximum):FString::Printf(TEXT("%.0f%%"),100*V.Ratio());
-            Text(Label,At+FVector2D(2,1),14,FLinearColor::White,180,true);Y+=25;
+            Text(Label,At+FVector2D(2,1),14,Plate.TextColor,180,true);Y+=25;
         };
-        Bar(Plate.Health,FLinearColor(.65f,.015f,.04f));Bar(Plate.Stamina,FLinearColor(.75f,.5f,0));Bar(Plate.Mana,FLinearColor(0,.35f,.85f));
+        Bar(Plate.Health,Plate.HealthColor);Bar(Plate.Stamina,Plate.StaminaColor);Bar(Plate.Mana,Plate.ManaColor);
         int32 Index=0;const double Now=FPlatformTime::Seconds();
         for(int32 I=0;I<Plate.Effects.Num();++I)
         {
@@ -158,7 +178,7 @@ public:
             Box(At+FVector2D(0,24),{40,16},Background);
             const int32 Seconds=FMath::CeilToInt(Remaining);
             const FString Label=Seconds>=60?FString::Printf(TEXT("%d:%02d"),Seconds/60,Seconds%60):FString::FromInt(Seconds);
-            Text(Label,At+FVector2D(0,23),11,FLinearColor::White,40,true);
+            Text(Label,At+FVector2D(0,23),11,Plate.TextColor,40,true);
         }
         return Layer+3;
     }
@@ -243,8 +263,12 @@ void UACEPluginWorldPlateComponent::TickComponent(float DeltaTime,ELevelTick Tic
                 if(!Body.Equals(LastBody,.25) || Second!=LastPaintSecond || !IsVisible())
                 {Surface->SetFrame(Body);LastBody=Body;LastPaintSecond=Second;RequestRedraw();}
                 // Body center is y=280 on the transparent texture (pivot y=.5).
-                SetWorldLocationAndRotation(Center+Up*(24*Scale),Facing);
-                SetWorldScale3D(FVector(Scale));Visible=true;
+                const float DrawScale=Scale*Plate.ScaleFor(PC->IsVRActive());
+                const FVector2D Offset=Plate.OffsetFor(PC->IsVRActive());
+                // The surface faces back toward the camera: its local +Y is
+                // screen-left, while UI offsets conventionally increase right.
+                SetWorldLocationAndRotation(Center-Right*(Offset.X*DrawScale)+Up*((24-Offset.Y)*DrawScale),Facing);
+                SetWorldScale3D(FVector(DrawScale));Visible=true;
             }
         }
     }

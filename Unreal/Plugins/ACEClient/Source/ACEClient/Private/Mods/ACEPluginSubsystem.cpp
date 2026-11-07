@@ -1716,7 +1716,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
     const FString Status = String(I, TEXT("status")); if (!Status.IsEmpty()) P.Status = Status;
     if(I->HasTypedField<EJson::String>(TEXT("targeting_status")))P.TargetingStatus=String(I,TEXT("targeting_status"));
     const FString Action = String(I, TEXT("action"));
-    if(P.Api>=2 && (Action==TEXT("waypoint")||Action==TEXT("command")))return;
+    if(P.Api>=2 && (Action==TEXT("waypoint")||Action==TEXT("command")||Action==TEXT("select_item")))return;
     if(P.Id==TEXT("itemtools"))ItemToolsProgress=MakeShared<FJsonObject>(*I);
     if(Action.StartsWith(TEXT("it_"))){ExecuteItemTools(P,I);return;}
     if(P.IsPolicy()&&Action==TEXT("activity_failed")){ReportActivityFailure(P,I,Status,false);return;}

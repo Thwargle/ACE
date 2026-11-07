@@ -139,6 +139,16 @@ bool FACEPluginWorldPlateTest::RunTest(const FString&)
     TestTrue(TEXT("Partial opacity supports inherited VR values"),ACEPluginWorldPlate::Parse(Json(TEXT(R"({"plates":[{"id":12,"opacity":0.4,"background_opacity":0}]})"))->GetArrayField(TEXT("plates")),Parsed,Error,0));
     TestEqual(TEXT("Omitted VR opacity inherits desktop"),Parsed[0].OpacityFor(true),.4);
     TestEqual(TEXT("Zero backing opacity is supported"),Parsed[0].BackgroundOpacityFor(true),0.);
+    TestTrue(TEXT("Plate accepts custom colors and transforms"),ACEPluginWorldPlate::Parse(Json(TEXT(R"({"plates":[{"id":12,"color":"#12345678","text_color":"#FFFFFF","background_color":"#112233","health_color":"#FF0000","stamina_color":"#00FF00","mana_color":"#0000FF","scale":1.5,"offset_x":20,"offset_y":-30,"vr_scale":0.75,"vr_offset_y":10}]})"))->GetArrayField(TEXT("plates")),Parsed,Error,0));
+    TestTrue(TEXT("Plate decodes custom RGBA without discarding alpha"),Parsed[0].Color.Equals(FLinearColor(FColor(0x12,0x34,0x56,0x78))));
+    TestTrue(TEXT("Plate colors reach text and vitals"),Parsed[0].TextColor==FLinearColor::White&&Parsed[0].HealthColor==FLinearColor::Red&&Parsed[0].StaminaColor==FLinearColor::Green&&Parsed[0].ManaColor==FLinearColor::Blue);
+    TestEqual(TEXT("VR scale is independent"),Parsed[0].ScaleFor(true),.75);
+    TestTrue(TEXT("VR inherits each omitted offset independently"),Parsed[0].OffsetFor(true).Equals(FVector2D(20,10)));
+    TestTrue(TEXT("Desktop offsets are retained"),Parsed[0].OffsetFor(false).Equals(FVector2D(20,-30)));
+    for(const TCHAR* Invalid:{TEXT(R"({"plates":[{"id":12,"scale":0}]})"),TEXT(R"({"plates":[{"id":12,"vr_scale":5}]})"),
+        TEXT(R"({"plates":[{"id":12,"offset_x":2049}]})"),TEXT(R"({"plates":[{"id":12,"vr_offset_y":"bad"}]})"),
+        TEXT(R"({"plates":[{"id":12,"color":"#12GG34"}]})"),TEXT(R"({"plates":[{"id":12,"health_color":3}]})")})
+        TestFalse(TEXT("Malformed plate appearance is rejected"),ACEPluginWorldPlate::Parse(Json(Invalid)->GetArrayField(TEXT("plates")),Parsed,Error,0));
     // A plate retains an unselected target even with no confirmed-cast timer.
     const auto SavedDebuffs=H->Debuffs;H->Debuffs.Reset();S.SelectedObject.Guid=0;
     P->WorldPlates[0].SelectionOnly=false;
@@ -247,6 +257,19 @@ bool FACEPluginWorldPlateTest::RunTest(const FString&)
     Entity->bCellVisible=false;Plate->TickComponent(.016f,LEVELTICK_All,nullptr);TestFalse(TEXT("Hidden cells do not leave floating plates"),Plate->IsVisible());Entity->bCellVisible=true;
     Plate->TickComponent(.016f,LEVELTICK_All,nullptr);
     auto OpacityPlate=Plate->GetPlate();OpacityPlate.Opacity=.9;OpacityPlate.VROpacity=.5;
+    {
+        const FVector DefaultLocation=Plate->GetComponentLocation(),DefaultScale=Plate->GetComponentScale();
+        auto Appearance=Plate->GetPlate();Appearance.Scale=2;
+        Plate->SetPlate(Appearance,H);Plate->TickComponent(.016f,LEVELTICK_All,nullptr);
+        TestTrue(TEXT("Nameplate scale changes its actual world transform"),Plate->GetComponentScale().Equals(DefaultScale*2));
+        const FVector ScaledLocation=Plate->GetComponentLocation();
+        Appearance.OffsetX=40;Appearance.OffsetY=30;Plate->SetPlate(Appearance,H);Plate->TickComponent(.016f,LEVELTICK_All,nullptr);
+        TestTrue(TEXT("Camera-facing offsets apply in plate pixels"),FMath::IsNearlyEqual(FVector::Dist(ScaledLocation,Plate->GetComponentLocation()),50.*DefaultScale.X*2,.01));
+        TestTrue(TEXT("Positive X moves toward screen-right"),FVector::DotProduct(Plate->GetComponentLocation()-ScaledLocation,Plate->GetComponentQuat().RotateVector(FVector::RightVector))<0);
+        TestTrue(TEXT("Positive Y moves down"),FVector::DotProduct(Plate->GetComponentLocation()-ScaledLocation,Plate->GetComponentQuat().RotateVector(FVector::UpVector))<0);
+        Plate->SetPlate(OpacityPlate,H);Plate->TickComponent(.016f,LEVELTICK_All,nullptr);
+        TestTrue(TEXT("Default placement is restored exactly"),Plate->GetComponentLocation().Equals(DefaultLocation,.001));
+    }
     Plate->SetPlate(OpacityPlate,H);
     if(auto* Material=Plate->GetMaterialInstance())
     {
@@ -290,6 +313,16 @@ bool FACEPluginWorldPlateTest::RunTest(const FString&)
             TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(1024,512,Pixels,PNG);
             FFileHelper::SaveArrayToFile(PNG,*(Folder/FString::Printf(TEXT("TargetPlate-%d.png"),Variant)));
         }
+        auto Custom=Plate->GetPlate();Custom.Color=Custom.TextColor=Custom.BackgroundColor=FLinearColor::Transparent;
+        Custom.Health={};Custom.Stamina={};Custom.Mana={};Custom.Effects.Reset();Plate->SetPlate(Custom,H);
+        Renderer.DrawWidget(Texture,Plate->GetSlateWidget().ToSharedRef(),Size,0);FlushRenderingCommands();
+        TArray<FColor> CustomPixels;Texture->GameThread_GetRenderTargetResource()->ReadPixels(CustomPixels);
+        TestFalse(TEXT("Transparent nameplate colors do not leave text shadows"),CustomPixels.ContainsByPredicate([](const FColor& Pixel){return Pixel.A>0;}));
+        Custom.Health.Current=50;Custom.Health.Maximum=100;Custom.HealthColor=FLinearColor(1,0,1);
+        Plate->SetPlate(Custom,H);Renderer.DrawWidget(Texture,Plate->GetSlateWidget().ToSharedRef(),Size,0);FlushRenderingCommands();
+        Texture->GameThread_GetRenderTargetResource()->ReadPixels(CustomPixels);
+        int32 Magenta=0;for(const auto& Pixel:CustomPixels)if(Pixel.R>200&&Pixel.B>200&&Pixel.G<30)++Magenta;
+        TestTrue(TEXT("Custom vital color reaches the rendered nameplate"),Magenta>1000);
         Texture->ReleaseResource();
     }
     for(auto& E:H->Debuffs)E->AsObject()->SetNumberField(TEXT("expires"),FPlatformTime::Seconds()-1);

@@ -8,6 +8,49 @@ button exists, its opcode has a constant, or a focused regression test passes.
 This is the working acceptance record, most recently reviewed on 2026-10-13. The client
 is **not yet a feature-complete retail replacement**.
 
+## Spell inspection with foci: 2026-11-07
+
+Retail `SpellExamineUI::ExamineSpell` obtains its ingredients through
+`ClientMagicSystem::GetAppropriateSpellFormula` (0x00567D50). That method uses
+the matching school's infused augmentation or
+`ACCWeenieObject::MagicPackIsOwned` (0x0058CB80), which searches the player's
+container-slot list, not the ordinary inventory grid or nested bags. Spell
+inspection now uses those same side slots; the previous grid-only lookup
+excluded real foci. The open inspection's existing refresh path picks up
+containment, removal and augmentation changes without reopening the panel.
+
+`CSpellBase::InqScarabOnlyFormula` retains scarabs and chorizite, then uses
+`SpellFormula::FindMostPowerfulPowerComponent` to choose the prismatic taper
+count. This is distinct from the first component used for spell-icon level;
+the formula helper now preserves that distinction for multi-scarab spells.
+
+The reported intermittent need for old components on Levistras is not yet
+reproduced. The player saw a yellow warning (exact text unknown), retail
+worked, and several relogs eventually restored casting in Unreal.
+Retail and this client send spell/target IDs through CastTargetedSpell or
+CastUntargetedSpell, without a component-formula flag. ACE's
+`Player.HasComponentsForSpell` calls `SpellFormula.GetPlayerFormula`, which
+selects the formula from server-owned inventory/augmentation state on each
+check. Correcting the inspection does not establish a fix for a server-side
+component rejection. The exact rejection text and a log captured while it
+happens are still needed to identify that remaining report.
+
+Regression coverage: `ACE.RetailParity.SpellComponents` exercises real DAT
+spells in all five schools, open-panel updates from containment/removal
+receipts, wrong-school and nested foci, infused augmentations, all three
+player/object/description login orderings, and actual
+loopback cast packets with scarabs/prismatic tapers but no old components.
+`SpellFormulaLevels` covers all ten power-component taper counts, chorizite
+and mixed-scarab formulas. The Development Editor build and those two suites,
+`ACE.Network.SpellDataRevision` and `ACE.RetailParity.UIInteractions` passed.
+Results are recorded under `TestOutput/SpellComponents/`. Release v152 also
+passes these suites in the packaged Windows and native Linux clients. Its
+18 editor, 19 Windows and 19 Linux suite runs are recorded under
+`TestOutput/Release-v152/`; the release artifact directory includes the
+regression summary, APK verification and Windows upgrade-preservation results.
+Quest and Android source synchronization and package checks pass; physical
+headset/phone acceptance is not claimed by those automated checks.
+
 ## Linux display resolutions: 2026-11-05
 
 UE 5.8's Vulkan `RHIGetAvailableResolutions` returns false without enumerating

@@ -20,9 +20,18 @@ bool FACERetailSpellLevelTest::RunTest(const FString&)
             TestTrue(TEXT("Customized taper is an authored colored taper"),Customized[Index]>=63&&Customized[Index]<=74);
     }
     TestTrue(TEXT("Focus level six replaces herbs with four prismatic tapers"),
-        ACESpellFormula::WithFocus(Formula,6)==TArray<uint32>({6,188,188,188,188}));
+        ACESpellFormula::WithFocus(Formula)==TArray<uint32>({6,188,188,188,188}));
     TestTrue(TEXT("Level eight focus retains both scarab and chorizite"),
-        ACESpellFormula::WithFocus({193,112,10,20},10)==TArray<uint32>({193,112,188,188,188,188}));
+        ACESpellFormula::WithFocus({193,111,10,20})==TArray<uint32>({193,111,188,188,188,188}));
+    TestTrue(TEXT("Focus keeps multiple scarabs and uses the most powerful, not the first"),
+        ACESpellFormula::WithFocus({110,112,10,20})==TArray<uint32>({110,112,188,188,188,188}));
+    TestTrue(TEXT("Chorizite alone must not invent taper requirements"),
+        ACESpellFormula::WithFocus({111,10,20})==TArray<uint32>({111}));
+    const uint32 Scarabs[]={1,2,3,4,5,6,110,112,192,193};
+    const int32 Tapers[]={1,2,3,3,4,4,3,4,4,4};
+    for(int32 I=0;I<UE_ARRAY_COUNT(Scarabs);++I)
+        TestEqual(TEXT("Retail taper counts cover all ten power components"),
+            ACESpellFormula::WithFocus({Scarabs[I],10,20}).Num(),1+Tapers[I]);
     auto* Dat=NewObject<UACEDatSubsystem>(NewObject<UGameInstance>());
     Dat->bSpellTableLoaded=true;
     // All power-component results from retail MagicSystem, including the two

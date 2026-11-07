@@ -34,6 +34,7 @@
 #include "Widgets/Layout/SExpandableArea.h"
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Colors/SColorWheel.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/IToolTip.h"
 #include "Components/Border.h"
@@ -76,7 +77,7 @@ bool FACEPluginLiveUITest::RunTest(const FString&)
     auto Mode=Control(TEXT("mode")),Kills=Control(TEXT("kills")),Filter=Control(TEXT("filter"));
     if(!TestTrue(TEXT("Controls created"),Mode&&Kills&&Filter))return false;
     auto Combo=StaticCastSharedPtr<SComboBox<TSharedPtr<FString>>>(Find(Mode.ToSharedRef(),TEXT("SComboBox"),false));
-    auto Input=StaticCastSharedPtr<SEditableTextBox>(Find(Filter.ToSharedRef(),TEXT("SEditableTextBox"),false));
+    auto Input=StaticCastSharedPtr<SEditableTextBox>(Find(Filter.ToSharedRef(),TEXT("SACEPluginEditableTextBox"),false));
     auto Label=StaticCastSharedPtr<STextBlock>(Find(Kills.ToSharedRef(),TEXT("SACEPluginText"),false));
     auto Section=StaticCastSharedPtr<SExpandableArea>(Find(Panel,TEXT("SExpandableArea"),false));
     TestTrue(TEXT("Dropdown created"),Combo.IsValid());TestTrue(TEXT("Text input created"),Input.IsValid());
@@ -252,9 +253,11 @@ bool FACEPluginLiveUITest::RunTest(const FString&)
     P->PanelRows=WrapData->GetArrayField(TEXT("ui"));++P->PanelRevision;
     // Pick a Latin letter absent from this DAT instead of assuming a particular
     // language is missing (retail's font includes Cyrillic and Greek glyphs).
+    // U+1E00..U+1E95 are Latin letters. Do not use FChar::IsAlpha here:
+    // Linux's C locale does not classify these Unicode letters as alphabetic.
     uint16 FallbackCode=0;
-    for(uint16 Code=0x1E00;Code<0x1F00;++Code)
-        if(FChar::IsAlpha(TCHAR(Code))&&!RetailStyle->Typeface(16)->Font.IndexByUnicode.Contains(Code)){FallbackCode=Code;break;}
+    for(uint16 Code=0x1E00;Code<=0x1E95;++Code)
+        if(!RetailStyle->Typeface(16)->Font.IndexByUnicode.Contains(Code)){FallbackCode=Code;break;}
     if(!TestTrue(TEXT("Fallback fixture has an unsupported Latin letter"),FallbackCode!=0))return false;
     P->PanelRows[0]->AsObject()->GetArrayField(TEXT("children"))[3]->AsObject()->SetStringField(TEXT("text"),TEXT("Summ")+FString::Chr(TCHAR(FallbackCode))+TEXT("oning"));
     float PanelWidth=620;
@@ -327,6 +330,43 @@ bool FACEPluginLiveUITest::RunTest(const FString&)
         }
     }
     Window->SetContent(Content);
+    {
+        TSharedPtr<FJsonObject> Appearance;FString Error;
+        FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(TEXT(R"({"ui":[
+            {"id":"picker","type":"color","text":"Panel and nameplate color","value":"#4488CC80","expanded":true},
+            {"id":"space","type":"overlay","height":100,"children":[{"id":"scaled","type":"button","text":"Scaled action","width":180,"height":32,"scale":1.5,"offset_x":60,"offset_y":15,"effect":"pulse","min_opacity":1}]}]})")),Appearance);
+        P->PanelRows=Appearance->GetArrayField(TEXT("ui"));++P->PanelRevision;Frame();Frame();
+        auto Picker=Control(TEXT("picker")),Scaled=Control(TEXT("scaled"));
+        auto Wheel=Picker?StaticCastSharedPtr<SColorWheel>(Find(Picker.ToSharedRef(),TEXT("SColorWheel"),false)):nullptr;
+        auto Visual=Scaled?Find(Scaled.ToSharedRef(),TEXT("SACECompanionVisual"),false):nullptr;
+        auto ScaledButton=Scaled?StaticCastSharedPtr<SButton>(Find(Scaled.ToSharedRef(),TEXT("SACEPluginButton"),false)):nullptr;
+        if(!TestTrue(TEXT("Native color wheel and transformed button are built"),Wheel&&Visual&&ScaledButton))return false;
+        const auto& WG=Wheel->GetCachedGeometry();const auto At=WG.LocalToAbsolute(WG.GetLocalSize()*FVector2D(.75,.5));
+        TestTrue(TEXT("Color wheel consumes a pointer press"),Wheel->OnMouseButtonDown(WG,FPointerEvent(0,At,At,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState())).IsEventHandled());
+        Wheel->OnMouseButtonUp(WG,FPointerEvent(0,At,At,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
+        TestTrue(TEXT("Color wheel emits a canonical RGBA change"),!P->PluginEvents.IsEmpty()&&P->PluginEvents.Last()->AsObject()->GetStringField(TEXT("id"))==TEXT("picker")&&P->PluginEvents.Last()->AsObject()->GetStringField(TEXT("value")).EndsWith(TEXT("80")));
+        Frame();Frame();
+        TestTrue(TEXT("Color interaction retains the picker"),Control(TEXT("picker"))==Picker);
+        const auto Transform=Visual->GetRenderTransform().GetValue();
+        TestTrue(TEXT("Scale remains applied while pulse animation ticks"),FMath::IsNearlyEqual(Transform.TransformVector(FVector2D(1,0)).Size(),1.5,.001));
+        TestTrue(TEXT("Offsets remain applied while pulse animation ticks"),FVector2D(Transform.TransformPoint(FVector2D::ZeroVector)).Equals(FVector2D(60,15),.001));
+        const auto& BG=ScaledButton->GetCachedGeometry();const auto ButtonAt=BG.LocalToAbsolute(BG.GetLocalSize()*.5);
+        auto Hits=HitTestGrid.GetBubblePath(ButtonAt,0,false);
+        TestTrue(TEXT("Transformed button is hit-testable at its drawn position"),Hits.ContainsByPredicate([&](const auto& Hit){return Hit.Widget==ScaledButton;}));
+        TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);
+        Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);TArray64<uint8> Png;
+        const auto Caption=Find(ScaledButton.ToSharedRef(),TEXT("SACEPluginText"),false);
+        if(TestTrue(TEXT("Scaled button retains a retail caption"),Caption.IsValid()))
+        {
+            const auto Bounds=Caption->GetCachedGeometry().GetRenderBoundingRect();TSet<int32> RowsWithText;
+            for(int32 Y=FMath::Max(0,FMath::CeilToInt(Bounds.Top));Y<FMath::Min(int32(Size.Y),FMath::FloorToInt(Bounds.Bottom));++Y)
+                for(int32 X=FMath::Max(0,FMath::CeilToInt(Bounds.Left));X<FMath::Min(int32(Size.X),FMath::FloorToInt(Bounds.Right));++X)
+                {const auto Pixel=Pixels[Y*int32(Size.X)+X];if(Pixel.R>180&&Pixel.G>180&&Pixel.B>150)RowsWithText.Add(Y);}
+            TestTrue(TEXT("Scaled and offset bitmap text is not clipped at its old layout position"),RowsWithText.Num()>12);
+        }
+        FImageUtils::PNGCompressImageArray(int32(Size.X),int32(Size.Y),Pixels,Png);
+        FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("PluginAppearanceControls.png")));
+    }
     return true;
 }
 

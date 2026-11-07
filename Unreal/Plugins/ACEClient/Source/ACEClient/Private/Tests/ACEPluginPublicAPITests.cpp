@@ -32,6 +32,9 @@
 #include "ProceduralMeshComponent.h"
 #include "Serialization/JsonSerializer.h"
 #include "HAL/FileManager.h"
+#include "Sockets.h"
+#include "SocketSubsystem.h"
+#include "IPAddress.h"
 
 namespace
 {
@@ -231,6 +234,76 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
     TestTrue(TEXT("Layered graphics and native effects validate"),H->ApplyPublicOutput(*P,Graphics,Error));
     TestTrue(TEXT("Clicking a gauge delivers a normal click event"),H->ClickPluginRow(P->Id,TEXT("gauge"))&&P->PluginEvents.Last()->AsObject()->GetStringField(TEXT("id"))==TEXT("gauge"));
     TestFalse(TEXT("Zero-period animations are rejected"),H->ValidatePluginUI(ParseAPI(TEXT(R"({"ui":[{"id":"bad","effect":"rotate","period":0}]})"))->GetArrayField(TEXT("ui")),Error));
+    const auto Appearance=ParseAPI(TEXT(R"({"ui":[{"id":"tint","type":"color","text":"Plate tint","value":"#12345678"},{"id":"preview","type":"text","text":"Preview","scale":1.5,"offset_x":-20,"offset_y":30}]})"));
+    TestTrue(TEXT("Color picker and presentation controls validate"),H->ApplyPublicOutput(*P,Appearance,Error));
+    TestTrue(TEXT("Color change accepts a six-digit value"),H->ChangePluginControl(P->Id,TEXT("tint"),MakeShared<FJsonValueString>(TEXT("#AbCdEf"))));
+    TestEqual(TEXT("Color event returns canonical RGBA"),P->PluginEvents.Last()->AsObject()->GetStringField(TEXT("value")),FString(TEXT("#ABCDEFFF")));
+    TestTrue(TEXT("Color change preserves opacity"),H->ChangePluginControl(P->Id,TEXT("tint"),MakeShared<FJsonValueString>(TEXT("#12345678"))));
+    TestEqual(TEXT("RGBA round trip is exact"),P->PluginEvents.Last()->AsObject()->GetStringField(TEXT("value")),FString(TEXT("#12345678")));
+    const int32 BeforeInvalidColor=P->PluginEvents.Num();
+    TestFalse(TEXT("Malformed color cannot emit a change event"),H->ChangePluginControl(P->Id,TEXT("tint"),MakeShared<FJsonValueString>(TEXT("#GG112233"))));
+    TestEqual(TEXT("Bad color leaves event queue untouched"),P->PluginEvents.Num(),BeforeInvalidColor);
+    for(const TCHAR* Bad:{TEXT(R"({"ui":[{"id":"bad","type":"color","value":"#12345G"}]})"),
+        TEXT(R"({"ui":[{"id":"bad","type":"color","value":42}]})"),TEXT(R"({"ui":[{"id":"bad","scale":0}]})"),
+        TEXT(R"({"ui":[{"id":"bad","offset_y":2049}]})"),TEXT(R"({"ui":[{"id":"bad","scale":"large"}]})")})
+        TestFalse(TEXT("Invalid appearance controls are rejected"),H->ValidatePluginUI(ParseAPI(Bad)->GetArrayField(TEXT("ui")),Error));
+    {
+        FACEWorldObject Pack;Pack.Guid=501;Pack.Name=TEXT("Pack");Pack.ContainerId=Session.PlayerGuid;
+        FACEWorldObject Item;Item.Guid=502;Item.Name=TEXT("Inside pack");Item.ContainerId=Pack.Guid;
+        FACEWorldObject Chest;Chest.Guid=503;Chest.Name=TEXT("Chest");
+        Session.WorldObjects.Add(Pack.Guid,Pack);Session.WorldObjects.Add(Item.Guid,Item);Session.WorldObjects.Add(Chest.Guid,Chest);
+        auto* Sockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);auto Address=Sockets->CreateInternetAddr();bool AddressValid=false;
+        Address->SetIp(TEXT("127.0.0.1"),AddressValid);Address->SetPort(0);
+        auto* Receiver=Sockets->CreateSocket(NAME_DGram,TEXT("Container selection receiver"),false);
+        if(!Receiver||!Receiver->Bind(*Address))return false;Receiver->GetAddress(*Address);
+        Session.SocketC2S=Sockets->CreateSocket(NAME_DGram,TEXT("Container selection sender"),false);
+        Session.ServerC2SAddr=Address;Session.IssacClient=MakeUnique<FACEIsaac>(123u);Session.CachedC2SPackets.Reset();
+        ON_SCOPE_EXIT {Receiver->Close();Sockets->DestroySocket(Receiver);if(Session.SocketC2S){Session.SocketC2S->Close();Sockets->DestroySocket(Session.SocketC2S);Session.SocketC2S=nullptr;}Session.IssacClient.Reset();Session.CachedC2SPackets.Reset();};
+        auto Select=[&](const TCHAR* Json){return H->CompanionAction(*P,ParseAPI(Json),Error);};
+        TestTrue(TEXT("Select item reaches a nested owned pack"),Select(TEXT(R"({"action":"select_item","target":502,"container":501})")));
+        TestEqual(TEXT("Container item is selected"),C->GetSelectedObject().Guid,502);
+        TestTrue(TEXT("Select item button accepted through API"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"ui":[{"id":"item_select","type":"button","action":"select_item","target":502,"container":501}]})")),Error));
+        TestTrue(TEXT("Select item button executes and reports success"),H->ClickPluginRow(P->Id,TEXT("item_select"))&&P->PluginEvents.Last()->AsObject()->GetBoolField(TEXT("ok")));
+        TestTrue(TEXT("Automation can return select_item directly"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"action":"select_item","target":502,"container":501})")),Error));
+        TestFalse(TEXT("Wrong direct container is rejected"),Select(TEXT(R"({"action":"select_item","target":502,"container":503})")));
+        Session.WorldObjects[Item.Guid].ContainerId=Chest.Guid;Session.OpenExternalContainerGuid=Chest.Guid;
+        TestTrue(TEXT("Select item reaches the currently open chest"),Select(TEXT(R"({"action":"select_item","target":502,"container":503})")));
+        TestTrue(TEXT("Existing select also supports an open external container"),Select(TEXT(R"({"action":"select","target":502})")));
+        Session.ContainerContents.Add(Chest.Guid,{});
+        TestFalse(TEXT("Server contents removal overrides stale item containment"),Select(TEXT(R"({"action":"select_item","target":502})")));
+        Session.ContainerContents.Remove(Chest.Guid);Session.OpenExternalContainerGuid=0;
+        TestFalse(TEXT("Closed chest items cannot be selected"),Select(TEXT(R"({"action":"select_item","target":502})")));
+        TestFalse(TEXT("World creatures are not container items"),Select(TEXT(R"({"action":"select_item","target":12})")));
+        Session.WorldObjects[Item.Guid].ContainerId=Pack.Guid;Session.WorldObjects[Pack.Guid].ContainerId=Item.Guid;
+        TestFalse(TEXT("Cyclic containment is rejected"),Select(TEXT(R"({"action":"select_item","target":502})")));
+        TestTrue(TEXT("Selection query packets were captured"),!Session.CachedC2SPackets.IsEmpty());
+        for(const auto& Packet:Session.CachedC2SPackets)
+        {
+            FACEBinaryReader Reader(Packet.Value.Payload);Reader.Skip(24);const auto Action=Reader.ReadUInt32();
+            TestTrue(TEXT("Selection sends only meter queries, never use/move/attack"),Action==ACEGameAction::QueryHealth||Action==ACEGameAction::QueryItemMana);
+        }
+        Session.WorldObjects.Remove(Item.Guid);Session.WorldObjects.Remove(Pack.Guid);Session.WorldObjects.Remove(Chest.Guid);
+    }
+    {
+        FString Source;const FString Example=IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("Docs/Plugins/Examples/appearance_controls/main.lua");
+        TestTrue(TEXT("Appearance example is distributed with API documentation"),FFileHelper::LoadFileToString(Source,*Example));
+        FACEPluginVM VM;TestTrue(TEXT("Appearance example loads in the Lua sandbox"),VM.Load(Source,Error));
+        auto Data=ParseAPI(TEXT(R"({"player":1,"selection":{"id":12,"name":"Red Rat","object_type":"creature"},"inventory":[{"id":502,"name":"Pack item","container":501}],"events":[],"state":{}})"));
+        TSharedPtr<FJsonObject> Out;
+        TestTrue(TEXT("Appearance example builds panel and nameplate controls"),VM.Step(Data,P->Profile,Out,Error));
+        if(!Out)return false;
+        TestTrue(TEXT("Example UI validates against native schema"),H->ValidatePluginUI(Out->GetArrayField(TEXT("ui")),Error));
+        Data->SetArrayField(TEXT("events"),ParseAPI(TEXT(R"({"events":[{"type":"change","id":"color","value":"#12345678"},{"type":"change","id":"scale","value":1.5},{"type":"change","id":"vr_offset_y","value":25},{"type":"change","id":"panel_scale","value":1.2}]})"))->GetArrayField(TEXT("events")));
+        if(!TestTrue(TEXT("Example handles changes in the Lua sandbox"),VM.Step(Data,P->Profile,Out,Error))||!Out){AddError(Error);return false;}
+        const auto Plate=Out->GetArrayField(TEXT("world_plates"))[0]->AsObject();
+        TestEqual(TEXT("User color reaches world plate output"),Plate->GetStringField(TEXT("color")),FString(TEXT("#12345678")));
+        TestEqual(TEXT("User scale reaches world plate output"),Plate->GetNumberField(TEXT("scale")),1.5);
+        Data->SetObjectField(TEXT("state"),Out->GetObjectField(TEXT("state")));Data->SetArrayField(TEXT("events"),{});
+        FACEPluginVM Reloaded;Reloaded.Load(Source,Error);
+        if(!TestTrue(TEXT("Example restores saved state after reload"),Reloaded.Step(Data,P->Profile,Out,Error))||!Out){AddError(Error);return false;}
+        TestEqual(TEXT("Reload retains independent VR offset"),Out->GetArrayField(TEXT("world_plates"))[0]->AsObject()->GetNumberField(TEXT("vr_offset_y")),25.);
+        TestTrue(TEXT("Restored UI still validates"),H->ValidatePluginUI(Out->GetArrayField(TEXT("ui")),Error));
+    }
     H->ApplyPublicOutput(*P,UI,Error);
     TestTrue(TEXT("Item icon metadata accepted"),H->ValidatePluginUI(ParseAPI(TEXT(R"({"ui":[{"id":"item","type":"item_icon","icon":100663297,"overlay":0,"underlay":0,"effects":1,"item_type":1}]})"))->GetArrayField(TEXT("ui")),Error));
     TestFalse(TEXT("Item icon metadata cannot wrap negative IDs"),H->ValidatePluginUI(ParseAPI(TEXT(R"({"ui":[{"id":"item","type":"item_icon","effects":-1}]})"))->GetArrayField(TEXT("ui")),Error));

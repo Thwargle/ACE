@@ -37,10 +37,18 @@ inline TArray<uint32> Customize(TArray<uint32> C, uint32 Version, const FString&
     }
     return C;
 }
-inline TArray<uint32> WithFocus(const TArray<uint32>& Formula, uint32 Power)
+inline TArray<uint32> WithFocus(const TArray<uint32>& Formula)
 {
     TArray<uint32> Result;
-    for(uint32 C:Formula)if((C>=1 && C<=6)||C==110||C==111||C==112||C==192||C==193)Result.Add(C);
+    uint32 Power=0;
+    // InqScarabOnlyFormula uses FindMostPowerfulPowerComponent after retaining
+    // all scarabs/chorizite, not the first component used for the spell icon.
+    for(uint32 C:Formula)if((C>=1 && C<=6)||C==110||C==111||C==112||C==192||C==193)
+    {
+        Result.Add(C);
+        const uint32 ComponentPower=C<=6?C:C==110?7:C==112?8:C==192?9:C==193?10:0;
+        Power=FMath::Max(Power,ComponentPower);
+    }
     const int Count=Power==1?1:Power==2?2:(Power==3||Power==4||Power==7)?3:Power>=5&&Power<=10?4:0;
     for(int I=0;I<Count;++I)Result.Add(188);
     return Result;
