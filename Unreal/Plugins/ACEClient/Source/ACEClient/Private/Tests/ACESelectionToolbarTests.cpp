@@ -408,6 +408,13 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
         return false;
     };
     Session.WorldObjects[Self.Guid].ItemsCapacity=24;
+    // Pickup on the corpse itself must open it, including with the loaded DAT
+    // inventory binder attached. Its contents below still use inventory pickup.
+    Client->SelectObject(Corpse.Guid);
+    PC->PickupSelectedObject();
+    TestTrue(TEXT("Pickup command opens the selected corpse through the inventory UI"),HasAction(ACEGameAction::Use,Corpse.Guid));
+    TestFalse(TEXT("Pickup command never puts a corpse in a backpack"),HasAction(ACEGameAction::PutItemInContainer,Corpse.Guid));
+    Session.bUseBusy=false;Session.CachedC2SPackets.Reset();
     Session.OpenExternalContainerGuid=Corpse.Guid;Client->SelectObject(Loot.Guid);
     PC->InteractWithSelectedObject();
     TestTrue(TEXT("F pickup sends inspected corpse item's GUID to server"),HasAction(ACEGameAction::PutItemInContainer,Loot.Guid));

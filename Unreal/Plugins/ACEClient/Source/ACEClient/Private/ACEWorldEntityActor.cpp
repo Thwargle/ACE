@@ -540,7 +540,7 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 		if (bCreatureLike) Body->ComponentTags.AddUnique(TEXT("ACECreatureBody"));
 		else Body->ComponentTags.Remove(TEXT("ACECreatureBody"));
 		const bool bPkPlayer = bIsPlayer && IsPkOrPkLite();
-		Body->SetCollisionEnabled(bBlocking && (bCreatureLike || !bMeshHasPawnCollision)
+		Body->SetCollisionEnabled(bBlocking && !bMeshHasPawnCollision
 			? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
 		Body->SetCollisionObjectType(bPkPlayer ? ECC_Pawn : ECC_WorldDynamic);
 		Body->SetCollisionResponseToAllChannels(ECR_Ignore);
@@ -584,7 +584,7 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 	{
 		// Feet-origin actor + SelOriginAc places the capsule on torso/head.
 	}
-	if (bCreatureLike && bHavePartMesh && (!bBlocking || !AuthoredCollision.IsEmpty()))
+	if (bCreatureLike && bHavePartMesh && (!bBlocking || !AuthoredCollision.IsEmpty() || bMeshHasPawnCollision))
 	{
 		// This proxy is selection-only when authored bodies provide movement
 		// collision. Include animated artwork outside Setup's small sphere (e.g.
@@ -606,14 +606,16 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 			HalfHeight=FMath::Max(HalfHeight,float(FMath::Abs(Center.Z-CapsuleCenterRel.Z))+VisualRadius+Radius);
 		}
 	}
-	// Creatures/players: Setup cylinder only (retail cylsphere). Mesh physics on
-	// wielded weapons drew capsules and let the pawn occupy the same point.
-	const bool bUseMeshPhysics = !bCreatureLike && bHavePartMesh && bMeshHasPawnCollision
+	// CPhysicsObj::FindObjCollisions chooses part BSP before Setup bodies even
+	// for creatures. Cage-door NPCs have BSP leaves but no cylinders/spheres;
+	// making their selection capsule solid blocks the approach to the door.
+	// Attached weapons have already returned through ConfigureAttachedPickCollision.
+	const bool bUseMeshPhysics = bMeshHasPawnCollision
 		&& (bDoorOrOpenable || bBlocking);
 	// An explicitly empty retail body is not a missing body. Its pick volume
 	// must stay selection-only instead of manufacturing an invisible obstacle.
 	const bool bProxyBlocks = bBlocking && !bUseMeshPhysics && AuthoredCollision.IsEmpty()
-		&& (!bHaveSetupMetadata || bSetupHasPhysicsBSP);
+		&& !bHaveSetupMetadata;
 	if (CollisionProxy)
 	{
 		if (bCreatureLike) CollisionProxy->ComponentTags.AddUnique(TEXT("ACECreatureBody"));
@@ -677,8 +679,21 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 	else if (bHavePartMesh && bCreatureLike)
 	{
 		// The proxy admits the ray; the shared picker tests drawing polygons and
-		// DrawingBSP spheres, never the legs-only PhysicsPolygons.
-		Appearance->ConfigurePartCollision(false, false);
+		// DrawingBSP spheres. Movement independently uses the authored BSP, when
+		// present, rather than filling the gaps in a cage with a selection volume.
+		Appearance->ConfigurePartCollision(bBlocking && bMeshHasPawnCollision, false);
+		if (bMeshHasPawnCollision)
+		{
+			const bool bPkPlayer = bIsPlayer && IsPkOrPkLite();
+			for (int32 PartIndex = 0; ; ++PartIndex)
+			{
+				auto* Part = Cast<UPrimitiveComponent>(Appearance->GetPartMesh(PartIndex));
+				if (!Part) break;
+				Part->ComponentTags.AddUnique(TEXT("ACECreatureBody"));
+				Part->SetCollisionObjectType(bPkPlayer ? ECC_Pawn : ECC_WorldDynamic);
+				Part->SetCollisionResponseToChannel(ECC_Pawn, (!bIsPlayer || bPkPlayer) ? ECR_Block : ECR_Ignore);
+			}
+		}
 	}
 	else if (bHavePartMesh && bBlocking)
 	{
@@ -700,7 +715,20 @@ bool AACEWorldEntityActor::ApplyDatAppearanceFromObject(const FACEWorldObject& O
 		|| (Object.ItemType & ACEItemType::Creature) != 0;
 	// Cook DAT mesh collision for pick even on wielded items. ParentGuid used to skip
 	// that cook, so ConfigureAttachedPickCollision had nothing to trace.
-	const bool bWantCollision = !Object.bIsSelf && !bCreatureLike;
+	bool bWantCollision = !Object.bIsSelf && (!bCreatureLike
+		|| (Object.PhysicsState & ACEPhysicsState::HasPhysicsBSP) != 0);
+	if (!Object.bIsSelf && bCreatureLike && !bWantCollision)
+	{
+		// Also honor the DAT setup before a server physics description arrives.
+		// Ordinary creatures retain their Setup bodies without cooking clothing
+		// meshes. BSP-backed NPCs must retain their invisible physics sections.
+		if (auto* GI = GetGameInstance()) if (auto* Dat = GI->GetSubsystem<UACEDatSubsystem>())
+		{
+			TArray<FACEDatCollisionShape> Shapes;
+			bool bHasBSP = false;
+			bWantCollision = Dat->GetSetupCollisionShapes(Object.SetupId, Shapes, bHasBSP) && bHasBSP;
+		}
+	}
 	// Always cook complex collision for freestanding objects so ethereal doors stay pickable
 	// (QueryOnly Visibility) after open — response channels are set in ApplyPhysicsState.
 	const uint64 RevisionBefore = Appearance->GetAppearanceRevision();

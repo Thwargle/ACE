@@ -207,6 +207,9 @@ void UACEPluginSubsystem::ObserveTargetDeleted(int32 Guid)
     // unequip. The retained owned stack/item has not been deleted or changed.
     FACEWorldObject Item;
     if(GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->GetWorldObject(Guid,Item)&&IsOwnedPluginItem(Item))return;
+    for(const auto& P:Plugins)if(P->Running&&P->WaitConsumedItems.Contains(Guid)
+        &&(P->WaitAction==TEXT("salvage")||P->WaitAction==TEXT("combine_salvage")))
+        RefreshActionWait(*P);
     ClearPluginTarget(Guid);CorpseFirstSeen.Remove(Guid);DefeatedTargets.Remove(Guid);ReleaseCombatTarget(Guid);ForgetTargetEffects(Guid);
 }
 void UACEPluginSubsystem::ObserveTargetCreated(const FACEWorldObject& Object)
@@ -1144,6 +1147,7 @@ void UACEPluginSubsystem::UpdateCombatTransition(FACEClientPlugin& P)
 void UACEPluginSubsystem::TrackActionWait(FACEClientPlugin& P,const FString& Action,int32 Item,int32 Value)
 {
     P.WaitAction=Action;P.WaitItem=Item;P.WaitValue=Value;
+    P.WaitConsumedItems.Reset();
     P.WaitSerial=ActionSerial;P.ActionSentAt=FPlatformTime::Seconds();
 }
 void UACEPluginSubsystem::RefreshActionWait(FACEClientPlugin& P)
@@ -1151,8 +1155,16 @@ void UACEPluginSubsystem::RefreshActionWait(FACEClientPlugin& P)
     if(P.WaitAction.IsEmpty())return;
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Session=C->GetSession();
     const auto* Item=Session?Session->GetWorldObjects().Find(P.WaitItem):nullptr;
+    const bool Consuming=P.WaitAction==TEXT("salvage")||P.WaitAction==TEXT("combine_salvage");
     bool Complete=false;
-    if(P.WaitAction==TEXT("loot"))
+    if(Consuming)
+    {
+        // ACE may suppress the salvage-result chat packet. Actual inventory
+        // removals confirm completion; a visual detach or UseDone does not.
+        Complete=Session.IsValid()&&!P.WaitConsumedItems.IsEmpty();
+        if(Complete)for(int32 Id:P.WaitConsumedItems)if(Session->GetWorldObjects().Contains(Id)){Complete=false;break;}
+    }
+    else if(P.WaitAction==TEXT("loot"))
         Complete=Item&&(C->IsOwnedInventoryItem(*Item)||Item->StackSize<P.WaitValue);
     else if(P.WaitAction==TEXT("equip"))
         Complete=Item&&(P.WaitValue?Item->WielderId==C->GetPlayerGuid()&&(Item->CurrentWieldedLocation&P.WaitValue)!=0:
@@ -1163,8 +1175,11 @@ void UACEPluginSubsystem::RefreshActionWait(FACEClientPlugin& P)
     {
         // Resume on the relevant server update, not the worst-case timeout.
         // Lua still confirms quantities/ownership, and the host retains busy gates.
-        P.NextAction=FMath::Min(P.NextAction,P.ActionSentAt+.25);
-        P.NextDecision=0;P.WaitAction.Empty();
+        P.NextAction=FMath::Min(P.NextAction,Consuming?FPlatformTime::Seconds():P.ActionSentAt+.25);
+        P.NextDecision=0;P.WaitAction.Empty();P.WaitConsumedItems.Reset();
+        // Defer policy execution until after network dispatch; never issue a
+        // new destructive action from inside an inventory-removal callback.
+        if(Consuming&&P.Running)ScheduleDecisionWake(P.NextAction);
     }
     else if(FPlatformTime::Seconds()>=P.NextAction)
     {
@@ -1227,7 +1242,9 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
             if(!LexTryParseString(BagId,*Part)||!BagId||Items.Contains(int32(BagId))||!C->GetWorldObject(int32(BagId),Bag)||!LootItemAvailable(C,Bag)||ACEVTObjectClass::Classify(Bag)!=39||Bag.Structure<=0||Bag.Structure>=100||Bag.MaterialType<=0||(Material&&Material!=Bag.MaterialType)){ReportActivityFailure(P,I,TEXT("Salvage bags changed or are unavailable; no bags combined"));return true;}
             Material=Bag.MaterialType;Items.Add(int32(BagId));
         }
-        if(!PrepareCombatAction(P,I,1))return true;C->SendCreateTinkeringTool(Tool.Guid,Items);P.NextAction=Now+3;return true;
+        if(!PrepareCombatAction(P,I,1))return true;
+        TrackActionWait(P,Action,0);P.WaitConsumedItems=Items;
+        C->SendCreateTinkeringTool(Tool.Guid,Items);P.NextAction=Now+3;return true;
     }
     if(Action==TEXT("identify"))
     {
@@ -1305,6 +1322,7 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
         if(ToolId<=0||ToolId>MAX_uint32||FMath::FloorToDouble(ToolId)!=ToolId||!C->GetWorldObject(int32(uint32(ToolId)),Tool)||!SalvageToolAvailable(C,Tool)||Item.Guid==Tool.Guid||Item.ItemsCapacity>0||(ACEVTObjectClass::Classify(Item)==39&&Item.Structure>=100)||Item.MaterialType<1||Item.MaterialType>77||TArray<int>{3,9,56,65,72}.Contains(Item.MaterialType))
         {ReportActivityFailure(P,I,TEXT("Item is not salvageable or no owned Ust is available"));return true;}
         if(!PrepareCombatAction(P,I,1))return true;
+        TrackActionWait(P,Action,Id);P.WaitConsumedItems={Id};
         C->SendCreateTinkeringTool(Tool.Guid,{Id});P.NextAction=Now+3;return true;
     }
     if(Action==TEXT("store_item"))
@@ -1388,6 +1406,9 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
             if(Completed&&C->GetWorldObject(Guid,Corpse)&&Corpse.IsCorpse())LootedCorpses.Add(Guid,{Corpse.Position,FPlatformTime::Seconds()});
             C->SendNoLongerViewingContents(Guid);
         }
+        // Closing clears the local container immediately and uses the ordered
+        // action stream. There is no use animation or completion to wait for.
+        P.NextAction=Now;
         return true;
     }
     if(Action==TEXT("close_vendor"))

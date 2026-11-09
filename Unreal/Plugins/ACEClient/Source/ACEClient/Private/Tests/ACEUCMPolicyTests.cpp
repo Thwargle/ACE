@@ -36,7 +36,7 @@ bool FACEUCMFailureIsolationTest::RunTest(const FString&)
     // Trigger a real failed salvage, not just a synthetic error result.
     {
         FACEPluginVM VM;TestTrue(TEXT("Failure isolation policy loads"),VM.Load(Source,Error));auto S=Snapshot(),P=Profile();
-        const auto Ring=ParseUCM(TEXT(R"({"id":701,"wcid":701,"name":"Ring","count":1,"identified":true,"material":59})"));
+        const auto Ring=ParseUCM(TEXT(R"({"id":701,"wcid":701,"name":"Ring","count":1,"identified":true,"material":59,"workmanship":7})"));
         S->SetNumberField(TEXT("container"),700);S->SetArrayField(TEXT("contents"),{MakeShared<FJsonValueObject>(Ring)});
         TestEqual(TEXT("Loot starts normally"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("loot")));
         auto Inventory=S->GetArrayField(TEXT("inventory"));Inventory.Add(MakeShared<FJsonValueObject>(Ring));S->SetArrayField(TEXT("inventory"),Inventory);
@@ -745,7 +745,9 @@ bool FACEUCMInventorySalvageTest::RunTest(const FString&)
         Item->SetBoolField(TEXT("identified"),false);
         TestEqual(TEXT("Existing item is appraised for tinkering/inscription before destruction"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("identify")));
         Item->SetBoolField(TEXT("identified"),true);S->SetNumberField(TEXT("appraisal_revision"),2);
-        TestTrue(TEXT("Matching item in a side pack is queued"),Step(VM,S,P)->GetStringField(TEXT("status")).StartsWith(TEXT("Queued inventory salvage:")));
+        auto Queued=Step(VM,S,P);
+        TestTrue(TEXT("Matching item in a side pack is queued"),Queued->GetStringField(TEXT("status")).StartsWith(TEXT("Queued inventory salvage:")));
+        TestTrue(TEXT("Queued inventory salvage uses a continuation instead of an idle poll"),Queued->GetBoolField(TEXT("continue_work")));
         auto I=Step(VM,S,P);TestEqual(TEXT("Existing inventory uses normal salvage action"),I->GetStringField(TEXT("action")),FString(TEXT("salvage")));TestEqual(TEXT("Correct side-pack item is salvaged"),I->GetNumberField(TEXT("item")),20.);
         TestFalse(TEXT("Pending salvage is not resubmitted"),Step(VM,S,P)->HasField(TEXT("action")));
         auto Items=S->GetArrayField(TEXT("inventory"));Items.RemoveAt(1);S->SetArrayField(TEXT("inventory"),Items);S->SetNumberField(TEXT("inventory_revision"),2);
@@ -753,7 +755,9 @@ bool FACEUCMInventorySalvageTest::RunTest(const FString&)
         Item->SetNumberField(TEXT("id"),21);Items.Add(MakeShared<FJsonValueObject>(Item));S->SetArrayField(TEXT("inventory"),Items);S->SetNumberField(TEXT("inventory_revision"),3);
         TestTrue(TEXT("Inventory changes scan new items"),Step(VM,S,P)->GetStringField(TEXT("status")).StartsWith(TEXT("Queued inventory salvage:")));
         Item->SetBoolField(TEXT("retained"),true);
-        TestFalse(TEXT("New retention is rechecked before the queued action"),Step(VM,S,P)->HasField(TEXT("action")));
+        auto Protected=Step(VM,S,P);
+        TestFalse(TEXT("New retention is rechecked before the queued action"),Protected->HasField(TEXT("action")));
+        TestTrue(TEXT("Skipping a protected queued item promptly continues other work"),Protected->GetBoolField(TEXT("continue_work")));
     }
     {
         FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();TArray<TSharedPtr<FJsonValue>> Rules;
@@ -1541,7 +1545,10 @@ bool FACEUCMStackCombiningTest::RunTest(const FString&)
         S->SetNumberField(TEXT("time"),118);
         TestTrue(TEXT("Timeout does not immediately resend an ambiguous merge"),Action(Step(VM,S,P)).IsEmpty());
         S->SetNumberField(TEXT("time"),148);
-        TestEqual(TEXT("Inventory resumes after its bounded cooldown"),Action(Step(VM,S,P)),FString(TEXT("merge")));
+        TestTrue(TEXT("Cooldown alone cannot retry an unchanged rejected pair"),Action(Step(VM,S,P)).IsEmpty());
+        A->SetNumberField(TEXT("count"),21);B->SetNumberField(TEXT("count"),31);
+        S->SetNumberField(TEXT("time"),149);
+        TestEqual(TEXT("Changed stacks are eligible again"),Action(Step(VM,S,P)),FString(TEXT("merge")));
     }
     return true;
 }

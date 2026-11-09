@@ -889,6 +889,7 @@ namespace ACEPhysicsState
 	constexpr int32 ParticleEmitter = 0x00001000;
 	/** Retail CPhysicsObj hidden bit — set during portal/teleport until destination is ready. */
 	constexpr int32 Hidden = 0x00004000;
+	constexpr int32 HasPhysicsBSP = 0x00010000;
 	constexpr int32 Inelastic = 0x00020000;
 	constexpr int32 HasDefaultAnim = 0x00040000;
 	constexpr int32 HasDefaultScript = 0x00080000;

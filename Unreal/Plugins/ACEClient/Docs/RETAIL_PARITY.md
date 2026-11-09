@@ -8,6 +8,154 @@ button exists, its opcode has a constant, or a focused regression test passes.
 This is the working acceptance record, most recently reviewed on 2026-10-13. The client
 is **not yet a feature-complete retail replacement**.
 
+## UCM loot and salvage handoff latency: 2026-11-09
+
+The host imposed a fixed three-second throttle after each item salvage and
+salvage-bag combination, even when the server immediately consumed the inputs.
+UCM now releases that throttle on authoritative inventory removal. A batch
+waits for every input to disappear; visual detach, unrelated removals and
+UseDone cannot acknowledge it. The next policy decision is scheduled outside
+network dispatch, and normal busy, equipment and combat-transition gates remain.
+Missing/rejected operations retain their timeout and failed-item protections.
+
+Closing a corpse no longer inherits the generic half-second use delay: the
+ordered close request clears the local container synchronously. Lua requests
+the next bounded decision after 50 ms. Queuing inventory salvage and removing
+obsolete/protected jobs also use that continuation instead of the idle poll.
+
+Reference: local VTank decompile `c7.cs` subscribes to ItemDestroyed and
+WorldFilter.ReleaseObject for salvage inputs; `ar.cs` drives SalvageItems.
+`d0.cs` still applies a 0.75-second ItemUse/Navigation lock to ordinary pickup.
+ACE `Player_Crafting.HandleSalvaging` consumes inputs before creating output
+bags, and may omit SalvageOperationsResult when salvage chat is squelched, so
+the optimization does not depend on that optional result or chat text.
+No jump/animation-breaking or speculative parallel pickup was added.
+
+Validation: Development Editor build and 11 regression suites passed. Native
+loopback tests cover immediate acknowledgement, partial batches, visual-only
+deletion, unrelated UseDone/removal, busy gates, Stop, and deferred scheduling.
+Real Lua tests exercise two complete corpse/pickup/salvage cycles, inventory
+salvage, failure recovery, combat priority and scheduling. The 1,001-rule,
+20-item workload completed in 41 bounded decisions (80 ms total VM work,
+2.9 ms peak in this run). This is CPU work, not live-server looting time.
+Quest/mobile shared-source verification also passes. Evidence is under
+`TestOutput/LootSalvageLatency/`: ten suites in `final-tests`, with the host
+fixture corrected and passing in `scheduler-verified-tests`. Live-server
+throughput has not been measured; the confirmed improvement removes client waits.
+
+## Corpse pickup-key report: 2026-11-08
+
+The current pickup command already excludes corpses from inventory pickup
+and falls back to Use/open. No production change was made for the reported
+"pick up the corpse" failure: it has not been reproduced with the available
+information. The exact binding, client build, and affected corpse report are
+still needed to distinguish an input override from different object metadata.
+
+`ACE.RetailParity.WorldLootPlacement` now exercises real default and rebound
+pickup keypresses through PlayerTick, verifies one Use request and no inventory
+transfer, checks repeated presses while busy, and replays the server contents
+response. Existing loose-item/backpack pickup and approach cases remain covered.
+`ACE.RetailParity.SelectionToolbar` also verifies corpse opening with the loaded
+DAT inventory binder and ordinary pickup of a corpse's contents. Both suites
+pass in the Editor build; evidence is under `TestOutput/CorpseLootKey/verified-tests`.
+This is protocol/fixture coverage, not a reproduction on the reporting server.
+
+## Windows update access errors: 2026-11-08
+
+A v150-to-v151 report showed the legacy PowerShell helper's generic
+"Access is denied" dialog. That helper discarded the failing launch stage and
+overwrote an already successful installation result if restarting the game
+failed. The screenshot alone does not establish which executable was blocked
+or why. v151 and later use the standalone native Windows helper; both helpers
+have now been hardened for the same failure paths.
+
+Failed installer/game launches retry access/sharing/lock errors for at most
+eight seconds, without repeating a successfully launched installer or changing
+permissions. Each result retains the stage, executable path, native Windows
+error code, installer exit code, and installation success independently of
+restart success. A failed restart explicitly tells the user that the update
+installed and to reopen their normal shortcut. Verification still precedes
+installer execution; nonzero installer exits never restart the game.
+
+`Unreal/Build/VR/Test-UpdateClient.ps1` reproduced the old helper's loss of
+installation status with an external executable lock. Both updated helpers
+pass isolated fixture tests for desktop/VR window visibility, paths containing
+spaces/punctuation, invalid hashes, temporary and persistent file locks,
+actual denied-execute ACLs on the installer and game, and nonzero installer
+exit. Tests restore their fixture ACLs and confirm the installer never reruns
+during restart recovery. The native helper builds with warnings as errors.
+Evidence is under `TestOutput/UpdateAccessDenied/`; no real game installation
+was replaced and the reporting user's machine was not reproduced.
+
+## UCM combine retries and spellbook filter follow-up: 2026-11-08
+
+Rejected or unconfirmed stack merges and salvage-bag combinations previously
+restarted after a 30-second activity cooldown, repeatedly waiting another
+15 seconds and interrupting route navigation. UCM now remembers the attempted
+items and skips them until their relevant item state changes or UCM restarts.
+Unrelated inventory/appraisal revisions do not re-enable a rejected combination;
+removed objects are pruned, and other eligible items can still combine.
+Salvage bags cannot enter ordinary stack merging, and bag combining excludes
+unsupported materials, tinkered bags, and inscribed bags. Failed post-loot
+salvage also remains excluded from the existing-inventory salvage scanner.
+
+`ACE.Plugins.CombineFailureRecovery` reproduced the retry loop before the
+change. It now covers server errors, host rejection, timeouts, incomplete
+consumption, continued navigation across cooldowns, unrelated inventory
+changes, other valid combinations, and protected/unsupported bags.
+`ACE.Plugins.StackCombining` also verifies that changed stacks can be retried.
+
+The reported spellbook behavior could not be reproduced in current source:
+the v151 filter guard already matches retail
+`gmSpellbookUI::RecvNotice_SpellAdded` (0x0048B8D0): reveal a learned spell only
+when its school and level both pass the existing filters. Learning does not
+change those filters. `ACE.RetailParity.UIInteractions` now exercises pointer
+clicks on all 13 filter controls, their saved PlayerModule value, the all-off
+case, school-only/level-only cases, and a matching school/level followed by a
+real spell-learning packet. No production spellbook behavior changed here.
+
+The Development Editor build and six targeted suites passed:
+`ACE.Plugins.CombineFailureRecovery`, `ACE.Plugins.StackCombining`,
+`ACE.Plugins.InventorySalvage`, `ACE.Plugins.SchedulingParity`,
+`ACE.RetailParity.UIInteractions`, and `ACE.Network.SpellDataRevision`.
+Reports are under `TestOutput/UCMCombineSpellbook/`. These are local automated
+tests using the real UCM script and retail DAT UI, not a live-server reproduction.
+
+## Pet cage NPC collision: 2026-11-08
+
+Shady's Cage Door (WCID 72984, setup `02000281`, motion `09000016`)
+arrives as a creature with physics state `00010408`, without the Door
+description flag. Its retail setup has no spheres or cylinders; its parts
+provide 48 PhysicsBSP triangles. The creature appearance path discarded those
+sections, then used the large selection capsule as movement collision. A
+two-sphere player sweep from the reported location in `586002E6` reproduced
+the obstruction against `CollisionProxy` immediately, before reaching the cage.
+
+Retail `CPhysicsObj::FindObjCollisions` (0x0050F050) selects the BSP path from
+physics state independently of creature classification, and
+`CPartArray::CacheHasPhysicsBSP` (0x00518110) inspects the actual parts.
+The client now retains authored physics sections for BSP-backed NPCs, using
+the server physics bit or the setup metadata before that description arrives.
+Actual model collision takes precedence over fallback shapes. Known setups
+with no fallback body no longer manufacture a solid selection capsule while
+their mesh loads. The change is based on physics data, not names or WCIDs.
+Ethereal state, attachment exclusions, selection, and player PK collision
+rules remain separate from geometry selection.
+
+Regression coverage is `ACE.Collision.CageDoors`: the reported approach and
+door contact, neighboring cells `586002E6/E7` with furniture, selection,
+deferred appearance, state/visibility refresh, ethereal transitions, and
+rotated/scaled NPC variants without the server BSP bit. This is local DAT
+and collision validation; a live quest hand-in has not been exercised.
+The Development Editor build and 11 suites passed: the eight `ACE.Collision`
+suites, `ACE.Rendering.VisualMeshCollision`, `ACE.RetailParity.MovementReview`,
+and `ACE.RetailParity.RuntimeActors`. Results are under
+`TestOutput/PetCageCollision/` (`before`, `after`, and `final` reports).
+The full-room fixture clears a verified lower-sphere floor contact by 0.5 cm
+without shrinking horizontal collision or excluding any room component.
+Quest and Android source synchronization passes; device runtime testing was
+not performed for this change.
+
 ## Spell inspection with foci: 2026-11-07
 
 Retail `SpellExamineUI::ExamineSpell` obtains its ingredients through

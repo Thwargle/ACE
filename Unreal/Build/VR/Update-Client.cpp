@@ -54,13 +54,53 @@ static std::string Sha256(const fs::path& path)
     if(BCryptFinishHash(hash,digest,32,0)<0)throw std::runtime_error("Installer verification failed.");
     std::string result;for(auto c:digest){result+="0123456789abcdef"[c>>4];result+="0123456789abcdef"[c&15];}return result;
 }
-static DWORD Launch(const fs::path& exe,const std::vector<std::wstring>& args,const fs::path& cwd,bool wait,bool visible)
+static void Log(const fs::path& log,const std::string& message)
 {
-    std::wstring command=Quote(exe.wstring());for(const auto& arg:args)command+=L" "+Quote(arg);
-    STARTUPINFOW start{};start.cb=sizeof(start);start.dwFlags=STARTF_USESHOWWINDOW;start.wShowWindow=visible?SW_SHOWNORMAL:SW_HIDE;
+    std::ofstream(log,std::ios::app)<<message<<"\n";
+}
+static std::string Utf8(const std::wstring& text)
+{
+    const int size=WideCharToMultiByte(CP_UTF8,0,text.data(),static_cast<int>(text.size()),nullptr,0,nullptr,nullptr);
+    std::string result(size,'\0');
+    WideCharToMultiByte(CP_UTF8,0,text.data(),static_cast<int>(text.size()),result.data(),size,nullptr,nullptr);
+    return result;
+}
+static std::wstring Utf16(const std::string& text)
+{
+    const int size=MultiByteToWideChar(CP_UTF8,0,text.data(),static_cast<int>(text.size()),nullptr,0);
+    std::wstring result(size,L'\0');
+    MultiByteToWideChar(CP_UTF8,0,text.data(),static_cast<int>(text.size()),result.data(),size);
+    return result;
+}
+static std::string WindowsError(DWORD code)
+{
+    wchar_t text[1024]{};
+    FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM|FORMAT_MESSAGE_IGNORE_INSERTS,nullptr,code,0,text,1024,nullptr);
+    auto message=Utf8(text);
+    while(!message.empty() && (message.back()=='\r'||message.back()=='\n'))message.pop_back();
+    return "Windows error "+std::to_string(code)+": "+message;
+}
+static DWORD Launch(const fs::path& exe,const std::vector<std::wstring>& args,const fs::path& cwd,bool wait,bool visible,
+    const fs::path& log,const std::string& stage)
+{
     PROCESS_INFORMATION process{};
-    if(!CreateProcessW(exe.c_str(),command.data(),nullptr,nullptr,FALSE,0,nullptr,cwd.c_str(),&start,&process))
-        throw std::runtime_error("Cannot start installer or updated game (Windows error "+std::to_string(GetLastError())+").");
+    Log(log,stage+": "+exe.u8string());
+    for(int attempt=0;;++attempt)
+    {
+        // CreateProcess may modify its command buffer even when it fails.
+        std::wstring command=Quote(exe.wstring());for(const auto& arg:args)command+=L" "+Quote(arg);
+        STARTUPINFOW start{};start.cb=sizeof(start);start.dwFlags=STARTF_USESHOWWINDOW;start.wShowWindow=visible?SW_SHOWNORMAL:SW_HIDE;
+        if(CreateProcessW(exe.c_str(),command.data(),nullptr,nullptr,FALSE,0,nullptr,cwd.c_str(),&start,&process))break;
+        const DWORD error=GetLastError();
+        // Only retry a failed launch, never an installer that has already run.
+        // Temporary scanner/file locks can outlive the installer process.
+        if(attempt<16 && (error==ERROR_ACCESS_DENIED||error==ERROR_SHARING_VIOLATION||error==ERROR_LOCK_VIOLATION))
+        {
+            Log(log,stage+" temporarily blocked; retry "+std::to_string(attempt+1)+". "+WindowsError(error));
+            Sleep(500);continue;
+        }
+        throw std::runtime_error("Path: "+exe.u8string()+"\n"+WindowsError(error));
+    }
     Handle h(process.hProcess),thread(process.hThread);
     if(!wait)return process.dwProcessId;
     if(WaitForSingleObject(h.value,INFINITE)!=WAIT_OBJECT_0)throw std::runtime_error("Cannot wait for installer.");
@@ -71,6 +111,9 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int)
     wchar_t own[MAX_PATH];GetModuleFileNameW(nullptr,own,MAX_PATH);
     const auto cache=fs::path(own).parent_path(),log=cache/L"update-result.txt";
     bool dialogs=true;
+    bool installed=false;
+    std::string stage="Validating update";
+    std::ofstream(log)<<"Starting Windows update.\n";
     try
     {
         int argc=0;auto** argv=CommandLineToArgvW(GetCommandLineW(),&argc);
@@ -91,9 +134,11 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int)
         std::string hash;
         for(auto c:expected){if(!iswxdigit(c)||c>127)throw std::runtime_error("Invalid installer checksum.");hash+=char(towlower(c));}
         const auto payload=fs::canonical(installer),installRoot=fs::canonical(root);
+        Log(log,"Installer: "+payload.u8string()+"\nInstall directory: "+installRoot.u8string());
         const auto game=installRoot/L"ACUnreal/Binaries/Win64/ACUnreal.exe";
         if(!fs::is_regular_file(game)||!fs::is_regular_file(installRoot/L"ACUnreal.exe"))throw std::runtime_error("The selected game folder is incomplete.");
         if(Sha256(payload)!=hash)throw std::runtime_error("The update failed verification. Download it again.");
+        stage="Waiting for game shutdown";Log(log,stage);
         size_t used=0;const auto parent=std::stoul(pid,&used);
         if(used!=pid.size()||!parent||parent==GetCurrentProcessId())throw std::runtime_error("Invalid game process.");
         Handle gameProcess(OpenProcess(SYNCHRONIZE,FALSE,parent));
@@ -113,16 +158,24 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int)
         }
         std::vector<std::wstring> options={L"/SP-",L"/SILENT",L"/NORESTART",L"/NOCLOSEAPPLICATIONS",L"/NORESTARTAPPLICATIONS",L"/DIR="+installRoot.wstring(),L"/LOG="+(cache/L"installer.log").wstring()};
         if(!fs::exists(installRoot/L"unins000.exe"))options.push_back(L"/ACPORTABLE=1");
-        const DWORD code=Launch(payload,options,cache,true,false);
+        stage="Starting installer";
+        const DWORD code=Launch(payload,options,cache,true,false,log,stage);
+        stage="Installing update";Log(log,"Installer exit code: "+std::to_string(code));
         if(code)throw std::runtime_error("Installer failed (exit "+std::to_string(code)+"). See installer.log.");
-        const DWORD restarted=Launch(game,{mode==L"VR"?L"-vr":L"-nohmd"},installRoot,false,true);
-        std::ofstream(log)<<"Update installed successfully. Restarted client PID "<<restarted<<".\n";
+        installed=true;Log(log,"Update installed successfully.");
+        stage="Restarting updated game";
+        const DWORD restarted=Launch(game,{mode==L"VR"?L"-vr":L"-nohmd"},installRoot,false,true,log,stage);
+        Log(log,"Restarted client PID "+std::to_string(restarted)+".");
         return 0;
     }
     catch(const std::exception& error)
     {
-        std::ofstream(log)<<error.what()<<"\n";
-        if(dialogs)MessageBoxA(nullptr,error.what(),"AC update could not finish",MB_OK|MB_ICONWARNING);
+        const std::string message=(installed ? "The update installed successfully, but the game could not reopen.\nOpen the game from your normal shortcut.\n\n"
+            : "The update could not finish. Use the latest installer from thwargle.com if retrying fails.\n\n")
+            +stage+" failed. "+error.what()+"\n\nIf Windows denies access, check folder permissions and Windows Security Protection history."
+            +"\nDetails: "+log.u8string();
+        Log(log,message);
+        if(dialogs)MessageBoxW(nullptr,Utf16(message).c_str(),installed?L"AC updated; restart needed":L"AC update could not finish",MB_OK|MB_ICONWARNING);
         return 1;
     }
 }

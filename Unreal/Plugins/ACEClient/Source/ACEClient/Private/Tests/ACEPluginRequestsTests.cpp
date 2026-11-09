@@ -556,6 +556,77 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             {FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.ReadUInt32()==ACEGameAction::CreateTinkeringTool)Sent=true;}
             TestEqual(TEXT("Host validates protected salvage and permits ordinary items with over 100 uses"),Sent,Protection==0);
         }
+        {
+            const auto SavedPlugin=*P;const auto SavedVitals=Session.PlayerVitals;
+            const auto SavedBlade=Session.WorldObjects[Blade.Guid];const auto SavedAppraisal=H->Appraisals[Blade.Guid];
+            const double SavedMaintenance=H->NextMaintenanceAt;
+            ON_SCOPE_EXIT
+            {
+                FTSTicker::GetCoreTicker().RemoveTicker(H->DecisionWakeTicker);H->DecisionWakeTicker.Reset();H->DecisionWakeAt=0;
+                *P=SavedPlugin;Session.PlayerVitals=SavedVitals;H->NextMaintenanceAt=SavedMaintenance;
+                Session.WorldObjects.Add(Blade.Guid,SavedBlade);H->Appraisals.Add(Blade.Guid,SavedAppraisal);
+                Session.WorldObjects.Remove(9303);Session.bUseBusy=false;
+            };
+            P->VM=MakeShared<FACEPluginVM>();FString Error;
+            TestTrue(TEXT("Load salvage scheduling probe"),P->VM->Load(TEXT("local n=0; return function(s,p) n=n+1; return {status='Salvage decision '..n} end"),Error));
+            P->Profile=MakeShared<FJsonObject>();P->ActivityFailure.Reset();P->Running=true;
+            P->Player=Session.PlayerGuid;P->Server=C->GetServerName();
+            Session.PlayerVitals.bValid=true;Session.PlayerVitals.Health=100;Session.bUseBusy=false;
+            H->NextMaintenanceAt=FPlatformTime::Seconds()+60;
+            const double Maintenance=H->NextMaintenanceAt;
+            auto Remove=[&](int32 Id)
+            {
+                FACEBinaryWriter W;W.WriteUInt32(Id);FACEBinaryReader R(W.GetData());Session.HandleInventoryRemoveObject(R);
+            };
+            auto DeliverWake=[&]()
+            {
+                FTSTicker::GetCoreTicker().RemoveTicker(H->DecisionWakeTicker);H->RunDecisionWake(.016f);
+            };
+            int32 Decisions=0;
+            for(bool Batch:{false,true})
+            {
+                FTSTicker::GetCoreTicker().RemoveTicker(H->DecisionWakeTicker);H->DecisionWakeTicker.Reset();H->DecisionWakeAt=0;
+                P->NextAction=0;P->NextDecision=0;P->Status=TEXT("Waiting for salvage");
+                auto Input=Blade;Input.MaterialType=59;
+                if(Batch){Input.ItemType=0x40000000;Input.Structure=20;}
+                Session.WorldObjects.Add(Input.Guid,Input);H->Appraisals.Add(Input.Guid,BladeInfo);
+                auto Second=Input;Second.Guid=9303;Session.WorldObjects.Add(Second.Guid,Second);
+                auto Intent=MakeShared<FJsonObject>(*Salvage);
+                Intent->SetStringField(TEXT("items"),FString::Printf(TEXT("%u,9303"),uint32(Input.Guid)));
+                Session.CachedC2SPackets.Reset();H->ExecuteInventory(*P,Intent,Batch?TEXT("combine_salvage"):TEXT("salvage"));
+                TestEqual(TEXT("Valid salvage sends exactly one request"),Session.CachedC2SPackets.Num(),1);
+                const double Deadline=P->NextAction;
+                TestTrue(TEXT("Unconfirmed salvage retains its fallback throttle"),Deadline>=P->ActionSentAt+2.9);
+                H->RefreshActionWait(*P);TestEqual(TEXT("Still-present inputs cannot acknowledge salvage"),P->NextAction,Deadline);
+                // This is also broadcast when an owned object's world visual is
+                // removed: it must not be mistaken for consuming inventory.
+                Session.OnObjectDeleted.Broadcast(Input.Guid);Remove(999999);
+                FACEBinaryWriter UseDone;UseDone.WriteUInt32(0);FACEBinaryReader Reader(UseDone.GetData());Session.HandleUseDone(Reader);
+                TestEqual(TEXT("Visual deletion, unrelated removal and UseDone do not complete salvage"),P->NextAction,Deadline);
+                H->Tick(.016f);
+                TestEqual(TEXT("Pending salvage does not run policy again"),P->Status,FString(TEXT("Waiting for salvage")));
+                if(Batch)
+                {
+                    Remove(Input.Guid);
+                    TestEqual(TEXT("Partial batch consumption cannot release the wait"),P->NextAction,Deadline);
+                    Remove(Second.Guid);
+                }
+                else Remove(Input.Guid);
+                TestTrue(TEXT("Confirmed consumption releases the three-second throttle immediately"),P->NextAction<=FPlatformTime::Seconds());
+                TestTrue(TEXT("Consumption schedules a deferred decision without salvage-result chat"),H->DecisionWakeTicker.IsValid()&&H->DecisionWakeAt<=FPlatformTime::Seconds());
+                TestEqual(TEXT("Inventory callback does not execute Lua reentrantly"),P->Status,FString(TEXT("Waiting for salvage")));
+                Session.bUseBusy=true;DeliverWake();
+                TestEqual(TEXT("Confirmation still respects another pending use"),P->Status,FString(TEXT("Waiting for salvage")));
+                Session.bUseBusy=false;H->Tick(.016f);++Decisions;
+                TestEqual(TEXT("Next decision runs without a fixed post-salvage pause"),P->Status,FString::Printf(TEXT("Salvage decision %d"),Decisions));
+                TestEqual(TEXT("Repeated wait checks do not resubmit salvage"),Session.CachedC2SPackets.Num(),1);
+                TestEqual(TEXT("Fast completions do not repeat background scans"),H->NextMaintenanceAt,Maintenance);
+            }
+            Session.WorldObjects.Add(Blade.Guid,Blade);Session.WorldObjects[Blade.Guid].MaterialType=59;H->Appraisals.Add(Blade.Guid,BladeInfo);
+            H->ExecuteInventory(*P,Salvage,TEXT("salvage"));Remove(Blade.Guid);
+            P->Running=false;DeliverWake();
+            TestEqual(TEXT("Stop before a salvage wake prevents further decisions"),P->Status,FString::Printf(TEXT("Salvage decision %d"),Decisions));
+        }
         FACEWorldObject ToolPack;ToolPack.Guid=9302;ToolPack.ContainerId=Session.PlayerGuid;ToolPack.ItemType=ACEItemType::Container;ToolPack.ItemsCapacity=24;
         Session.WorldObjects.Add(ToolPack.Guid,ToolPack);
         for(int Case=0;Case<5;++Case)
@@ -797,6 +868,8 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             Session.WorldObjects[871].ContainerId=870;
             H->ExecuteInventory(*P,Intent,TEXT("close_corpse"));
             TestEqual(TEXT("Closing corpse preserves mode"),Session.PlayerVitals.CombatMode,Mode);
+            TestTrue(TEXT("Closing corpse adds no artificial use delay"),P->NextAction<=FPlatformTime::Seconds());
+            TestEqual(TEXT("Closing clears the container before another request"),Session.OpenExternalContainerGuid,0);
         }
         {
             const bool Busy=Session.bUseBusy;const int32 Equipment=Session.PendingEquipmentGuid;

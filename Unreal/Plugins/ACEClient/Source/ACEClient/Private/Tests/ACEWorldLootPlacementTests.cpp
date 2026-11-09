@@ -317,6 +317,42 @@ bool FACEWorldLootPlacementTest::RunTest(const FString&)
         }
         PC->ClearServerMoveTo();Session->PendingInventoryTransfers.Reset();Session->WorldObjects.Remove(Book.Guid);
     }
+    // Exercise the actual pickup binding, not just double-click/Use dispatch.
+    // Corpses are opened; the loose-pack cases above still require pickup.
+    {
+        const auto Pickup=ACEInputBindings::Action(TEXT("Pickup"));
+        const FInputChord Original=ACEInputBindings::Get(Pickup,0);
+        ON_SCOPE_EXIT {ACEInputBindings::BeginEdit();ACEInputBindings::Set(Pickup,0,Original);ACEInputBindings::Commit();};
+        auto Press=[&](FKey Key)
+        {
+            PC->PlayerInput->FlushPressedKeys();
+            PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(Key,IE_Pressed,1.f));
+            PC->PlayerTick(1.f/60);
+            PC->PlayerInput->FlushPressedKeys();
+        };
+        for(bool Remapped:{false,true})
+        {
+            if(Remapped){ACEInputBindings::BeginEdit();ACEInputBindings::Set(Pickup,0,FInputChord(EKeys::NumPadNine));ACEInputBindings::Commit();}
+            FACEWorldObject Corpse;Corpse.Guid=0x71002800;Corpse.Name=TEXT("Corpse of a Drudge");
+            Corpse.ItemType=ACEItemType::Container;Corpse.ItemsCapacity=120;Corpse.ContainersCapacity=10;
+            Corpse.ObjectDescriptionFlags=ACEObjectDescFlag::Corpse|ACEObjectDescFlag::Stuck|ACEObjectDescFlag::Openable;
+            Corpse.ItemUseable=32;Corpse.bHasPosition=true;Corpse.Position=Self.Position;Corpse.Position.Location.Y+=2;
+            Session->WorldObjects.Add(Corpse.Guid,Corpse);Client->SelectObject(Corpse.Guid);Session->CachedC2SPackets.Reset();
+            const auto Key=ACEInputBindings::Get(Pickup,0).Key;
+            Press(Key);
+            TestEqual(TEXT("Pickup key opens a corpse with one Use request"),CountAction(ACEGameAction::Use),1);
+            TestEqual(TEXT("Pickup key never transfers the corpse into inventory"),CountAction(ACEGameAction::PutItemInContainer),0);
+            TestFalse(TEXT("Corpse opening creates no pending pickup"),Session->IsInventoryTransferPending());
+            Press(Key);TestEqual(TEXT("Repeated loot key waits for the corpse Use reply"),CountAction(ACEGameAction::Use),1);
+            FACEBinaryWriter View;View.WriteUInt32(Corpse.Guid);View.WriteUInt32(1);View.WriteUInt32(0x71002801);View.WriteUInt32(0);
+            FACEBinaryReader ViewReader(View.GetData());Session->HandleViewContents(ViewReader);
+            FACEBinaryWriter Done;Done.WriteUInt32(0);FACEBinaryReader DoneReader(Done.GetData());Session->HandleUseDone(DoneReader);
+            TestEqual(TEXT("Corpse contents opens through the normal server reply"),Session->OpenExternalContainerGuid,Corpse.Guid);
+            TestEqual(TEXT("Corpse loot is available after the key action"),Session->ContainerContents.FindChecked(Corpse.Guid).Num(),1);
+            FACEBinaryWriter Close;Close.WriteUInt32(Corpse.Guid);FACEBinaryReader CloseReader(Close.GetData());Session->HandleCloseGroundContainer(CloseReader);
+            Session->WorldObjects.Remove(Corpse.Guid);
+        }
+    }
     PC->UnPossess();Pawn->Destroy();PC->Destroy();
     return !HasAnyErrors();
 }

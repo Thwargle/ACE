@@ -1,38 +1,39 @@
-# AC:Unreal / AC:VR release 152
+# AC:Unreal / AC:VR release 153
 
 Windows desktop, PC VR, native Linux x86_64, standalone Quest, and the Android
-phone/tablet preview share **2026.11.07.152**. Android version code: 152.
-Quest installer revision: 9. These notes cover changes since v151.
+phone/tablet preview share **2026.11.09.153**. Android version code: 153.
+Quest installer revision: 9. These notes cover changes since v152.
 
-## Spell inspection
+## UCM looting and salvage
 
-- Show the correct component requirements when the matching school's foci is
-  in a player backpack slot, or the character has its infused augmentation.
-- Refresh an open spell inspection when foci ownership or augmentations change.
-- Correct prismatic taper counts for formulas with multiple scarabs while
-  retaining required scarabs and chorizite.
+- Remove the fixed three-second wait after successful salvage and salvage-bag
+  combinations. Continue when the server confirms consumption of the inputs.
+- Shorten the handoff after closing a corpse and queuing inventory salvage.
+- Stop repeatedly retrying failed stack merges and salvage combinations that
+  interrupt route navigation. Retry eligibility follows relevant item changes.
+- Keep protected and unsupported salvage out of combination attempts, and
+  prevent salvage bags from entering ordinary stack merging.
 
-## Lua plugin APIs
+## Collision
 
-- Add a native color picker with hex entry, color wheel, brightness and opacity.
-- Add scale and X/Y offsets for plugin controls, including entire panel contents.
-- Add custom nameplate text, backing and vital-bar colors, plus scale and offsets
-  with independent VR placement overrides. The selected actor's tint is unchanged.
-- Add item selection in owned packs and open chests/corpses, with current
-  container membership checked before selecting; selection never uses or moves items.
-- Fix clipping of plugin text when controls are scaled, moved or rotated.
-- Expand the Lua API documentation and machine-readable catalog; include an
-  optional Appearance Controls example demonstrating saved preferences.
+- Fix the invisible obstruction around Shady's Cage Door in Protecting Picketed
+  Pets. NPCs using model-based collision now use their authored collision mesh
+  instead of an oversized selection capsule.
 
-## Validation and scope
+## Windows updates
 
-Automated checks cover spell formulas and login ordering, plugin input/rendering,
-saved preferences, container-selection packets, packaged clients, APK contents,
-upgrade preservation and public download integrity. Results accompany the local
-release artifacts. Quest and phone hardware were not acceptance-tested for v152.
+- Retry temporary access/sharing errors when launching the installer or client.
+- Report whether installation or restarting failed, preserving successful
+  installation status if the client could not reopen.
 
-The intermittent Levistras casting rejection with foci remains unconfirmed; the
-inspection correction is not a claimed fix for that server-side warning.
+## Verification and scope
 
-Packages exclude retail DATs, personal settings, server data and generated
-MeshCache files. Android phones/tablets remain a separate preview APK.
+Additional regression coverage checks corpse pickup-key interactions and
+spellbook school/level filters. Those paths already behaved correctly in the
+tested source; this release does not claim new gameplay changes for them.
+
+Validation includes the Editor, packaged Windows and native Linux, Android APK
+contents/signatures, isolated Windows upgrades, and public download integrity.
+Quest/phone hardware, live quest hand-in and live-server loot timing are not
+acceptance-tested. Packages exclude retail DATs, personal settings, server data
+and generated MeshCache files. Android phones/tablets remain a preview APK.

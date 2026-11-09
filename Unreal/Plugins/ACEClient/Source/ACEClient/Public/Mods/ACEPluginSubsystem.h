@@ -110,6 +110,7 @@ struct FACEClientPlugin
     FString WaitAction;
     FString TargetingStatus;
     int32 WaitItem = 0, WaitValue = 0;
+    TArray<int32> WaitConsumedItems;
     uint32 WaitSerial = 0;
     double ActionSentAt = 0;
     int32 Player = 0;

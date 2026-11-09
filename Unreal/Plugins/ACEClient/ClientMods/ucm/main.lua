@@ -41,6 +41,7 @@ local loot_job_pending=nil
 local scroll_reads={}
 local combine_pending=nil
 local stack_pending=nil
+local combine_blocked,stack_blocked={},{}
 local history_cleanup_at=0
 -- Retry limits belong to live objects. A hunting session continually sees new
 -- GUIDs; keeping their appraisal/equipment/debuff attempts forever leaks the
@@ -55,6 +56,9 @@ local function prune_history(s)
  for _,list in ipairs({s.inventory or {},s.contents or {},s.targets or {},s.corpses or {},s.route_objects or {},
   (s.fellowship or {}).members or {},(s.buff_request or {}).equipment or {}}) do
   for _,object in ipairs(list) do if object.id then present[object.id]=true end end
+ end
+ for _,blocked in ipairs({combine_blocked,stack_blocked}) do
+  for id in pairs(blocked) do if not present[id] then blocked[id]=nil end end
  end
  if s.container then present[s.container]=true end
  if s.buff_request and s.buff_request.player then present[s.buff_request.player]=true end
@@ -106,6 +110,7 @@ local function trained_skill(s,id)
 end
 local function pct(v,m) return m>0 and v*100/m or 0 end
 local function result(a,status) return {action=a,status=status} end
+local function loot_progress(status) return {status=status,continue_work=true} end
 local function pause_navigation(reason)
  navigation_paused='Navigation paused: '..reason..'. UCM remains active; enable Follow route to retry'
  route_pending=nil;route_trail={};route_returning=false;route_walking=false
@@ -145,16 +150,33 @@ local function route_kind(v)
  if v.legacy and v.kind=='use' and v.object_id~=nil and v.object_name~=nil and not v.object_class then return 'vendor' end
  return v.kind or 'walk'
 end
-local function salvage_candidate(item)
+local function salvage_material(item)
  local material=item.material or 0
+ return material>0 and material<=77 and material~=3 and material~=9 and material~=56 and material~=65 and material~=72
+end
+local function salvage_candidate(item)
  return not item.equipped and not item.retained and item.resource_available~=false
   and (not item.identified or item.workmanship~=nil)
   and item.object_class~=39 and item.object_class~=40 and item.object_class~=10
-  and item.object_class~=38 and material>0 and material<=77
-  and material~=3 and material~=9 and material~=56 and material~=65 and material~=72
+  and item.object_class~=38 and salvage_material(item)
 end
 local function salvage_protected(item)
  return ((item.int_properties or {})['171'] or 0)>0 or ((item.string_properties or {})['8'] or '')~=''
+end
+-- A timer or unrelated inventory update does not make a rejected combination
+-- valid. Remember only the attempted items, until their relevant state changes
+-- or the user explicitly restarts UCM. Removed objects are pruned above.
+local function combination_state(item)
+ return table.concat({vt_string(item.wcid or 0),vt_string(item.count or 1),vt_string(item.max_stack or 0),
+  vt_string(item.structure or 0),vt_string(item.material or 0),vt_string(item.workmanship or -1),
+  tostring(item.equipped==true),tostring(item.retained==true),tostring(item.resource_available~=false),
+  tostring(salvage_protected(item))},':')
+end
+local function combination_rejected(blocked,item)
+ local previous=blocked[item.id]
+ if not previous then return false end
+ if previous==combination_state(item) then return true end
+ blocked[item.id]=nil;return false
 end
 local function world(v) local lb=math.floor(v.cell/65536);return -(math.floor(lb/256)*192+v.x),(lb%256)*192+v.y,v.z end
 local function distance(a,b) local x,y,z=world(a);local X,Y,Z=world(b);return math.sqrt((x-X)^2+(y-Y)^2+(z-Z)^2) end
@@ -2398,7 +2420,7 @@ local function tick(s,p)
    end
    local waiting=loot_scan.waiting;loot_scan={}
    if waiting then return result(nil,'Waiting for loot appraisal') end
-   corpses[s.container]=s.time+300;return {action='close_corpse',completed=true,status='Loot complete'}
+   corpses[s.container]=s.time+300;return {action='close_corpse',completed=true,continue_work=true,status='Loot complete'}
   end
  end
  -- Only the explicit unknown-scroll option authorizes reading carried scrolls.
@@ -2437,15 +2459,15 @@ local function tick(s,p)
  if not s.container or s.container==0 then
   for index,job in ipairs(loot_jobs) do if (job.action~='sell' or (s.vendor or 0)~=0) and s.time>=(job.retry_after or 0) then
    local item;for _,i in ipairs(inventory) do if i.id==job.id and i.wcid==job.wcid then item=i;break end end
-   if not item then table.remove(loot_jobs,index);return result(nil,'Queued loot item is no longer present') end
+   if not item then table.remove(loot_jobs,index);return loot_progress('Queued loot item is no longer present') end
    if item.equipped or (item.count or 1)~=job.count then return failed('Queued loot item was equipped or its stack changed; review loot rules') end
    local scroll_spell=job.action=='read' and (item.spell or 0)>0 and item.spell or nil
    if scroll_spell and (learned[scroll_spell] or item.scroll_can_learn==false) then
-    table.remove(loot_jobs,index);return result(nil,'Keeping known or currently unlearnable scroll: '..item.name)
+    table.remove(loot_jobs,index);return loot_progress('Keeping known or currently unlearnable scroll: '..item.name)
    end
    local tool
    if job.action=='salvage' then
-    if not salvage_candidate(item) or salvage_protected(item) then table.remove(loot_jobs,index);return result(nil,'Keeping protected or unsalvageable item: '..item.name) end
+    if not salvage_candidate(item) or salvage_protected(item) then table.remove(loot_jobs,index);return loot_progress('Keeping protected or unsalvageable item: '..item.name) end
     if not item.identified then return assess(item) end
     for _,i in ipairs(inventory) do if (i.salvage_tool_available==true or (i.salvage_tool_available==nil and i.object_class==40 and i.resource_available~=false)) then tool=i.id;break end end
     if not tool then return failed('Salvage rule requires an Ust') end
@@ -2487,7 +2509,7 @@ local function tick(s,p)
         inventory_salvage_blocked[item.id]=true
         loot_jobs[#loot_jobs+1]={id=item.id,count=item.count or 1,action='salvage',wcid=item.wcid}
         scan.item=scan.item+1;scan.rule=1
-        return result(nil,'Queued inventory salvage: '..item.name)
+        return loot_progress('Queued inventory salvage: '..item.name)
        end
        break -- First match wins, including Keep, Skip and disabled quantities.
       end
@@ -2961,14 +2983,16 @@ local function tick(s,p)
   if combine_pending then
    local remains=false;for _,item in ipairs(inventory) do if combine_pending.ids[item.id] then remains=true end end
    if not remains then combine_pending=nil
-   elseif ((s.action_serial or 0)~=combine_pending.serial and (s.action_error or 0)~=0) or s.time>combine_pending.deadline then return failed('Salvage combine did not complete; review bags and Ust')
+   elseif ((s.action_serial or 0)~=combine_pending.serial and (s.action_error or 0)~=0) or s.time>=combine_pending.deadline then return failed('Salvage combine did not complete; review bags and Ust')
    else return result(nil,'Waiting for salvage combination') end
   end
   local policy=p.salvage_policy or {default={{min=1,max=6},{min=7,max=8},{min=9,max=9},{min=10,max=10}}}
   local groups,tool={},nil
   for _,item in ipairs(inventory) do
    if (item.salvage_tool_available==true or (item.salvage_tool_available==nil and item.object_class==40 and item.resource_available~=false)) then tool=item.id end
-   if item.object_class==39 and not item.equipped and not item.retained and item.resource_available~=false and (item.material or 0)>0 and (item.structure or 0)>0 and item.structure<100 and item.workmanship then
+   if item.object_class==39 and not item.equipped and not item.retained and item.resource_available~=false
+    and salvage_material(item) and not salvage_protected(item) and not combination_rejected(combine_blocked,item)
+    and (item.structure or 0)>0 and item.structure<100 and item.workmanship then
     local ranges=(policy.materials or {})[vt_string(item.material)] or policy.default or {};local index=#ranges+1
     for n,range in ipairs(ranges) do if range.min>item.workmanship then index=n-1;break elseif item.workmanship<=range.max then index=n;break end end
     local key=tostring(item.material)..':'..index;groups[key]=groups[key] or {};groups[key][#groups[key]+1]=item
@@ -2988,12 +3012,12 @@ local function tick(s,p)
    end
    if #selected>=2 then
     if not tool then return failed('Salvage combining requires an Ust') end
-    local ids,text={},{};for _,bag in ipairs(selected) do ids[bag.id]=true;text[#text+1]=string.format('%d',bag.id) end
-    combine_pending={ids=ids,deadline=s.time+15,serial=s.action_serial or 0}
+    local ids,text,states={},{},{};for _,bag in ipairs(selected) do ids[bag.id]=true;states[bag.id]=combination_state(bag);text[#text+1]=string.format('%d',bag.id) end
+    combine_pending={ids=ids,states=states,deadline=s.time+15,serial=s.action_serial or 0}
     return {action='combine_salvage',tool=tool,items=table.concat(text,','),status='Combining salvage workmanship group'}
    end
   end end
- end
+ elseif not option('salvage_combine',false) then combine_pending=nil end
  if activity_ready('inventory') and option('autostack',false) and (not s.container or s.container==0) then
   if stack_pending then
    local source,target
@@ -3005,7 +3029,7 @@ local function tick(s,p)
    if (not source or (source.count or 1)<stack_pending.source_count)
     and target and (target.count or 1)>stack_pending.target_count then stack_pending=nil
    elseif ((s.action_serial or 0)~=stack_pending.serial and (s.action_error or 0)~=0)
-    or s.time>=stack_pending.deadline then return failed('Stack combination was not confirmed; inventory management will retry')
+    or s.time>=stack_pending.deadline then return failed('Stack combination was not confirmed; skipping unchanged items')
    else return result(nil,'Waiting for stack combination') end
   end
   local stacks={}
@@ -3013,10 +3037,12 @@ local function tick(s,p)
    -- Full stacks are already compact. Moving one into a partial stack just
    -- swaps which stack is full and can repeat forever.
    if (v.max_stack or 0)>1 and (v.count or 1)<v.max_stack and (v.wcid or 0)>0
-    and not v.equipped and not v.retained and v.resource_available~=false then
+    and v.object_class~=39 and band(v.type,0x4000000)==0
+    and not v.equipped and not v.retained and v.resource_available~=false and not combination_rejected(stack_blocked,v) then
     local target=stacks[v.wcid];local source=v
     if target then
-     stack_pending={source=source.id,target=target.id,source_count=source.count or 1,target_count=target.count or 1,serial=s.action_serial or 0,deadline=s.time+15}
+     stack_pending={source=source.id,target=target.id,source_count=source.count or 1,target_count=target.count or 1,
+      states={[source.id]=combination_state(source),[target.id]=combination_state(target)},serial=s.action_serial or 0,deadline=s.time+15}
      return {action='merge',item=source.id,target=target.id,status='Combining stacks: '..(v.name or 'item')}
     end
     stacks[v.wcid]=v
@@ -3042,6 +3068,11 @@ end
 
 local function pause_activity(s,name,reason)
  if name=='navigation' then return pause_navigation(reason) end
+ local rejected=name=='combine' and combine_pending or name=='inventory' and stack_pending
+ if rejected then
+  local blocked=name=='combine' and combine_blocked or stack_blocked
+  for id,state in pairs(rejected.states or {}) do blocked[id]=state end
+ end
  -- Invalid meta execution requires explicit restart; do not skip ahead through
  -- a script whose later commands may depend on the rejected operation.
  local delay=name=='meta' and math.huge or (name=='combat' or name:sub(1,8)=='recovery') and 5 or 30
@@ -3049,6 +3080,7 @@ local function pause_activity(s,name,reason)
  activity_pause_reasons[name]=reason
  if name=='vendors' then note_pending=nil;purchase_pending=nil
  elseif name=='loot' then
+  if loot_job_pending and loot_job_pending.action=='salvage' then inventory_salvage_blocked[loot_job_pending.id]=true end
   if loot_pending then corpses[loot_pending.container]=s.time+30 end
   if corpse_pending then corpses[corpse_pending.id]=s.time+30 end
   if s.container and s.container~=0 then corpses[s.container]=s.time+30 end
@@ -3078,7 +3110,8 @@ local function pause_activity(s,name,reason)
  end
  local labels={loot='Looting',vendors='Vendor restocking',components='Component preparation',item_mana='Equipment mana',pets='Pet summoning',combine='Salvage combining',helper='Fellowship recovery',dispel='Dispelling',buffs='Buffing',buff_others='Buff requests',combat='Combat',recovery2='Health recovery',recovery4='Stamina recovery',recovery6='Mana recovery',meta='Meta',inventory='Inventory management'}
  return {action='activity_failed',activity=name,status=(labels[name] or name)..' paused: '..reason..
-  (delay==math.huge and '. Restart UCM to retry; other activities remain active' or '. Retrying in '..delay..' seconds; other activities remain active')}
+  (rejected and '. Unchanged items will be skipped until they change or UCM restarts; other activities remain active'
+   or delay==math.huge and '. Restart UCM to retry; other activities remain active' or '. Retrying in '..delay..' seconds; other activities remain active')}
 end
 
 local function run(s,p)
@@ -3285,7 +3318,7 @@ return function(s,p)
   route_pending=nil;loot_pending=nil;loot_full=nil;recovery_pending=nil;buff_item_pending=nil
   corpse_pending=nil;corpse_contents_wait=nil;corpse_spawn_wait=nil;combat_death_seen=s.combat_death and s.combat_death.time;purchase_pending=nil;note_pending=nil;mana_refill_pending=nil;mana_fill_pending=nil;pet_refill_pending=nil;helper_pending=nil;debuff_pending=nil;debuff_scan=nil;pea_pending=nil;pet_pending=nil;dispel_pending=nil
   last_cast=nil;unavailable_spells={};forced_buff=nil;buff_skips={};buff_recast_until=0;other_job=nil
-  loot_scan={};loot_jobs={};loot_job_pending=nil;mana_sources={};scroll_reads={};combine_pending=nil;stack_pending=nil;inventory_salvage_scan={};inventory_salvage_blocked={}
+  loot_scan={};loot_jobs={};loot_job_pending=nil;mana_sources={};scroll_reads={};combine_pending=nil;stack_pending=nil;combine_blocked={};stack_blocked={};inventory_salvage_scan={};inventory_salvage_blocked={}
   retries={};until_time={};item_attempts={};corpses={};monster_failures={};monster_blacklist={};ghost_attempts={};ghost_hp={}
   follow_path={};follow_target=nil;follow_teleport=nil
   activity_pauses={};activity_pause_reasons={}

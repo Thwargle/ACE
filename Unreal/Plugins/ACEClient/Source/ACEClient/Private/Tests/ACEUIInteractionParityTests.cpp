@@ -746,6 +746,46 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     Binder->SpellbookScrollOffset=100; Learn(EarlySpell);
     TestTrue(TEXT("Learning near the beginning also scrolls the spell into view"),Binder->SpellbookRowIds.Contains(EarlySpell));
 
+    // Exercise the visible filter controls, not just direct mask assignments.
+    // The earlier regression could pass even if clicks or persistence disagreed
+    // with the masks consulted by the SpellAdded notification.
+    Binder->ShowPanelPage(TEXT("SpellManagementPanel_Field")); Binder->HandleNamedClick(TEXT("SpellbookTab"));
+    Draw(TEXT("SpellFiltersBeforeClicks"));
+    auto ClickFilter=[&](int32 Index)
+    {
+        if(!TestTrue(TEXT("Spell filter control exists"),Binder->SpellbookFilterCheckboxes.IsValidIndex(Index)))return;
+        const auto Geometry=Binder->SpellbookFilterCheckboxes[Index]->GetCachedGeometry();
+        const FVector2D Position=Geometry.LocalToAbsolute(Geometry.GetLocalSize()*.5);
+        const FPointerEvent Press(0,Position,Position,TSet<FKey>{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState());
+        const FPointerEvent Release(0,Position,Position,TSet<FKey>{},EKeys::LeftMouseButton,0,FModifierKeysState());
+        Canvas->NativeOnMouseButtonDown(Canvas->GetCachedGeometry(),Press);
+        Canvas->NativeOnMouseButtonUp(Canvas->GetCachedGeometry(),Release);
+    };
+    for(int32 Index=0;Index<13;++Index)ClickFilter(Index);
+    TestEqual(TEXT("Clicking every school off clears the live mask"),Binder->SpellbookSchoolFilterMask,0u);
+    TestEqual(TEXT("Clicking every level off clears the live mask"),Binder->SpellbookLevelFilterMask,0u);
+    TestEqual(TEXT("All-off filters persist in the player module without defaulting to all-on"),Session.GetSpellbookFilters()&0x2FFFu,0u);
+    for(int32 Case=0;Case<3;++Case)
+    {
+        // All off, matching school alone, then matching level alone.
+        Binder->ShowPanelPage(TEXT("SpellManagementPanel_Field")); Binder->HandleNamedClick(TEXT("SpellbookTab"));
+        Draw(TEXT("SpellFilterClickCases"));
+        if(Case==1)ClickFilter(NewSchool-1);
+        if(Case==2){ClickFilter(NewSchool-1);ClickFilter(5+NewLevel-1);}
+        const auto Schools=Binder->SpellbookSchoolFilterMask,Levels=Binder->SpellbookLevelFilterMask;
+        Binder->ShowPanelPage(TEXT("InventoryPanel_Field"));Session.KnownSpells.Remove(NewSpell);Learn(NewSpell);
+        TestEqual(TEXT("Learning requires both school and level, after actual clicks"),Binder->ActivePanelPage,FString(TEXT("InventoryPanel_Field")));
+        TestEqual(TEXT("Learning never re-enables school checkboxes"),Binder->SpellbookSchoolFilterMask,Schools);
+        TestEqual(TEXT("Learning never re-enables level checkboxes"),Binder->SpellbookLevelFilterMask,Levels);
+    }
+    Binder->ShowPanelPage(TEXT("SpellManagementPanel_Field"));Binder->HandleNamedClick(TEXT("SpellbookTab"));Draw(TEXT("SpellFilterMatchingPair"));
+    ClickFilter(NewSchool-1);
+    Session.KnownSpells.Remove(NewSpell);Binder->ShowPanelPage(TEXT("InventoryPanel_Field"));Learn(NewSpell);
+    TestEqual(TEXT("Matching school and level open the learned spell"),Binder->ActivePanelPage,FString(TEXT("SpellManagementPanel_Field")));
+    TestEqual(TEXT("Matching filters reveal the exact new spell"),Binder->SelectedSpellbookId,NewSpell);
+    Binder->SpellbookSchoolFilterMask=0x1F;Binder->SpellbookLevelFilterMask=0xFF;
+    Session.SendSpellbookFilters(0x3FFFu);
+
     // Retail gmSpellbookUI double-click appends via AddFavorite(-1, false),
     // rather than casting, replacing an occupied slot, or relocating a duplicate.
     Session.KnownSpells={41,42};
