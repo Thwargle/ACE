@@ -103,6 +103,7 @@ private:
     bool bChatDirty=true;
     bool bBookDirty=false;
     FString ConfirmationText;
+    uint64 ConfirmationPopupId=0;
     UFUNCTION() void BookChanged();
     void ResolveConfirmation(bool Accept);
     UFUNCTION() void ChatReceived(const FString& Text,const FString& Sender,int32 Type);

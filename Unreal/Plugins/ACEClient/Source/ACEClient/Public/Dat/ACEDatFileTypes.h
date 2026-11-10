@@ -375,6 +375,8 @@ struct FACEDatContractInfo
 	FString DescriptionProgress;
 	FString NameNPCStart;
 	FString NameNPCEnd;
+	/** A repeatable contract becomes Available after its repeat timer expires. */
+	FString QuestFlagRepeatTime;
 	/** ObjCellIDs of the start NPC and quest area (0 when the contract has none). */
 	uint32 CellNPCStart = 0;
 	FVector3f OriginNPCStart = FVector3f::ZeroVector;

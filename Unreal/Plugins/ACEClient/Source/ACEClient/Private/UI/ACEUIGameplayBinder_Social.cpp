@@ -34,6 +34,22 @@ namespace
 	/** DAT paint climbs past 20k — overlays must sit above tab/frame chrome. */
 	constexpr int32 SocialOverlayZ = 100000;
 
+	FString ContractRepeatTime(double Seconds)
+	{
+		// Retail ClientUISystem::DeltaTimeToString uses 30-day months, omits
+		// zero units and always includes seconds. Clamp before integer conversion.
+		uint32 Remaining = static_cast<uint32>(FMath::Clamp(Seconds, 0.0, double(MAX_uint32)));
+		FString Text;
+		const uint32 Units[] = {2592000, 86400, 3600, 60};
+		const TCHAR* Suffixes[] = {TEXT("mo"), TEXT("d"), TEXT("h"), TEXT("m")};
+		for (int32 I = 0; I < UE_ARRAY_COUNT(Units); ++I)
+		{
+			if (Remaining >= Units[I]) Text += FString::Printf(TEXT("%u%s "), Remaining / Units[I], Suffixes[I]);
+			Remaining %= Units[I];
+		}
+		return Text + FString::Printf(TEXT("%us"), Remaining);
+	}
+
 	// Retail TinkeringSystem::IsValidMaterialType excludes the material category
 	// headings. ACE's salvage table likewise has no output weenie for those IDs.
 	bool IsSalvageMaterial(int32 Material)
@@ -1083,10 +1099,27 @@ void UACEUIGameplayBinder::RefreshQuestOverlays()
 	}
 	TArray<FACEContractEntry> Contracts = Client->GetContracts();
 	for (UTextBlock* R:QuestStatusRows) if (R) R->SetVisibility(ESlateVisibility::Collapsed);
-	auto Status=[Dat](const FACEContractEntry& C)->FString
+	const double Now = FPlatformTime::Seconds();
+	auto RepeatRemaining = [Now](const FACEContractEntry& C)
+	{
+		const double Elapsed = C.ReceivedAt > 0.0 ? FMath::Max(0.0, Now - C.ReceivedAt) : 0.0;
+		return FMath::Max(0.0, C.TimeWhenRepeats - Elapsed);
+	};
+	auto Status=[Dat, &RepeatRemaining](const FACEContractEntry& C)->FString
 	{
 		if(C.Stage==1)return TEXT("Available");
-		if(C.Stage==3)return TEXT("Completed");
+		if (C.Stage == 3)
+		{
+			if (C.TimeWhenRepeats > 0.0)
+			{
+				const double Remaining = RepeatRemaining(C);
+				return Remaining > 0.0
+					? FString::Printf(TEXT("Done (%s to Repeat)"), *ContractRepeatTime(Remaining))
+					: FString(TEXT("Available"));
+			}
+			const auto* Info = Dat ? Dat->GetContractInfo(C.ContractId) : nullptr;
+			return Info && !Info->QuestFlagRepeatTime.IsEmpty() ? TEXT("Available") : TEXT("Done");
+		}
 		// Retail gmContractsUI::FillProgressString substitutes stage - 4 into
 		// the DAT progress description (for example, remaining kills).
 		if(C.Stage>=4 && Dat)
@@ -1106,7 +1139,7 @@ void UACEUIGameplayBinder::RefreshQuestOverlays()
 				}
 				return Text;
 			}
-		return TEXT("In progress");
+		return C.Stage >= 2 ? TEXT("In Progress") : TEXT("");
 	};
 	auto ContractName = [Dat](int32 ContractId) -> FString
 	{
@@ -1122,21 +1155,24 @@ void UACEUIGameplayBinder::RefreshQuestOverlays()
 		}
 		return FString::Printf(TEXT("Contract %d"), ContractId);
 	};
-	// Retail sorts by the header button you last clicked.
-	if (bQuestSortByStatus)
+	// Retail sorts visible status text, with numeric repeat timers and names as
+	// tie-breakers. Use one time snapshot so comparisons remain consistent.
+	Contracts.Sort([&](const FACEContractEntry& A, const FACEContractEntry& B)
 	{
-		Contracts.Sort([](const FACEContractEntry& A, const FACEContractEntry& B)
+		int32 Order = 0;
+		if (bQuestSortByStatus)
 		{
-			return A.Stage != B.Stage ? A.Stage > B.Stage : A.ContractId < B.ContractId;
-		});
-	}
-	else
-	{
-		Contracts.Sort([&ContractName](const FACEContractEntry& A, const FACEContractEntry& B)
-		{
-			return ContractName(A.ContractId) < ContractName(B.ContractId);
-		});
-	}
+			const double ARepeat = A.Stage == 3 ? RepeatRemaining(A) : 0.0;
+			const double BRepeat = B.Stage == 3 ? RepeatRemaining(B) : 0.0;
+			const FString AStatus = ARepeat > 0.0 ? FString(TEXT("Done")) : Status(A);
+			const FString BStatus = BRepeat > 0.0 ? FString(TEXT("Done")) : Status(B);
+			Order = AStatus.Compare(BStatus, ESearchCase::IgnoreCase);
+			if (Order == 0 && ARepeat != BRepeat) Order = ARepeat < BRepeat ? -1 : 1;
+		}
+		if (Order == 0) Order = ContractName(A.ContractId).Compare(ContractName(B.ContractId), ESearchCase::IgnoreCase);
+		if (Order == 0 && A.ContractId != B.ContractId) Order = A.ContractId < B.ContractId ? -1 : 1;
+		return bQuestReverseSort ? Order > 0 : Order < 0;
+	});
 
 	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementByName(TEXT("ContractsBox"));
 	// Keep the retail columns and font. Long progress descriptions wrap instead
@@ -1254,10 +1290,10 @@ void UACEUIGameplayBinder::RefreshQuestOverlays()
 			FMath::Abs(EW), EW >= 0.f ? TEXT("E") : TEXT("W"));
 	};
 	const FString StatusText = Sel?Status(*Sel):FString(TEXT("-"));
-	auto Remaining=[Sel](float Seconds)
+	auto Remaining=[Sel, Now](double Seconds)
 	{
-		const double Elapsed=Sel&&Sel->ReceivedAt>0?FPlatformTime::Seconds()-Sel->ReceivedAt:0;
-		const int32 S=FMath::Max(0,FMath::CeilToInt(Seconds-Elapsed));
+		const double Elapsed=Sel&&Sel->ReceivedAt>0?FMath::Max(0.0,Now-Sel->ReceivedAt):0;
+		const int32 S=FMath::CeilToInt(FMath::Clamp(Seconds-Elapsed,0.0,double(MAX_int32)));
 		return FString::Printf(TEXT("%dd %02d:%02d:%02d"),S/86400,(S/3600)%24,(S/60)%60,S%60);
 	};
 	FString TimedText = TEXT("Not timed");

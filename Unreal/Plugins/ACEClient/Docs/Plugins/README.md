@@ -329,9 +329,25 @@ Editing a dependency or exported route updates subsequent use of that profile.
 Embedded routes are refreshed from their named files when the meta is loaded
 or UCM starts. Stop/Start retains meta progress when the configuration is unchanged.
 
+Successful combat-equipment assessments survive swaps and relogging for the same
+character/server. Background refreshes still update changed stats, but a pending
+or failed refresh no longer takes a known weapon out of the equipment pool.
+Forced damage types reject conflicting elemental wands; neutral casters and
+casters with the matching elemental rend remain eligible. Fresh inspection is
+still required for loot/salvage and resource-use decisions.
+
+In the Mobs **Add** field or a row's **Details**, use plain text for a name prefix,
+`name==Snow Tusker` for an exact name, or `species==Tusker` for a creature family.
+Use `name#` followed by a backtick-quoted regex for a pattern, for example
+``name#`^Snow.*` ``. Combine conditions with `&&` (AND), `||` (OR) and parentheses:
+`species==Tusker && maxhp>1000`. Species and max-health depend on known target
+data; no match is inferred from an unassessed, unknown species. Expressions use
+VT-style ordering, so put more specific expressions ahead of broad ones.
+Invalid expressions are rejected without replacing the saved rule.
+
 Protections and Banes are in **Buffs**, saved in Character. **Mobs** has a
 compact list with an always-visible Default row, name search, **Add selected
-mob**, and an **Add** field for name prefixes. The profile selector shows the
+mob**, and an **Add** field for name prefixes or VT-style expressions. The profile selector shows the
 selected file's name without a category prefix; the built-in profile is **Default**.
 Custom profile names are preserved. Click a switch to save it
 immediately. **A** controls ordinary weapon/bolt/arc attacks, **R** rings, and

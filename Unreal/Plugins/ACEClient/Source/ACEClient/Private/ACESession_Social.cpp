@@ -1,8 +1,50 @@
 #include "ACESession.h"
 #include "Protocol/ACEMaterialTypeNames.inl"
+#include "UI/ACERetailAllegianceTitle.h"
 
 namespace
 {
+	static bool ReadContractTracker(FACEBinaryReader& Reader, FACEContractEntry& Out)
+	{
+		if (!Reader.CanRead(28)) return false;
+		Reader.ReadUInt32(); // version
+		Out.ContractId = Reader.ReadInt32();
+		Out.Stage = Reader.ReadInt32();
+		Out.TimeWhenDone = Reader.ReadDouble();
+		Out.TimeWhenRepeats = Reader.ReadDouble();
+		return FMath::IsFinite(Out.TimeWhenDone) && FMath::IsFinite(Out.TimeWhenRepeats);
+	}
+
+	// ReadString16L returns an empty string on truncation, which is also a valid
+	// wire value. Validate the complete string and its padding before consuming it.
+	static bool ReadSocialString(FACEBinaryReader& Reader, FString& Out)
+	{
+		if (!Reader.CanRead(2)) return false;
+		const int32 Start = Reader.Tell();
+		const int32 Length = Reader.ReadUInt16();
+		Reader.Seek(Start);
+		if (!Reader.CanRead(Align(Length + 2, 4))) return false;
+		Out = Reader.ReadString16L();
+		return true;
+	}
+
+	static bool ReadBookPage(FACEBinaryReader& Reader, FString& Text, bool& bTextIncluded, FACEBookPageAuthor& Author)
+	{
+		if (!Reader.CanRead(4)) return false;
+		Author.Guid = Reader.ReadInt32();
+		FString Ignored;
+		if (!ReadSocialString(Reader, Author.Name) || !ReadSocialString(Reader, Ignored) || !Reader.CanRead(4)) return false;
+		const uint32 VersionOrTextIncluded = Reader.ReadUInt32();
+		if ((VersionOrTextIncluded >> 16) == 0xFFFF)
+		{
+			if (VersionOrTextIncluded != 0xFFFF0002 || !Reader.CanRead(8)) return false;
+			bTextIncluded = Reader.ReadUInt32() != 0;
+			Author.bIgnoreAuthor = Reader.ReadUInt32() != 0;
+		}
+		else bTextIncluded = VersionOrTextIncluded != 0; // legacy PageData has no version/ignore-author fields
+		return !bTextIncluded || ReadSocialString(Reader, Text);
+	}
+
 	static const TCHAR* SkillNameForSalvage(uint32 SkillId)
 	{
 		switch (SkillId)
@@ -34,7 +76,7 @@ namespace
 		Out.ManaCur = static_cast<int32>(Reader.ReadUInt32());
 		const uint32 ShareLoot = Reader.ReadUInt32();
 		Out.bShareLoot = (ShareLoot != 0);
-		Out.Name = Reader.ReadString16L();
+		if (!ReadSocialString(Reader, Out.Name)) return false;
 		Out.VitalsReceivedAt = FPlatformTime::Seconds();
 		return true;
 	}
@@ -87,6 +129,9 @@ void FACESession::SendFellowshipRecruit(int32 TargetPlayerGuid)
 
 void FACESession::SendFellowshipUpdateRequest(bool bPanelOpen)
 {
+	// The UI/plugin subscription can be set before login, and outlives an
+	// individual world session. Reapply it on entry, when the server can accept it.
+	bFellowshipUpdatesRequested = bPanelOpen;
 	if (State != EACESessionState::InWorld)
 	{
 		return;
@@ -194,60 +239,48 @@ void FACESession::SendCreateTinkeringTool(int32 ToolGuid, const TArray<int32>& I
 
 void FACESession::HandleFellowshipFullUpdate(FACEBinaryReader& Reader)
 {
-	Fellowship = FACEFellowshipInfo();
-	if (!Reader.CanRead(4))
-	{
-		OnFellowshipChanged.Broadcast();
-		return;
-	}
+	if (!Reader.CanRead(4)) return;
 	const uint16 Count = Reader.ReadUInt16();
-	const uint16 NumBuckets = Reader.ReadUInt16();
-	(void)NumBuckets;
-	Fellowship.Members.Reserve(Count);
+	Reader.ReadUInt16(); // buckets
+	// A member is at least 44 fixed bytes plus a padded string. The trailing
+	// name, flags and departed-members table are mandatory in retail.
+	if (Reader.Remaining() < 28 || Count > (Reader.Remaining() - 28) / 48) return;
+	FACEFellowshipInfo Parsed;
+	Parsed.Members.Reserve(Count);
 	for (uint16 i = 0; i < Count; ++i)
 	{
 		FACEFellowshipMember M;
-		if (!ReadFellowRecord(Reader, M))
-		{
-			break;
-		}
-		Fellowship.Members.Add(M);
+		if (!ReadFellowRecord(Reader, M)) return;
+		Parsed.Members.Add(M);
 	}
-	Fellowship.Name = Reader.ReadString16L();
-	if (Reader.CanRead(20))
-	{
-		Fellowship.LeaderGuid = static_cast<int32>(Reader.ReadUInt32());
-		Fellowship.bShareXP = Reader.ReadUInt32() != 0;
-		Fellowship.bEvenShare = Reader.ReadUInt32() != 0;
-		Fellowship.bOpen = Reader.ReadUInt32() != 0;
-		Fellowship.bLocked = Reader.ReadUInt32() != 0;
-	}
+	if (!ReadSocialString(Reader, Parsed.Name) || !Reader.CanRead(24)) return;
+	Parsed.LeaderGuid = static_cast<int32>(Reader.ReadUInt32());
+	Parsed.bShareXP = Reader.ReadUInt32() != 0;
+	Parsed.bEvenShare = Reader.ReadUInt32() != 0;
+	Parsed.bOpen = Reader.ReadUInt32() != 0;
+	Parsed.bLocked = Reader.ReadUInt32() != 0;
 	// DepartedMembers packable hashtable
-	if (Reader.CanRead(4))
+	const uint16 DepCount = Reader.ReadUInt16();
+	Reader.ReadUInt16(); // buckets
+	if (!Reader.CanRead(DepCount * 8)) return;
+	Reader.Skip(DepCount * 8);
+	// ACE appends FellowshipLocks; retail's Fellowship::UnPack ends at the
+	// departed table. Accept either form, but never a partial extension.
+	if (Reader.Remaining() > 0)
 	{
-		const uint16 DepCount = Reader.ReadUInt16();
-		Reader.ReadUInt16(); // buckets
-		for (uint16 i = 0; i < DepCount && Reader.CanRead(8); ++i)
-		{
-			Reader.ReadUInt32();
-			Reader.ReadInt32();
-		}
-	}
-	// FellowshipLocks: ushort count, ushort buckets, then (string16L + 5×uint32)
-	if (Reader.CanRead(4))
-	{
+		if (!Reader.CanRead(4)) return;
 		const uint16 LockCount = Reader.ReadUInt16();
 		Reader.ReadUInt16();
+		if (LockCount > Reader.Remaining() / 24) return;
 		for (uint16 i = 0; i < LockCount; ++i)
 		{
-			Reader.ReadString16L();
-			if (Reader.CanRead(20))
-			{
-				Reader.Skip(20);
-			}
+			FString LockName;
+			if (!ReadSocialString(Reader, LockName) || !Reader.CanRead(20)) return;
+			Reader.Skip(20);
 		}
 	}
-	Fellowship.bValid = true;
+	Parsed.bValid = true;
+	Fellowship = MoveTemp(Parsed);
 	OnFellowshipChanged.Broadcast();
 }
 
@@ -258,10 +291,8 @@ void FACESession::HandleFellowshipUpdateFellow(FACEBinaryReader& Reader)
 	{
 		return;
 	}
-	if (Reader.CanRead(4))
-	{
-		Reader.ReadUInt32(); // FellowUpdateType
-	}
+	if (!Reader.CanRead(4)) return;
+	Reader.ReadUInt32(); // FellowUpdateType; all types carry a complete Fellow
 	bool bFound = false;
 	for (FACEFellowshipMember& Existing : Fellowship.Members)
 	{
@@ -375,8 +406,7 @@ bool FACESession::ReadAllegianceData(FACEBinaryReader& Reader, FACEAllegianceMem
 		}
 		Reader.ReadUInt64();
 	}
-	Out.Name = Reader.ReadString16L();
-	return true;
+	return ReadSocialString(Reader, Out.Name);
 }
 
 void FACESession::HandleAllegianceLoginNotification(FACEBinaryReader& Reader)
@@ -398,79 +428,89 @@ void FACESession::HandleAllegianceLoginNotification(FACEBinaryReader& Reader)
 void FACESession::HandleAllegianceUpdate(FACEBinaryReader& Reader)
 {
 	CursorAllegianceUntil=0.;
-	Allegiance = FACEAllegianceInfo();
-	if (!Reader.CanRead(12))
-	{
-		OnAllegianceChanged.Broadcast();
-		return;
-	}
-	Allegiance.Rank = static_cast<int32>(Reader.ReadUInt32());
-	Allegiance.TotalMembers = static_cast<int32>(Reader.ReadUInt32());
-	Allegiance.TotalVassals = static_cast<int32>(Reader.ReadUInt32());
+	if (!Reader.CanRead(4)) return;
+	const int32 Rank = Reader.ReadInt32();
+	FACEAllegianceInfo Parsed;
+	if (!ReadAllegianceProfile(Reader, PlayerGuid, Parsed)) return;
+	if (!Parsed.Self.Guid) Parsed.Rank = Rank;
+	Allegiance = MoveTemp(Parsed);
+	OnAllegianceChanged.Broadcast();
+}
 
-	if (!Reader.CanRead(4))
-	{
-		OnAllegianceChanged.Broadcast();
-		return;
-	}
+bool FACESession::ReadAllegianceProfile(FACEBinaryReader& Reader, int32 TargetGuid, FACEAllegianceInfo& Out)
+{
+	if (!Reader.CanRead(12)) return false;
+	FACEAllegianceInfo Parsed;
+	Parsed.TotalMembers = Reader.ReadInt32();
+	Parsed.TotalVassals = Reader.ReadInt32();
 	const uint16 RecordCount = Reader.ReadUInt16();
-	const uint16 OldVersion = Reader.ReadUInt16();
-	(void)OldVersion;
+	const uint16 Version = Reader.ReadUInt16();
 
-	// officers packable hashtable
-	if (Reader.CanRead(4))
+	// AllegianceHierarchy::UnPack gates each header field by its wire version.
+	if (Version >= 6)
 	{
+		if (!Reader.CanRead(4)) return false;
 		const uint16 OffCount = Reader.ReadUInt16();
 		Reader.ReadUInt16();
-		for (uint16 i = 0; i < OffCount && Reader.CanRead(8); ++i)
-		{
-			Reader.ReadUInt32();
-			Reader.ReadUInt32();
-		}
+		if (!Reader.CanRead(OffCount * 8)) return false;
+		Reader.Skip(OffCount * 8);
 	}
-	// officer titles
-	if (Reader.CanRead(4))
+	else if (Version >= 1)
 	{
-		const int32 TitleCount = Reader.ReadInt32();
-		for (int32 i = 0; i < TitleCount; ++i)
-		{
-			Reader.ReadString16L();
-		}
+		if (!Reader.CanRead(4)) return false;
+		Reader.Skip(4); // obsolete officer field
 	}
-	if (Reader.CanRead(16))
+	FString Ignored;
+	if (Version >= 9)
 	{
+		if (!Reader.CanRead(4)) return false;
+		const uint32 TitleCount = Reader.ReadUInt32();
+		if (TitleCount > uint32(Reader.Remaining() / 4)) return false;
+		for (uint32 i = 0; i < TitleCount; ++i)
+			if (!ReadSocialString(Reader, Ignored)) return false;
+	}
+	if (Version >= 2)
+	{
+		if (!Reader.CanRead(16)) return false;
 		Reader.Skip(16); // broadcast counters
 	}
-	Reader.ReadString16L(); // motd
-	Reader.ReadString16L(); // motdSetBy
-	if (Reader.CanRead(4))
+	if (Version >= 3 && (!ReadSocialString(Reader, Ignored) || !ReadSocialString(Reader, Ignored))) return false;
+	if (Version >= 4)
 	{
-		Reader.ReadUInt32(); // chatRoomID
+		if (!Reader.CanRead(4)) return false;
+		Reader.Skip(4); // chatRoomID
 	}
-	// Position bindpoint: cell + pos(3f) + rot(4f) = 4+12+16 = 32
-	if (Reader.CanRead(32))
+	if (Version >= 7)
 	{
-		Reader.Skip(32);
+		if (!Reader.CanRead(32)) return false;
+		Reader.Skip(32); // bindpoint: cell, position, quaternion
 	}
-	Allegiance.AllegianceName = Reader.ReadString16L();
-	if (Reader.CanRead(12))
+	if (Version >= 8)
 	{
-		Reader.ReadUInt32(); // nameLastSetTime
-		Reader.ReadUInt32(); // isLocked
-		Reader.ReadInt32();  // approvedVassal
+		if (!ReadSocialString(Reader, Parsed.AllegianceName) || !Reader.CanRead(4)) return false;
+		Reader.Skip(4); // nameLastSetTime
+	}
+	if (Version >= 10)
+	{
+		if (!Reader.CanRead(4)) return false;
+		Reader.Skip(4); // isLocked
+	}
+	if (Version >= 11)
+	{
+		if (!Reader.CanRead(4)) return false;
+		Reader.Skip(4); // approvedVassal
 	}
 
+	if (RecordCount > Reader.Remaining() / 36) return false;
 	if (RecordCount >= 1)
 	{
 		FACEAllegianceMember Monarch;
-		if (ReadAllegianceData(Reader, Monarch))
-		{
-			Monarch.Role = 0;
-			Allegiance.MonarchGuid = Monarch.Guid;
-			Allegiance.MonarchName = Monarch.Name;
-			Allegiance.Monarch = Monarch;
-			if (Monarch.Guid == PlayerGuid) Allegiance.Self = Monarch;
-		}
+		if (!ReadAllegianceData(Reader, Monarch)) return false;
+		Monarch.Role = 0;
+		Parsed.MonarchGuid = Monarch.Guid;
+		Parsed.MonarchName = Monarch.Name;
+		Parsed.Monarch = Monarch;
+		if (Monarch.Guid == TargetGuid) Parsed.Self = Monarch;
 	}
 	// Remaining records: treeParent + AllegianceData  (RecordCount - 1). Parent links are only
 	// meaningful once every record is read, so collect first and resolve roles afterwards.
@@ -478,57 +518,74 @@ void FACESession::HandleAllegianceUpdate(FACEBinaryReader& Reader)
 	Records.Reserve(FMath::Max(0, static_cast<int32>(RecordCount) - 1));
 	for (uint16 i = 1; i < RecordCount; ++i)
 	{
-		if (!Reader.CanRead(4))
-		{
-			break;
-		}
+		if (!Reader.CanRead(4)) return false;
 		const int32 TreeParent = static_cast<int32>(Reader.ReadUInt32());
 		FACEAllegianceMember Member;
-		if (!ReadAllegianceData(Reader, Member))
-		{
-			break;
-		}
+		if (!ReadAllegianceData(Reader, Member)) return false;
 		Records.Emplace(TreeParent, Member);
 	}
 	for (const TPair<int32, FACEAllegianceMember>& Rec : Records)
 	{
-		if (Rec.Value.Guid == PlayerGuid)
+		if (Rec.Value.Guid == TargetGuid)
 		{
-			Allegiance.PatronGuid = Rec.Key;
-			Allegiance.Self = Rec.Value;
-			Allegiance.SelfCPCached = Rec.Value.CPCached;
-			Allegiance.SelfCPTithed = Rec.Value.CPTithed;
-			Allegiance.Rank = Rec.Value.Rank;
+			Parsed.PatronGuid = Rec.Key;
+			Parsed.Self = Rec.Value;
 			break;
 		}
 	}
 	for (const TPair<int32, FACEAllegianceMember>& Rec : Records)
 	{
 		FACEAllegianceMember Member = Rec.Value;
-		if (Member.Guid == PlayerGuid)
+		if (Member.Guid == TargetGuid)
 		{
 			continue;
 		}
-		if (Member.Guid == Allegiance.PatronGuid)
+		if (Member.Guid == Parsed.PatronGuid)
 		{
 			Member.Role = 1;
-			Allegiance.PatronName = Member.Name;
-			Allegiance.Patron = Member;
+			Parsed.PatronName = Member.Name;
+			Parsed.Patron = Member;
 		}
-		else if (Rec.Key == PlayerGuid)
+		else if (Rec.Key == TargetGuid)
 		{
 			Member.Role = 3;
-			Allegiance.Vassals.Add(Member);
+			Parsed.Vassals.Add(Member);
 		}
 	}
-	if (Allegiance.PatronGuid == Allegiance.MonarchGuid && Allegiance.PatronName.IsEmpty())
+	if (Parsed.PatronGuid == Parsed.MonarchGuid && Parsed.PatronName.IsEmpty())
 	{
-		Allegiance.PatronName = Allegiance.MonarchName;
-		Allegiance.Patron = Allegiance.Monarch;
+		Parsed.PatronName = Parsed.MonarchName;
+		Parsed.Patron = Parsed.Monarch;
 	}
+	Parsed.SelfCPCached = Parsed.Self.CPCached;
+	Parsed.SelfCPTithed = Parsed.Self.CPTithed;
+	Parsed.Rank = Parsed.Self.Rank;
+	Parsed.bValid = !Parsed.AllegianceName.IsEmpty() || Parsed.MonarchGuid != 0;
+	Out = MoveTemp(Parsed);
+	return true;
+}
 
-	Allegiance.bValid = !Allegiance.AllegianceName.IsEmpty() || Allegiance.MonarchGuid != 0;
-	OnAllegianceChanged.Broadcast();
+void FACESession::HandleAllegianceInfoResponse(FACEBinaryReader& Reader)
+{
+	if (!Reader.CanRead(4)) return;
+	const int32 TargetGuid = Reader.ReadInt32();
+	FACEAllegianceInfo Info;
+	if (!ReadAllegianceProfile(Reader, TargetGuid, Info) || !TargetGuid || Info.Self.Guid != TargetGuid) return;
+	// This is a query about another member, not a replacement of our own UI data.
+	auto FullName = [](const FACEAllegianceMember& Member)
+	{
+		const FString Title = ACERetailAllegiance::Title(Member.Rank, Member.HeritageGroup, Member.Gender);
+		return (Title.IsEmpty() ? Member.Name : Title + TEXT(" ") + Member.Name) + (Member.bOnline ? TEXT(" *") : TEXT(""));
+	};
+	auto Say = [&](const FString& Text) { EmitChatMessage(Text, FString(), ACEChatMessageType::System); };
+	Say(TEXT("Note: An asterisk (*) indicates that the character is currently online."));
+	Say(FString::Printf(TEXT("Allegiance information for %s:"), *FullName(Info.Self)));
+	if (Info.Patron.Guid) Say(TEXT("   Patron: ") + FullName(Info.Patron));
+	if (!Info.Vassals.IsEmpty())
+	{
+		Say(TEXT("   Vassals:"));
+		for (const auto& Vassal : Info.Vassals) Say(TEXT("      ") + FullName(Vassal));
+	}
 }
 
 void FACESession::HandleFriendsListUpdate(FACEBinaryReader& Reader)
@@ -538,42 +595,34 @@ void FACESession::HandleFriendsListUpdate(FACEBinaryReader& Reader)
 		return;
 	}
 	const uint32 Count = Reader.ReadUInt32();
+	// FriendData is at least 12 fixed bytes, a padded string, two list
+	// counts, followed by the update type for the complete message.
+	if (Reader.Remaining() < 4 || Count > uint32((Reader.Remaining() - 4) / 24)) return;
 	TArray<FACEFriendInfo> Parsed;
 	Parsed.Reserve(static_cast<int32>(Count));
 	for (uint32 i = 0; i < Count; ++i)
 	{
 		if (!Reader.CanRead(12))
 		{
-			break;
+			return;
 		}
 		FACEFriendInfo F;
 		F.Guid = static_cast<int32>(Reader.ReadUInt32());
 		F.bOnline = Reader.ReadUInt32() != 0;
 		Reader.ReadUInt32(); // appear offline
-		F.Name = Reader.ReadString16L();
-		if (Reader.CanRead(4))
+		if (!ReadSocialString(Reader, F.Name)) return;
+		for (int32 ListIndex = 0; ListIndex < 2; ++ListIndex)
 		{
-			const uint32 FriendFriends = Reader.ReadUInt32();
-			for (uint32 j = 0; j < FriendFriends && Reader.CanRead(4); ++j)
-			{
-				Reader.ReadUInt32();
-			}
-		}
-		if (Reader.CanRead(4))
-		{
-			const uint32 Inverse = Reader.ReadUInt32();
-			for (uint32 j = 0; j < Inverse && Reader.CanRead(4); ++j)
-			{
-				Reader.ReadUInt32();
-			}
+			if (!Reader.CanRead(4)) return;
+			const uint32 ListCount = Reader.ReadUInt32();
+			if (ListCount > uint32(Reader.Remaining() / 4)) return;
+			Reader.Skip(static_cast<int32>(ListCount * 4));
 		}
 		Parsed.Add(F);
 	}
-	uint32 UpdateType = 0;
-	if (Reader.CanRead(4))
-	{
-		UpdateType = Reader.ReadUInt32();
-	}
+	if (!Reader.CanRead(4)) return;
+	const uint32 UpdateType = Reader.ReadUInt32();
+	if (UpdateType > 4 || (UpdateType != 0 && Parsed.IsEmpty())) return;
 	if (UpdateType == 0) // FullList
 	{
 		Friends = MoveTemp(Parsed);
@@ -787,32 +836,27 @@ void FACESession::SendModifyGlobalSquelch(bool bSquelch, uint32 MessageType)
 
 void FACESession::HandleContractTrackerTable(FACEBinaryReader& Reader)
 {
-	// PackableHashTable<uint, ContractTracker>: version, contractId, stage, timeDone, timeRepeat.
-	Contracts.Reset();
-	if (!Reader.CanRead(4))
-	{
-		OnContractsChanged.Broadcast();
-		return;
-	}
+	// The hash key precedes each 28-byte tracker. Install only complete snapshots;
+	// a truncated table must not erase contracts or reset their countdowns.
+	if (!Reader.CanRead(4)) return;
 	const uint16 Count = Reader.ReadUInt16();
 	Reader.ReadUInt16(); // buckets
+	if (Count > Reader.Remaining() / 32) return;
+	TArray<FACEContractEntry> Updated;
+	Updated.Reserve(Count);
+	TMap<int32, int32> IndexById;
+	const double ReceivedAt = FPlatformTime::Seconds();
 	for (uint16 i = 0; i < Count; ++i)
 	{
-		if (!Reader.CanRead(4 + 4 + 4 + 4 + 8 + 8))
-		{
-			break;
-		}
 		const uint32 KeyId = Reader.ReadUInt32();
-		Reader.ReadUInt32(); // Version
-		const uint32 ContractId = Reader.ReadUInt32();
 		FACEContractEntry Entry;
-		Entry.ContractId = static_cast<int32>(ContractId != 0 ? ContractId : KeyId);
-		Entry.Stage = static_cast<int32>(Reader.ReadUInt32());
-		Entry.TimeWhenDone = static_cast<float>(Reader.ReadDouble());
-		Entry.TimeWhenRepeats = static_cast<float>(Reader.ReadDouble());
-		Entry.ReceivedAt = FPlatformTime::Seconds();
-		Contracts.Add(Entry);
+		if (!ReadContractTracker(Reader, Entry)) return;
+		if (Entry.ContractId == 0) Entry.ContractId = static_cast<int32>(KeyId);
+		Entry.ReceivedAt = ReceivedAt;
+		if (const int32* Existing = IndexById.Find(Entry.ContractId)) Updated[*Existing] = Entry;
+		else IndexById.Add(Entry.ContractId, Updated.Add(Entry));
 	}
+	Contracts = MoveTemp(Updated);
 	OnContractsChanged.Broadcast();
 }
 
@@ -838,7 +882,11 @@ void FACESession::SendHouseQuery()
 
 void FACESession::ClearBook()
 {
+	SaveBookPage(INDEX_NONE); // Retail saves (or deletes one's blank page) on close.
+	ResetBookEditing();
 	Book = FACEBookInfo();
+	PendingBookPage = INDEX_NONE;
+	BookPageRequestedAt = 0.0;
 	OnBookChanged.Broadcast();
 }
 
@@ -878,18 +926,31 @@ void FACESession::SendBookData(int32 BookGuid)
 
 void FACESession::SendBookPageData(int32 BookGuid, int32 PageIndex)
 {
-	if (State != EACESessionState::InWorld || BookGuid == 0 || PageIndex < 0)
+	if (State != EACESessionState::InWorld || !Book.bOpen || Book.BookGuid != BookGuid || !BookGuid
+		|| !Book.Pages.IsValidIndex(PageIndex))
 	{
 		return;
 	}
-	if (Book.bOpen && Book.BookGuid == BookGuid)
+	// Retail SetCurPage waits for the pending page and reuses text already read.
+	// A bounded wait also lets the user retry if a custom host never replies.
+	const double Now = FPlatformTime::Seconds();
+	if (PendingBookPage != INDEX_NONE && Now - BookPageRequestedAt < 5.0) return;
+	PendingBookPage = INDEX_NONE;
+	const bool bChanged = Book.CurrentPage != PageIndex;
+	if (bChanged) { bBookDraft = false; BookDraft.Reset(); }
+	Book.CurrentPage = PageIndex;
+	if (Book.HasPageText(PageIndex))
 	{
-		Book.CurrentPage = PageIndex;
+		if (bChanged) OnBookChanged.Broadcast();
+		return;
 	}
+	PendingBookPage = PageIndex;
+	BookPageRequestedAt = Now;
 	FACEBinaryWriter W;
 	W.WriteUInt32(static_cast<uint32>(BookGuid));
 	W.WriteInt32(PageIndex);
 	SendGameAction(ACEGameAction::BookPageData, W.GetData(), ACEQueue::WeenieQueue);
+	if (bChanged) OnBookChanged.Broadcast();
 }
 
 void FACESession::SendChessQuit()
@@ -1011,74 +1072,9 @@ void FACESession::HandleChessGameEvent(uint32 EventType, FACEBinaryReader& Reade
 	OnChessEvent.Broadcast(Event);
 }
 
-void FACESession::HandleHouseData(FACEBinaryReader& Reader)
-{
-	// HouseData: buyTime, rentTime, type, maintenanceFree, buy[], rent[], position.
-	if (!Reader.CanRead(4 * 4 + 4))
-	{
-		return;
-	}
-	FACEHouseInfo Info;
-	Info.bQueried = true;
-	Info.bOwned = true;
-	Info.BuyTime = static_cast<int64>(Reader.ReadUInt32());
-	Info.RentTime = static_cast<int64>(Reader.ReadUInt32());
-	Info.HouseType = static_cast<int32>(Reader.ReadUInt32());
-	Info.bMaintenanceFree = Reader.ReadUInt32() != 0;
-
-	auto ReadPayments = [&Reader](TArray<FACEHousePayment>& Out) -> bool
-	{
-		if (!Reader.CanRead(4))
-		{
-			return false;
-		}
-		const int32 Count = static_cast<int32>(Reader.ReadUInt32());
-		if (Count < 0 || Count > 256)
-		{
-			return false;
-		}
-		for (int32 i = 0; i < Count; ++i)
-		{
-			if (!Reader.CanRead(12))
-			{
-				return false;
-			}
-			FACEHousePayment Payment;
-			Payment.Required = static_cast<int32>(Reader.ReadUInt32());
-			Payment.Paid = static_cast<int32>(Reader.ReadUInt32());
-			Payment.Wcid = static_cast<int32>(Reader.ReadUInt32());
-			Payment.Name = Reader.ReadString16L();
-			Payment.PluralName = Reader.ReadString16L();
-			Out.Add(Payment);
-		}
-		return true;
-	};
-	if (!ReadPayments(Info.Buy) || !ReadPayments(Info.Rent))
-	{
-		return;
-	}
-	if (Reader.CanRead(32))
-	{
-		Info.Position = Reader.ReadPosition();
-	}
-	House = Info;
-	OnHouseChanged.Broadcast();
-}
-
-void FACESession::HandleHouseStatus(FACEBinaryReader& Reader)
-{
-	House = FACEHouseInfo();
-	House.bQueried = true;
-	if (Reader.CanRead(4))
-	{
-		House.StatusError = static_cast<int32>(Reader.ReadUInt32());
-	}
-	OnHouseChanged.Broadcast();
-}
-
 void FACESession::HandleBookDataResponse(FACEBinaryReader& Reader)
 {
-	// bookID, maxPages, numPages, maxChars, pageCount, pages[], inscription, authorId, authorName
+	// bookID, maxPages, PageDataList (capacity, maxChars, count, pages), inscription, scribe
 	if (!Reader.CanRead(4 * 5))
 	{
 		return;
@@ -1087,49 +1083,46 @@ void FACESession::HandleBookDataResponse(FACEBinaryReader& Reader)
 	Info.bOpen = true;
 	Info.BookGuid = static_cast<int32>(Reader.ReadUInt32());
 	Info.MaxPages = Reader.ReadInt32();
-	Info.NumPages = Reader.ReadInt32();
+	const int32 ListCapacity = Reader.ReadInt32();
 	Info.MaxCharsPerPage = Reader.ReadInt32();
 	const int32 PageCount = Reader.ReadInt32();
-	if (PageCount < 0 || PageCount > 512)
+	// Legacy PageData needs at least 16 bytes; the scribe trailer needs 12.
+	if (!Info.BookGuid || Info.MaxPages < 0 || ListCapacity < 0 || Info.MaxCharsPerPage < 0
+		|| PageCount < 0 || Reader.Remaining() < 12 || PageCount > (Reader.Remaining() - 12) / 16)
 	{
 		return;
 	}
+	Info.NumPages = PageCount;
 	Info.Pages.SetNum(PageCount);
+	Info.PageTextIncluded.SetNumZeroed(PageCount);
+	Info.PageAuthors.SetNum(PageCount);
 	for (int32 i = 0; i < PageCount; ++i)
 	{
-		if (!Reader.CanRead(4))
-		{
-			return;
-		}
-		Reader.ReadUInt32(); // AuthorId
-		Reader.ReadString16L(); // AuthorName
-		Reader.ReadString16L(); // AuthorAccount
-		if (!Reader.CanRead(12))
-		{
-			return;
-		}
-		Reader.ReadUInt32(); // flags (0xFFFF0002)
-		const uint32 TextIncluded = Reader.ReadUInt32();
-		Reader.ReadUInt32(); // IgnoreAuthor
-		if (TextIncluded != 0)
-		{
-			Info.Pages[i] = Reader.ReadString16L();
-		}
+		if (!ReadBookPage(Reader, Info.Pages[i], Info.PageTextIncluded[i], Info.PageAuthors[i])) return;
 	}
-	Info.Inscription = Reader.ReadString16L();
-	if (Reader.CanRead(4))
-	{
-		Reader.ReadUInt32(); // AuthorId
-	}
-	Info.AuthorName = Reader.ReadString16L();
-	Info.CurrentPage = 0;
-	Book = Info;
+	if (!ReadSocialString(Reader, Info.Inscription) || !Reader.CanRead(4)) return;
+	Reader.ReadUInt32(); // scribe ID
+	if (!ReadSocialString(Reader, Info.AuthorName)) return;
+	// A duplicate open response must not replace text being edited or a write
+	// awaiting acknowledgement. Explicit recovery reads after a timeout/add win.
+	if (Book.bOpen && Book.BookGuid == Info.BookGuid && !bBookRefreshRequired
+		&& (bBookDraft || BookWriteAction)) return;
+	// Retail OpenBook keeps the current page when refreshing the same book,
+	// clamping it if the new list became shorter.
+	Info.CurrentPage = Book.bOpen && Book.BookGuid == Info.BookGuid
+		? FMath::Clamp(Book.CurrentPage, 0, FMath::Max(0, PageCount - 1)) : 0;
+	if (Book.BookGuid != Info.BookGuid) SaveBookPage(INDEX_NONE);
+	ResetBookEditing();
+	Book = MoveTemp(Info);
+	PendingBookPage = INDEX_NONE;
+	BookPageRequestedAt = 0.0;
 	OnBookChanged.Broadcast();
-	// Retail always follows TOC with a page fetch — page text is null in BookDataResponse.
-	if (Book.BookGuid != 0 && (Book.NumPages > 0 || Book.MaxPages > 0 || Book.Pages.Num() > 0))
+	// Retail requests only missing text. Capacity is not the number of readable pages.
+	if (!Book.Pages.IsEmpty())
 	{
-		SendBookPageData(Book.BookGuid, 0);
+		SendBookPageData(Book.BookGuid, Book.CurrentPage);
 	}
+	else if (Book.MaxPages > 0) OpenBookPage(0); // Retail opens a blank book by adding its first page.
 }
 
 void FACESession::HandleBookPageDataResponse(FACEBinaryReader& Reader)
@@ -1141,47 +1134,33 @@ void FACESession::HandleBookPageDataResponse(FACEBinaryReader& Reader)
 	}
 	const int32 BookGuid = static_cast<int32>(Reader.ReadUInt32());
 	const int32 PageIndex = Reader.ReadInt32();
-	if (!Book.bOpen || Book.BookGuid != BookGuid || PageIndex < 0)
+	if (!Book.bOpen || Book.BookGuid != BookGuid || !Book.Pages.IsValidIndex(PageIndex))
 	{
 		return;
 	}
-	Reader.ReadUInt32(); // AuthorId
-	Reader.ReadString16L(); // AuthorName
-	Reader.ReadString16L(); // AuthorAccount
-	if (!Reader.CanRead(12))
-	{
-		return;
-	}
-	Reader.ReadUInt32(); // flags
-	const uint32 TextIncluded = Reader.ReadUInt32();
-	Reader.ReadUInt32(); // IgnoreAuthor
 	FString Text;
-	if (TextIncluded != 0)
-	{
-		Text = Reader.ReadString16L();
-	}
-	if (PageIndex >= Book.Pages.Num())
-	{
-		Book.Pages.SetNum(PageIndex + 1);
-	}
-	Book.Pages[PageIndex] = Text;
-	Book.CurrentPage = PageIndex;
-	OnBookChanged.Broadcast();
+	bool bTextIncluded = false;
+	FACEBookPageAuthor Author;
+	if (!ReadBookPage(Reader, Text, bTextIncluded, Author) || !bTextIncluded) return;
+	Book.Pages[PageIndex] = MoveTemp(Text);
+	Book.PageTextIncluded.SetNumZeroed(Book.Pages.Num());
+	Book.PageTextIncluded[PageIndex] = true;
+	Book.PageAuthors.SetNum(Book.Pages.Num());
+	Book.PageAuthors[PageIndex] = MoveTemp(Author);
+	if (PendingBookPage == PageIndex) PendingBookPage = INDEX_NONE;
+	// An old response can fill the cache but must not change the page being read.
+	if (Book.CurrentPage == PageIndex) OnBookChanged.Broadcast();
 }
 
 void FACESession::HandleContractTracker(FACEBinaryReader& Reader)
 {
 	// ContractTracker + DeleteContract + SetAsDisplayContract
-	if (!Reader.CanRead(4 + 4 + 4 + 8 + 8 + 8))
+	if (!Reader.CanRead(36))
 	{
 		return;
 	}
-	Reader.ReadUInt32(); // Version
 	FACEContractEntry Entry;
-	Entry.ContractId = static_cast<int32>(Reader.ReadUInt32());
-	Entry.Stage = static_cast<int32>(Reader.ReadUInt32());
-	Entry.TimeWhenDone = static_cast<float>(Reader.ReadDouble());
-	Entry.TimeWhenRepeats = static_cast<float>(Reader.ReadDouble());
+	if (!ReadContractTracker(Reader, Entry)) return;
 	Entry.ReceivedAt = FPlatformTime::Seconds();
 	const uint32 bDelete = Reader.ReadUInt32();
 	Reader.ReadUInt32(); // SetAsDisplay

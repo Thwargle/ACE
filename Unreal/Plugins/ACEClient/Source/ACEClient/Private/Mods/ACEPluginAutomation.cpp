@@ -106,6 +106,7 @@ void UACEPluginSubsystem::ObserveAppraisal(const FACEAppraisalInfo& Info)
     if(Info.bSuccess&&!InventoryScan)QueueLootMatch(Info.ObjectGuid);
     TargetAppraisalTimes.Add(Info.ObjectGuid,FPlatformTime::Seconds());
     Appraisals.Add(Info.ObjectGuid,Info);DirtyInventoryAppraisals.Add(Info.ObjectGuid);++DataRevision;
+    if(Client&&Client->GetWorldObject(Info.ObjectGuid,Item))RememberEquipmentAppraisal(Item,Info);
     for(const auto& P:Plugins)if(P->WaitAction==TEXT("identify")&&P->WaitItem==Info.ObjectGuid)
     {
         P->NextAction=FMath::Min(P->NextAction,P->ActionSentAt+.25);
@@ -207,6 +208,7 @@ void UACEPluginSubsystem::ObserveTargetDeleted(int32 Guid)
     // unequip. The retained owned stack/item has not been deleted or changed.
     FACEWorldObject Item;
     if(GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->GetWorldObject(Guid,Item)&&IsOwnedPluginItem(Item))return;
+    if(EquipmentAssessments.Remove(Guid))EquipmentAssessmentsDirty=true;
     for(const auto& P:Plugins)if(P->Running&&P->WaitConsumedItems.Contains(Guid)
         &&(P->WaitAction==TEXT("salvage")||P->WaitAction==TEXT("combine_salvage")))
         RefreshActionWait(*P);
@@ -354,7 +356,7 @@ void UACEPluginSubsystem::CompletePendingAction(uint32 Error)
     if(Error&&PendingSpell)OffensiveCasts.RemoveAll([this](const auto& E){return E.Spell==PendingSpell&&E.Target==PendingSpellTarget;});
     if(Error&&PendingSpell)PendingDebuffCasts.RemoveAll([this](const auto& E){return N(E->AsObject(),TEXT("spell"))==PendingSpell&&N(E->AsObject(),TEXT("target"))==uint32(PendingSpellTarget);});
     LastActionError=Error;LastCompletedSpell=PendingSpell;LastSpellConfirmed=PendingSpellConfirmed&&!PendingSpellFizzled&&!Error;++ActionSerial;
-    if(ObservedAction){auto Event=MakeShared<FJsonObject>(*ObservedAction);Event->SetStringField(TEXT("stage"),TEXT("completed"));Event->SetNumberField(TEXT("action_serial"),ActionSerial);Event->SetNumberField(TEXT("error"),Error);EmitPluginAction(Event);ObservedAction.Reset();}
+    if(ObservedAction){auto Event=MakeShared<FJsonObject>(*ObservedAction);Event->SetStringField(TEXT("stage"),TEXT("completed"));Event->SetNumberField(TEXT("action_serial"),ActionSerial);Event->SetNumberField(TEXT("error"),Error);if(PendingSpell)Event->SetBoolField(TEXT("confirmed"),LastSpellConfirmed);EmitPluginAction(Event);ObservedAction.Reset();}
     if(PendingManaRefresh&&!Error)
     {
         auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
@@ -427,10 +429,13 @@ void UACEPluginSubsystem::RecordCombatOutcome(bool Hit)
         ||C->GetSelectedObject().Guid!=PhysicalAttackTarget||!C->GetWorldObject(PhysicalAttackTarget,Target))return;
     AddCombatOutcome(PhysicalAttackTarget,Hit);
 }
-void UACEPluginSubsystem::AddCombatOutcome(int32 Target,bool Hit,bool Unhittable)
+void UACEPluginSubsystem::AddCombatOutcome(int32 Target,bool Hit,bool Unhittable,int32 Spell,int32 Damage)
 {
     auto E=MakeShared<FJsonObject>();E->SetNumberField(TEXT("serial"),++CombatOutcomeSerial);
     E->SetNumberField(TEXT("target"),uint32(Target));E->SetBoolField(TEXT("hit"),Hit);E->SetBoolField(TEXT("unhittable"),Unhittable);
+    E->SetNumberField(TEXT("time"),FPlatformTime::Seconds());
+    if(Spell)E->SetNumberField(TEXT("spell"),Spell);
+    if(Damage>0)E->SetNumberField(TEXT("damage"),Damage);
     CombatOutcomes.Add(MakeShared<FJsonValueObject>(E));if(CombatOutcomes.Num()>128)CombatOutcomes.RemoveAt(0);
 }
 void UACEPluginSubsystem::ExpireOffensiveCasts(double Now)
@@ -479,7 +484,23 @@ void UACEPluginSubsystem::ObserveOffensiveSpellChat(const FString& Text,const FS
                     ||Text.Contains(TEXT(" because beneficial spells do not affect "))));
         if(Hit||Resist||Fizzle||Invalid)
         {
-            if(Hit)AddCombatOutcome(E.Target,true);
+            if(Hit)
+            {
+                int32 Amount=0;
+                if(Damage)
+                {
+                    // Parse only this already-correlated target/spell result.
+                    const FString Before=TEXT(" ")+E.TargetName+TEXT(" for ");
+                    const int32 Match=Text.Find(Before,ESearchCase::IgnoreCase);
+                    if(Match!=INDEX_NONE)
+                    {
+                        const int32 Start=Match+Before.Len();
+                        const int32 End=Text.Find(TEXT(" points with "),ESearchCase::IgnoreCase,ESearchDir::FromStart,Start);
+                        if(End>Start){const FString Digits=Text.Mid(Start,End-Start);if(Digits.Len()<=9&&Digits.IsNumeric())Amount=FMath::Max(0,FCString::Atoi(*Digits));}
+                    }
+                }
+                AddCombatOutcome(E.Target,true,false,E.Spell,Amount);
+            }
             else if(Invalid&&C->GetSelectedObject().Guid==E.Target)AddCombatOutcome(E.Target,false,true);
             OffensiveCasts.RemoveAt(Index);break;
         }
@@ -496,7 +517,7 @@ void UACEPluginSubsystem::ObserveCombatFeedback(const FString& Name,int32 Damage
         const auto E=OffensiveCasts[Index];auto P=Find(E.Owner);
         if(P&&P->Running&&E.Started>0&&FPlatformTime::Seconds()-E.Started<3.628
             &&Name==E.TargetName&&C->GetSelectedObject().Guid==E.Target)
-        {AddCombatOutcome(E.Target,true);OffensiveCasts.RemoveAt(Index);break;}
+        {AddCombatOutcome(E.Target,true,false,E.Spell,Damage);OffensiveCasts.RemoveAt(Index);break;}
     }
 }
 void UACEPluginSubsystem::RefreshAutomationData()
@@ -505,7 +526,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Session=C->GetSession();
     if(!Session || C->GetSessionState()!=EACESessionState::InWorld)
     {
-        SaveItemBuffTimers();
+        SaveItemBuffTimers();SaveEquipmentAppraisals();EquipmentAssessments.Empty();ActionOutcomes.Empty();
         CombatTarget=0;DefeatedTargets.Empty();LastCombatDeath.Reset();LastCombatVitals=FIntVector(-1,-1,-1);
         ConfirmedBuffAckAt=BuffRetryAt=0;ConfirmedBuffOwner.Empty();DeferredBuffIntent.Reset();DeferredBuffOwner.Empty();PendingBuffResultDriven=false;
         DataPlayer=0;Appraisals.Empty();TargetAppraisalTimes.Empty();TargetHealthSamples.Empty();CorpseFirstSeen.Empty();LootedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();CachedInventory.Empty();CachedInventoryIndices.Empty();DirtyInventoryAppraisals.Empty();ClearBuffRequests();
@@ -513,7 +534,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
     }
     if(DataPlayer!=C->GetPlayerGuid()||DataServer!=C->GetServerName()||ObservedSession.Pin()!=Session)
     {
-        SaveItemBuffTimers();
+        SaveItemBuffTimers();SaveEquipmentAppraisals();
         UnbindCombatEvents();CombatTarget=0;DefeatedTargets.Empty();LastCombatDeath.Reset();LastCombatVitals=FIntVector(-1,-1,-1);
         ConfirmedBuffAckAt=BuffRetryAt=0;ConfirmedBuffOwner.Empty();DeferredBuffIntent.Reset();DeferredBuffOwner.Empty();PendingBuffResultDriven=false;
         if(auto Old=ObservedSession.Pin()){Old->OnItemUseRequested.Remove(ItemUseHandle);Old->OnUseDone.Remove(UseDoneHandle);Old->OnSpellCastRequested.Remove(SpellCastHandle);Old->OnPlayerTell.Remove(TellHandle);Old->OnChatMessage.Remove(MetaChatHandle);Old->OnCombatFeedback.Remove(CombatFeedbackHandle);}
@@ -528,14 +549,15 @@ void UACEPluginSubsystem::RefreshAutomationData()
         TargetDeletedHandle=Session->OnObjectDeleted.AddUObject(this,&UACEPluginSubsystem::ObserveTargetDeleted);
         TargetCreatedHandle=Session->OnObjectCreated.AddUObject(this,&UACEPluginSubsystem::ObserveTargetCreated);
         CombatVitalsHandle=Session->OnVitalsUpdated.AddUObject(this,&UACEPluginSubsystem::ObserveCombatVitals);
-        PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();CombatOutcomes.Empty();OffensiveCasts.Empty();
+        PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();CombatOutcomes.Empty();OffensiveCasts.Empty();ActionOutcomes.Empty();
         TellHandle=Session->OnPlayerTell.AddUObject(this,&UACEPluginSubsystem::ObservePlayerTell);ClearBuffRequests();
         DataPlayer=C->GetPlayerGuid();DataServer=C->GetServerName();NextAppraisalScan=0;Appraisals.Empty();TargetAppraisalTimes.Empty();TargetHealthSamples.Empty();CachedSpeciesNames.Reset();CorpseFirstSeen.Empty();LootedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();
-        LoadItemBuffTimers();
+        LoadItemBuffTimers();LoadEquipmentAppraisals();
         CachedInventory.Empty();CachedInventoryIndices.Empty();DirtyInventoryAppraisals.Empty();
         PendingSpell=0;PendingSpellOwner.Empty();FastCastOwner.Empty();PendingResourceRefresh.Empty();PendingManaRefresh=false;Debuffs.Empty();PendingDebuffCasts.Empty();InventoryRevision=MAX_uint64;++DataRevision;C->BackgroundAppraisals.Empty();
     }
     ExpireOffensiveCasts(FPlatformTime::Seconds());
+    if(FPlatformTime::Seconds()>=NextEquipmentAssessmentSave)SaveEquipmentAppraisals();
     const double EffectNow=FPlatformTime::Seconds();
     Debuffs.RemoveAll([&](const auto& E){return N(E->AsObject(),TEXT("expires"))<=EffectNow
         ||!Session->GetWorldObjects().Contains(int32(uint32(N(E->AsObject(),TEXT("target")))));});
@@ -785,6 +807,7 @@ TSharedPtr<FJsonValue> UACEPluginSubsystem::PluginItemSnapshot(const FACEWorldOb
         J->SetNumberField(TEXT("armor"),A->IntProperties.FindRef(28));
         J->SetNumberField(TEXT("spell"),Item.SpellDID);
     }
+    AddEquipmentSnapshot(Item,J);
     return MakeShared<FJsonValueObject>(J);
 }
 void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
@@ -805,6 +828,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
     Out->SetArrayField(TEXT("confirmations"),Confirmations);
     Out->SetNumberField(TEXT("chat_serial"),MetaChatSerial);Out->SetArrayField(TEXT("chat_events"),MetaChatEvents);
     Out->SetArrayField(TEXT("combat_events"),CombatOutcomes);
+    Out->SetArrayField(TEXT("action_events"),ActionOutcomes);
     if(LastCombatDeath)Out->SetObjectField(TEXT("combat_death"),LastCombatDeath);
     else Out->RemoveField(TEXT("combat_death"));
     Out->SetNumberField(TEXT("portal_serial"),MetaPortalSerial);Out->SetArrayField(TEXT("portal_events"),MetaPortalEvents);Out->SetBoolField(TEXT("portal_space"),MetaPortalSpace);
@@ -986,9 +1010,13 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
             {
                 J->SetNumberField(TEXT("creature_type"),A->CreatureType);
                 J->SetNumberField(TEXT("max_health"),A->MaxHealth);
+                if(A->bHasCreatureHealth&&A->MaxHealth>0)
+                {J->SetNumberField(TEXT("health"),A->Health);J->SetNumberField(TEXT("health_fraction"),double(A->Health)/A->MaxHealth);J->SetNumberField(TEXT("health_observed_at"),TargetAppraisalTimes.FindRef(Obj.Guid));}
                 const int Props[]={64,65,66,67,68,69,70,166};
                 for(int I=0;I<8;++I)if(const double* R=A->FloatProperties.Find(Props[I]))Resist->SetNumberField(FString::FromInt(I==7?1024:1<<I),*R);
             }
+            if(const auto* Health=TargetHealthSamples.Find(Obj.Guid);Health&&(!A||!A->bSuccess||Health->ReceivedAt>TargetAppraisalTimes.FindRef(Obj.Guid)))
+            {J->RemoveField(TEXT("health"));J->SetNumberField(TEXT("health_fraction"),Health->Fraction);J->SetNumberField(TEXT("health_observed_at"),Health->ReceivedAt);}
             J->SetObjectField(TEXT("resists"),Resist);Targets.Add(MakeShared<FJsonValueObject>(J));
         }
         else if(Obj.IsCorpse())
@@ -1276,7 +1304,7 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
             }
             return true;
         }
-        const auto* A=Appraisals.Find(Id);
+        const auto* A=Found?GetEquipmentAppraisal(Item):nullptr;
         if(!Found||!IsOwnedPluginItem(Item)||!A||!A->bSuccess){ReportActivityFailure(P,I,TEXT("Equipment is no longer owned or its appraisal is unavailable"));return true;}
         const FString WieldFailure=ACEPluginEquipment::WieldFailure(*A,C->GetPlayerVitalsView());
         if(!WieldFailure.IsEmpty()){ReportActivityFailure(P,I,ACERetailObjectNames::Name(Item)+TEXT(": ")+WieldFailure);return true;}
@@ -1766,7 +1794,7 @@ void UACEPluginSubsystem::ExtendInventorySnapshot(const TSharedPtr<FJsonObject>&
     {
         InventoryWieldInt64Keys.Reset();
         for(const auto& Pair:Session->GetWorldObjects())if(IsOwnedPluginItem(Pair.Value))
-            if(const auto* A=Appraisals.Find(Pair.Key);A&&A->bSuccess)
+            if(const auto* A=GetEquipmentAppraisal(Pair.Value);A&&A->bSuccess)
                 for(int32 Key:{158,270,273,276})if(A->IntProperties.FindRef(Key)==13)
                     InventoryWieldInt64Keys.Add(A->IntProperties.FindRef(Key+1));
     }
@@ -1819,5 +1847,8 @@ void UACEPluginSubsystem::ObserveItemUse(int32 Source,int32 Target)
 void UACEPluginSubsystem::EmitPluginAction(const TSharedPtr<FJsonObject>& Event)
 {
     Event->SetNumberField(TEXT("time"),FPlatformTime::Seconds());
+    if(S(Event,TEXT("stage"))==TEXT("requested"))Event->SetNumberField(TEXT("requested_at"),N(Event,TEXT("time")));
+    else if(S(Event,TEXT("stage"))==TEXT("completed"))
+    {ActionOutcomes.Add(MakeShared<FJsonValueObject>(MakeShared<FJsonObject>(*Event)));if(ActionOutcomes.Num()>64)ActionOutcomes.RemoveAt(0);}
     for(const auto& P:Plugins)if(P->Running&&P->Enabled&&P->HasPresentation()&&P->Permissions.Contains(TEXT("data")))QueuePluginEvent(*P,MakeShared<FJsonObject>(*Event));
 }

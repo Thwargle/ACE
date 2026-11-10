@@ -20,6 +20,12 @@ struct FACEConfirmation
 	FString Prompt;
 };
 
+struct FACEServerPopup
+{
+	uint64 Id = 0;
+	FString Message;
+};
+
 DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnSessionStateChanged, EACESessionState);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FACEOnCharacterList, const TArray<FACECharacterInfo>&, const FString& /*ServerName*/);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FACEOnEnteredWorld, int32 /*PlayerGuid*/, const FACEPosition& /*SpawnPos*/);
@@ -84,8 +90,17 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEDesktopHighlightTest;
 	friend class FACEPluginEquipmentTest;
 	friend class FACEPluginRequestsTest;
+	friend class FACEEquipmentAssessmentCacheTest;
 	friend class FACEAppraisalCommandContextTest;
 	friend class FACEVendorTransactionsTest;
+	friend class FACETradeParityTest;
+	friend class FACESocialNetworkParityTest;
+	friend class FACEBookContainerParityTest;
+	friend class FACEBookWritingTest;
+	friend class FACEContractNetworkParityTest;
+	friend class FACEEnchantmentNetworkParityTest;
+	friend class FACEHousingNetworkParityTest;
+	friend class FACEServerDialogsTest;
 	friend class FACEUCMLootLatencyTest;
 	friend class FACEUCMLootNotificationTest;
 	friend class FACEPluginLootIconsTest;
@@ -170,6 +185,10 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACECameraEdgeTest;
 	friend class FACERetailParticleTimingTest;
 	friend class FACERetailStatsTest;
+	friend class FACEPrivateStatParityTest;
+	friend class FACELivePropertyUpdatesTest;
+	friend class FACEQualityRemovalTest;
+	friend class FACEAttackerIdentityTest;
 	friend class FACERetailAugmentationStatsTest;
 	friend class FACEAugmentationTest;
 	friend class FACERetailInventoryOrderTest;
@@ -272,6 +291,9 @@ public:
 	/** Retail CObjectMaint grace period outside cell/PVS interest, independent of the camera. */
 	void MaintainWorldObjectVisibility(double Now, TFunctionRef<bool(int32)> IsCellInPVS);
 	const TArray<FACEConfirmation>& GetConfirmations() const { return Confirmations; }
+	const TArray<FACEServerPopup>& GetServerPopups() const { return ServerPopups; }
+	/** Informational server messages close locally; they are not confirmation replies. */
+	bool DismissServerPopup(uint64 Id);
 	bool RespondToConfirmation(uint32 Type, uint32 Context, bool Accept);
 
 	EACESessionState GetState() const { return State; }
@@ -311,7 +333,7 @@ public:
 	}
 
 	/** Active enchantments (attribute + skill + vitae + …); excludes cooldown entries. */
-	void GetActiveEnchantments(TArray<FACEActiveEnchantment>& Out) const;
+	void GetActiveEnchantments(TArray<FACEActiveEnchantment>& Out, bool bIncludeCooldowns = false) const;
 	/** Retail's ten cooldown icon phases; zero means no active server cooldown. Now is monotonic time. */
 	int32 GetItemCooldownPhase(const FACEWorldObject& Object, double Now) const;
 	/** Vitae StatModValue (1.0 = none). False when no Vitae enchantment is active. */
@@ -498,8 +520,11 @@ public:
 	int32 GetOpenExternalContainerGuid() const { return OpenExternalContainerGuid; }
 	int32 GetOpenVendorGuid() const { return OpenVendorGuid; }
 	int32 GetTradePartnerGuid() const { return TradePartnerGuid; }
-	/** Guid of whoever last accepted the trade (0 = nobody). Drives TradeOtherTradeIndicator. */
-	int32 GetTradeAcceptedGuid() const { return TradeAcceptedByGuid; }
+	/** Independent retail trade acceptance; both players can accept simultaneously. */
+	bool HasAcceptedTrade() const { return bTradeSelfAccepted; }
+	bool HasPartnerAcceptedTrade() const { return bTradePartnerAccepted; }
+	/** Compatibility accessor: self when accepted, otherwise partner, otherwise zero. */
+	int32 GetTradeAcceptedGuid() const { return bTradeSelfAccepted ? PlayerGuid : bTradePartnerAccepted ? TradePartnerGuid : 0; }
 	/** Merchandise from the last ApproachVendor (GameDataOnly PublicWeenieDesc list). */
 	const TArray<FACEWorldObject>& GetVendorMerchandise() const { return VendorMerchandise; }
 	float GetVendorBuyRate() const { return VendorBuyRate; }
@@ -611,6 +636,11 @@ public:
 	/** GameAction BookData (0x00AA) / BookPageData (0x00AE). */
 	void SendBookData(int32 BookGuid);
 	void SendBookPageData(int32 BookGuid, int32 PageIndex);
+	bool CanEditBookPage() const;
+	FString GetBookPageText() const;
+	bool SetBookPageText(const FString& Text);
+	void TurnBookPage(int32 PageIndex);
+	bool IsBookWritePending() const { return BookWriteAction != 0; }
 	/** Chess resign / pass / offer-or-confirm stalemate. */
 	void SendChessQuit();
 	void SendChessMovePass();
@@ -816,14 +846,21 @@ private:
 	void HandleTell(FACEBinaryReader& Reader);
 	void HandlePlayerDescription(FACEBinaryReader& Reader);
 	void HandlePrivateUpdateAttribute(FACEBinaryReader& Reader);
+	void HandlePrivateUpdateAttributeLevel(FACEBinaryReader& Reader);
 	void HandlePrivateUpdateVital(FACEBinaryReader& Reader);
 	void HandlePrivateUpdateAttribute2ndLevel(FACEBinaryReader& Reader);
 	void HandlePrivateUpdateSkill(FACEBinaryReader& Reader);
+	void HandlePrivateUpdateSkillValue(FACEBinaryReader& Reader, bool bAdvancementClass);
+	FACESkillInfo& FindOrAddPlayerSkill(int32 SkillId);
+	void UpdatePlayerSkillFallback(FACESkillInfo& Skill);
 	void HandlePrivateUpdatePropertyInt(FACEBinaryReader& Reader);
 	bool ApplyPlayerInventoryCapacity(FACEWorldObject& Object) const;
 	void HandlePrivateUpdatePropertyInt64(FACEBinaryReader& Reader, bool bPublic = false);
 	void HandleUpdatePropertyFloat(FACEBinaryReader& Reader, bool bPublic);
 	void HandleUpdatePropertyString(FACEBinaryReader& Reader, bool bPublic);
+	void ApplyPlayerIntQuality(uint32 Key, int32 Value);
+	void HandleRemoveProperty(FACEBinaryReader& Reader, uint32 Family, bool bPublic);
+	bool ReadStringPropertyHeader(FACEBinaryReader& Reader, bool bPublic, int32& Guid, uint32& Property) const;
 	void HandleUpdatePropertyBool(FACEBinaryReader& Reader, bool bPublic);
 	void HandleUpdateHealth(FACEBinaryReader& Reader);
 	void HandleQueryItemManaResponse(FACEBinaryReader& Reader);
@@ -851,6 +888,7 @@ private:
 	void HandleFellowshipDismissEvent(FACEBinaryReader& Reader);
 	void HandleFellowshipDisband(FACEBinaryReader& Reader);
 	void HandleAllegianceUpdate(FACEBinaryReader& Reader);
+	void HandleAllegianceInfoResponse(FACEBinaryReader& Reader);
 	void HandleAllegianceLoginNotification(FACEBinaryReader& Reader);
 	void HandleFriendsListUpdate(FACEBinaryReader& Reader);
 	void HandleSalvageOperationsResult(FACEBinaryReader& Reader);
@@ -858,14 +896,24 @@ private:
 	void HandleContractTracker(FACEBinaryReader& Reader);
 	void HandleSetSquelchDB(FACEBinaryReader& Reader);
 	void HandleHouseData(FACEBinaryReader& Reader);
+	void HandleServerDialog(uint32 Event, FACEBinaryReader& Reader);
 	void HandleHouseProfile(FACEBinaryReader& Reader);
 	void HandleAvailableHouses(FACEBinaryReader& Reader);
 	bool IsHousePaymentOwned(int32 Guid) const;
 	TArray<int32> CollectHousePaymentItems(int32 Guid, bool bRent) const;
 	void HandleHouseStatus(FACEBinaryReader& Reader);
+	void HandleHouseUpdateRentTime(FACEBinaryReader& Reader);
+	void HandleHouseUpdateRentPayment(FACEBinaryReader& Reader);
+	void HandleHouseUpdateHAR(FACEBinaryReader& Reader);
 	void HandleBookDataResponse(FACEBinaryReader& Reader);
 	void HandleBookPageDataResponse(FACEBinaryReader& Reader);
+	void HandleBookWriteResponse(uint32 Event, FACEBinaryReader& Reader);
+	bool SaveBookPage(int32 NextPage);
+	void OpenBookPage(int32 PageIndex);
+	void ResetBookEditing();
+	void CheckBookWriteTimeout();
 	bool ReadAllegianceData(FACEBinaryReader& Reader, FACEAllegianceMember& Out);
+	bool ReadAllegianceProfile(FACEBinaryReader& Reader, int32 TargetGuid, FACEAllegianceInfo& Out);
 	void HandleCharacterTitle(FACEBinaryReader& Reader);
 	void HandleUpdateTitle(FACEBinaryReader& Reader);
 	void HandleUseDone(FACEBinaryReader& Reader);
@@ -875,6 +923,8 @@ private:
 	void HandlePublicUpdatePropertyDataID(FACEBinaryReader& Reader);
 	void HandlePrivateUpdatePropertyDataID(FACEBinaryReader& Reader);
 	void HandlePublicUpdateInstanceId(FACEBinaryReader& Reader);
+	void HandlePrivateUpdateInstanceId(FACEBinaryReader& Reader);
+	void ApplyPropertyInstanceId(int32 Guid, uint32 Prop, int32 Value);
 	void HandleInventoryRemoveObject(FACEBinaryReader& Reader);
 	void HandleSetStackSize(FACEBinaryReader& Reader);
 	void HandleInventoryPutObjInContainer(FACEBinaryReader& Reader);
@@ -954,6 +1004,7 @@ private:
 	void HandlePingResponse(FACEBinaryReader& Reader);
 	void RecomputeAttributeEnchantments(FACEPlayerVitals& OutVitals);
 	bool ReadEnchantmentRecord(FACEBinaryReader& Reader, FACEActiveEnchantment& Out);
+	bool ReadEnchantmentList(FACEBinaryReader& Reader, TArray<FACEActiveEnchantment>& Out);
 	void UpsertEnchantment(const FACEActiveEnchantment& Entry);
 	void RemoveEnchantment(uint16 SpellId, uint16 Layer);
 	void NotifyEnchantmentsChanged();
@@ -1019,6 +1070,8 @@ private:
 	FString AccountName;
 	EACESessionState State = EACESessionState::Disconnected;
 	TArray<FACEConfirmation> Confirmations;
+	TArray<FACEServerPopup> ServerPopups;
+	uint64 NextServerPopupId = 0;
 	double LastServerPacketAt = 0.0;
 	double LastServerDatagramAt = 0.0;
 	double LastReceivePortKeepaliveAt = 0.0;
@@ -1173,7 +1226,9 @@ private:
 	int32 VendorMaxValue = -1;
 	/** Current trade partner (0 = none). */
 	int32 TradePartnerGuid = 0;
-	int32 TradeAcceptedByGuid = 0;
+	bool bTradeSelfAccepted = false;
+	bool bTradePartnerAccepted = false;
+	double TradeStamp = 0.0;
 	TArray<int32> TradeSelfItems;
 	// A completed trade must not remove an offered item twice if ACE returned it.
 	TSet<int32> TradeRemovedItems;
@@ -1201,6 +1256,7 @@ private:
 	uint32 DisplayTitleId = 0;
 	TArray<uint32> CharacterTitleIds;
 	FACEFellowshipInfo Fellowship;
+	bool bFellowshipUpdatesRequested = false;
 	FACEAllegianceInfo Allegiance;
 	TArray<FACEFriendInfo> Friends;
 	TArray<FACEContractEntry> Contracts;
@@ -1213,6 +1269,13 @@ private:
 	uint64 HouseOfferRevision = 0;
 	TArray<int32> HouseBuyItems, HouseRentItems;
 	FACEBookInfo Book;
+	int32 PendingBookPage = INDEX_NONE;
+	uint32 BookWriteAction = 0;
+	int32 BookWritePage = INDEX_NONE, BookNextPage = INDEX_NONE;
+	double BookWriteRequestedAt = 0.;
+	FString BookDraft, BookWriteText;
+	bool bBookDraft = false, bBookRefreshRequired = false;
+	double BookPageRequestedAt = 0.0;
 	int32 GlobalSquelchMask = 0;
 	TMap<int32, int32> DesiredComponents;
 	/** Initiator of the current trade window (from RegisterTrade). */

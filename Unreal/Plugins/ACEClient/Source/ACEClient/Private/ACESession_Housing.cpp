@@ -45,7 +45,7 @@ bool ReadHousePayments(FACEBinaryReader& R,TArray<FACEHousePayment>& Payments)
 {
 	if (!R.CanRead(4)) return false;
 	const uint32 Count=R.ReadUInt32();
-	if (Count>256 || Count>uint32(R.Remaining()/20)) return false;
+	if (Count>uint32(R.Remaining()/20)) return false;
 	for(uint32 I=0;I<Count;++I)
 	{
 		if (!R.CanRead(12)) return false;
@@ -55,6 +55,101 @@ bool ReadHousePayments(FACEBinaryReader& R,TArray<FACEHousePayment>& Payments)
 	}
 	return true;
 }
+}
+
+void FACESession::HandleHouseData(FACEBinaryReader& R)
+{
+	// HouseData::UnPack requires both payment lists and the complete position.
+	// Share the profile decoder so truncated strings cannot become empty names.
+	if (!R.CanRead(16)) return;
+	FACEHouseInfo Info;
+	Info.bQueried=true; Info.bOwned=true;
+	Info.BuyTime=R.ReadUInt32(); Info.RentTime=R.ReadUInt32();
+	Info.HouseType=R.ReadInt32(); Info.bMaintenanceFree=R.ReadUInt32()!=0;
+	if (!ReadHousePayments(R,Info.Buy) || !ReadHousePayments(R,Info.Rent) || !R.CanRead(32)) return;
+	FACEBinaryReader PositionCheck=R;
+	PositionCheck.Skip(4);
+	for (int32 I=0;I<7;++I) if (!FMath::IsFinite(PositionCheck.ReadFloat())) return;
+	Info.Position=R.ReadPosition();
+	House=MoveTemp(Info);
+	OnHouseChanged.Broadcast();
+}
+
+void FACESession::HandleHouseStatus(FACEBinaryReader& R)
+{
+	if (!R.CanRead(4)) return;
+	House={}; House.bQueried=true; House.StatusError=R.ReadInt32();
+	OnHouseChanged.Broadcast();
+}
+
+void FACESession::HandleHouseUpdateRentTime(FACEBinaryReader& R)
+{
+	if (!R.CanRead(4)) return;
+	const int64 RentTime=R.ReadUInt32();
+	if (!House.bOwned) return;
+	// gmHouseUI::RecvNotice_UpdateRentTime starts a new period and clears payments.
+	House.RentTime=RentTime;
+	for (auto& Payment:House.Rent) Payment.Paid=0;
+	OnHouseChanged.Broadcast();
+}
+
+void FACESession::HandleHouseUpdateRentPayment(FACEBinaryReader& R)
+{
+	TArray<FACEHousePayment> Payments;
+	if (!ReadHousePayments(R,Payments) || !House.bOwned) return;
+	// Retail replaces this list rather than adding the paid amounts again.
+	House.Rent=MoveTemp(Payments);
+	OnHouseChanged.Broadcast();
+}
+
+void FACESession::HandleHouseUpdateHAR(FACEBinaryReader& R)
+{
+	// ClientHousingSystem prints HAR::Dump(false): guests, storage stars,
+	// allegiance permissions and open-house status; roommate IDs are not printed.
+	if (!R.CanRead(4)) return;
+	const uint32 Header=R.ReadUInt32();
+	const bool bVersioned=(Header&0xffff0000u)!=0;
+	uint32 Flags=Header?1u:0u;
+	if (bVersioned)
+	{
+		if (!R.CanRead(8)) return;
+		Flags=R.ReadUInt32(); R.ReadUInt32(); // Monarch GUID is not printed by retail.
+	}
+	if (!R.CanRead(4)) return;
+	const uint32 Count=R.ReadUInt16(), Buckets=R.ReadUInt16();
+	if ((Count && !Buckets) || Count>uint32(R.Remaining()/12)) return;
+	struct FGuest { uint32 Guid; bool bStorage; FString Name; };
+	TArray<FGuest> Guests;
+	TSet<uint32> GuestIds;
+	for (uint32 I=0;I<Count;++I)
+	{
+		if (!R.CanRead(8)) return;
+		FGuest Guest; Guest.Guid=R.ReadUInt32(); Guest.bStorage=R.ReadUInt32()!=0;
+		if (!ReadHouseString(R,Guest.Name)) return;
+		// Retail's HAR hash table rejects duplicate keys during unpacking.
+		if (GuestIds.Contains(Guest.Guid)) return;
+		GuestIds.Add(Guest.Guid); Guests.Add(MoveTemp(Guest));
+	}
+	if (bVersioned && Header>=0x10000002u)
+	{
+		if (!R.CanRead(4)) return;
+		const uint32 Roommates=R.ReadUInt32();
+		if (Roommates>uint32(R.Remaining()/4)) return;
+		R.Skip(int32(Roommates*4));
+	}
+	FString Report=TEXT("Guests:\n");
+	if (Guests.IsEmpty()) Report+=TEXT("  None\n");
+	for (const auto& Guest:Guests)
+		Report+=TEXT("  ")+Guest.Name+(Guest.bStorage?TEXT(" *\n"):TEXT("\n"));
+	if (Flags&6u)
+	{
+		Report+=TEXT("Allegiance Permissions: ");
+		if (Flags&2u) Report+=TEXT("guest access");
+		if (Flags&4u) Report+=TEXT("storage access");
+		Report+=TEXT("\n");
+	}
+	if (Flags&1u) Report+=TEXT("[ open house ]\n");
+	EmitChatMessage(Report,FString(),ACEChatMessageType::Broadcast);
 }
 
 void FACESession::HandleHouseProfile(FACEBinaryReader& R)

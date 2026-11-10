@@ -74,6 +74,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACECameraEdgeTest;
 	friend class FACEParticleDistanceTest;
 	friend class FACEInputBindingsTest;
+	friend class FACEAttackerIdentityTest;
 	friend class FACEDesktopHighlightTest;
 	friend class FACERetailScreenTest;
     friend class UACEUICharSelectBinder;
@@ -464,6 +465,7 @@ protected:
 	bool bLeftMouseWasDown = false;
 	bool bLeftOrbitEligible = false;
 	void CycleNearbyTarget(bool bEnemies, int32 Direction);
+	void SelectLastAttacker();
 	bool bRightClickEligible = false;
 	bool bMouseLookMovedPlayer = false;
 	bool bMouseForwardActive = false;

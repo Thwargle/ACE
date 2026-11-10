@@ -949,6 +949,8 @@ struct ACECLIENT_API FACESkillInfo
 	int32 GetDisplayModifier() const { return Current - GetDisplayBase(); }
 	/** Cumulative XP spent raising this skill (PropertySkill.PP). */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 XpSpent = 0;
+	/** Compact SAC updates recalculate ranks from XP once the DAT curve is available. */
+	bool bRecomputeRanksFromXp = false;
 };
 
 USTRUCT(BlueprintType)
@@ -1889,7 +1891,7 @@ struct ACECLIENT_API FACESquelchEntry
 	}
 };
 
-/** One row of the server's ContractTracker table (GameEvent 0x0298 / 0x0299). */
+/** One row of the server's ContractTracker table (GameEvent 0x0314 / 0x0315). */
 USTRUCT(BlueprintType)
 struct ACECLIENT_API FACEContractEntry
 {
@@ -1898,8 +1900,8 @@ struct ACECLIENT_API FACEContractEntry
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 ContractId = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Stage = 0;
 	/** Remaining seconds supplied by ContractTracker; 0 when not timed. */
-	UPROPERTY(BlueprintReadOnly, Category = "ACE") float TimeWhenDone = 0.f;
-	UPROPERTY(BlueprintReadOnly, Category = "ACE") float TimeWhenRepeats = 0.f;
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") double TimeWhenDone = 0.0;
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") double TimeWhenRepeats = 0.0;
 	double ReceivedAt = 0.0;
 };
 
@@ -1950,6 +1952,15 @@ struct ACECLIENT_API FACEHouseInfo
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 StatusError = 0;
 };
 
+USTRUCT(BlueprintType)
+struct ACECLIENT_API FACEBookPageAuthor
+{
+	GENERATED_BODY()
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Guid = 0;
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") FString Name;
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") bool bIgnoreAuthor = false;
+};
+
 /** Open book state from BookDataResponse / BookPageDataResponse. */
 USTRUCT(BlueprintType)
 struct ACECLIENT_API FACEBookInfo
@@ -1966,6 +1977,13 @@ struct ACECLIENT_API FACEBookInfo
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") FString Inscription;
 	/** Page texts keyed by 0-based index (filled as BookPageData arrives). */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") TArray<FString> Pages;
+	/** A received empty page is different from a page whose text has not arrived. */
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") TArray<bool> PageTextIncluded;
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") TArray<FACEBookPageAuthor> PageAuthors;
+	bool HasPageText(int32 Index) const
+	{
+		return Pages.IsValidIndex(Index) && PageTextIncluded.IsValidIndex(Index) && PageTextIncluded[Index];
+	}
 };
 
 USTRUCT(BlueprintType)

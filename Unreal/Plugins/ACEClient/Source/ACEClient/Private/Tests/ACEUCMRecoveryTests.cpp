@@ -363,9 +363,13 @@ bool FACEUCMRecoveryTest::RunTest(const FString&)
                 FACEPluginVM Fallback;Fallback.Load(Source,Error);
                 TestEqual(TEXT("Kit preference starts with the kit"),Step(Fallback,S,P)->GetStringField(TEXT("action")),FString(TEXT("use_item")));
                 if(Timeout)S->SetNumberField(TEXT("time"),109);
-                else {S->SetNumberField(TEXT("action_serial"),1);S->SetNumberField(TEXT("action_error"),1);}
+                else
+                {
+                    S->SetNumberField(TEXT("action_serial"),1);S->SetNumberField(TEXT("action_error"),1);
+                    S->SetArrayField(TEXT("action_events"),{MakeShared<FJsonValueObject>(RecoveryJson(TEXT(R"({"type":"use","source":42,"action_serial":1,"requested_at":100,"error":1})")))});
+                }
                 TestEqual(TEXT("Failed or unconfirmed kit falls back to a recovery spell"),Step(Fallback,S,P)->GetStringField(TEXT("action")),FString(TEXT("cast")));
-                S->SetNumberField(TEXT("time"),100);S->SetNumberField(TEXT("action_serial"),0);S->SetNumberField(TEXT("action_error"),0);
+                S->SetNumberField(TEXT("time"),100);S->SetNumberField(TEXT("action_serial"),0);S->SetNumberField(TEXT("action_error"),0);S->RemoveField(TEXT("action_events"));
             }
             Inventory[1]->AsObject()->SetNumberField(TEXT("structure"),0);
             FACEPluginVM Empty;Empty.Load(Source,Error);
@@ -385,6 +389,46 @@ bool FACEUCMRecoveryTest::RunTest(const FString&)
         FACEPluginVM Exempt;Exempt.Load(Source,Error);TestEqual(TEXT("Server component exemption keeps recovery spells available"),Step(Exempt,S,P)->GetStringField(TEXT("action")),FString(TEXT("cast")));
         S->SetNumberField(TEXT("last_spell"),Heal->GetNumberField(TEXT("id")));S->SetNumberField(TEXT("action_serial"),1);S->SetNumberField(TEXT("action_error"),1);
         TestEqual(TEXT("Rejected recovery spell falls back without waiting eight seconds or stopping"),Step(Exempt,S,P)->GetStringField(TEXT("action")),FString(TEXT("use_item")));
+    }
+    // Recovery confirmations are independent: waiting for a mana potion must
+    // not hold up health, nor may another action's result acknowledge that potion.
+    {
+        FACEPluginVM Priority;Priority.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("recovery_supplies_first"),true);
+        S->SetArrayField(TEXT("inventory"),RecoveryJson(TEXT(R"({"items":[{"id":42,"wcid":42,"name":"Health potion","type":32,"usable":true,"identified":true,"boost_vital":2,"boost":100,"count":10},{"id":44,"wcid":44,"name":"Stamina potion","type":32,"usable":true,"identified":true,"boost_vital":4,"boost":100,"count":10},{"id":46,"wcid":46,"name":"Mana potion","type":32,"usable":true,"identified":true,"boost_vital":6,"boost":100,"count":10}]})"))->GetArrayField(TEXT("items")));
+        S->SetArrayField(TEXT("action_events"),{});S->SetNumberField(TEXT("mana"),20);
+        TestEqual(TEXT("Begin mana recovery"),Step(Priority,S,P)->GetNumberField(TEXT("item")),46.);
+        S->SetNumberField(TEXT("time"),101);S->SetNumberField(TEXT("health"),20);S->SetBoolField(TEXT("busy"),true);
+        TestFalse(TEXT("Health cannot bypass an active native action gate"),Step(Priority,S,P)->HasField(TEXT("action")));
+        S->SetBoolField(TEXT("busy"),false);S->SetNumberField(TEXT("action_serial"),1);S->SetNumberField(TEXT("action_error"),1);
+        S->SetArrayField(TEXT("action_events"),{MakeShared<FJsonValueObject>(RecoveryJson(TEXT(R"({"type":"use","source":99,"action_serial":1,"requested_at":100,"error":1})")))});
+        TestEqual(TEXT("Health preempts unconfirmed mana without waiting eight seconds"),Step(Priority,S,P)->GetNumberField(TEXT("item")),42.);
+        S->SetNumberField(TEXT("health"),100);S->SetNumberField(TEXT("time"),102);S->SetNumberField(TEXT("action_serial"),2);
+        S->SetArrayField(TEXT("action_events"),{MakeShared<FJsonValueObject>(RecoveryJson(TEXT(R"({"type":"use","source":42,"action_serial":2,"requested_at":101,"error":0})")))});
+        TestFalse(TEXT("Health receipt cannot complete or duplicate pending mana"),Step(Priority,S,P)->HasField(TEXT("action")));
+        S->SetNumberField(TEXT("stamina"),20);S->SetNumberField(TEXT("time"),103);
+        TestEqual(TEXT("Stamina also outranks pending mana"),Step(Priority,S,P)->GetNumberField(TEXT("item")),44.);
+        S->SetNumberField(TEXT("stamina"),100);S->SetNumberField(TEXT("time"),104);
+        S->SetArrayField(TEXT("action_events"),{MakeShared<FJsonValueObject>(RecoveryJson(TEXT(R"({"type":"use","source":46,"action_serial":3,"requested_at":99,"error":1})")))});
+        TestFalse(TEXT("Late receipt for an earlier use of the same item is ignored"),Step(Priority,S,P)->HasField(TEXT("action")));
+        S->SetArrayField(TEXT("action_events"),{MakeShared<FJsonValueObject>(RecoveryJson(TEXT(R"({"type":"use","source":46,"action_serial":4,"requested_at":100,"error":0})")))});
+        TestFalse(TEXT("UseDone alone cannot invent a restored vital"),Step(Priority,S,P)->HasField(TEXT("action")));
+        S->SetNumberField(TEXT("mana"),100);S->SetNumberField(TEXT("time"),105);
+        TestFalse(TEXT("Late vital replication completes the original mana operation"),Step(Priority,S,P)->HasField(TEXT("action")));
+    }
+    {
+        FACEPluginVM Priority;Priority.Load(Source,Error);auto S=Snapshot(),P=Profile();
+        auto Mana=Spells.FindRef(TEXT("Stamina to Mana Self I")),Heal=Spells.FindRef(TEXT("Heal Self I"));
+        S->SetArrayField(TEXT("spells"),{MakeShared<FJsonValueObject>(Mana),MakeShared<FJsonValueObject>(Heal)});
+        S->SetArrayField(TEXT("action_events"),{});S->SetNumberField(TEXT("mana"),20);
+        TestEqual(TEXT("Begin mana spell recovery"),Step(Priority,S,P)->GetNumberField(TEXT("spell")),Mana->GetNumberField(TEXT("id")));
+        S->SetNumberField(TEXT("time"),101);S->SetNumberField(TEXT("health"),20);S->SetNumberField(TEXT("action_serial"),1);
+        TestEqual(TEXT("Health spell preempts mana awaiting result"),Step(Priority,S,P)->GetNumberField(TEXT("spell")),Heal->GetNumberField(TEXT("id")));
+        auto FailedMana=RecoveryJson(TEXT(R"({"type":"cast","target":1,"action_serial":2,"requested_at":100,"error":1,"confirmed":false})"));FailedMana->SetNumberField(TEXT("spell"),Mana->GetNumberField(TEXT("id")));
+        S->SetNumberField(TEXT("time"),102);S->SetArrayField(TEXT("action_events"),{MakeShared<FJsonValueObject>(FailedMana)});
+        TestFalse(TEXT("Delayed mana failure does not reject or repeat in-flight healing"),Step(Priority,S,P)->HasField(TEXT("action")));
+        auto ConfirmedHeal=RecoveryJson(TEXT(R"({"type":"cast","target":1,"action_serial":3,"requested_at":101,"error":0,"confirmed":true})"));ConfirmedHeal->SetNumberField(TEXT("spell"),Heal->GetNumberField(TEXT("id")));
+        S->SetArrayField(TEXT("action_events"),{MakeShared<FJsonValueObject>(FailedMana),MakeShared<FJsonValueObject>(ConfirmedHeal)});
+        TestEqual(TEXT("Confirmed heal can repeat when incoming damage keeps net HP low"),Step(Priority,S,P)->GetNumberField(TEXT("spell")),Heal->GetNumberField(TEXT("id")));
     }
     // Three consecutive successful recovery cycles must not exhaust a lifetime retry counter.
     FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();S->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(RecoveryJson(TEXT(R"({"id":42,"wcid":42,"name":"Potion","type":32,"usable":true,"identified":true,"boost_vital":2,"boost":100,"count":10})")))});

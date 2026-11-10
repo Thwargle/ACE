@@ -99,6 +99,36 @@ bool FACEItemPresentationTest::RunTest(const FString&)
     TestTrue(TEXT("Remaining units invalidate an already rendered inventory icon"), HalfHash != Binder->HashInventoryOverlayState());
     TestEqual(TEXT("Units are replicated independently of stack count"), Session.WorldObjects[Item.Guid].Structure, 25);
 
+    {
+        auto DataID = [&](uint32 Property, uint32 Value, uint8 Stamp)
+        {
+            FACEBinaryWriter W; W.WriteUInt32(0x2D8); W.WriteUInt8(Stamp);
+            W.WriteUInt32(Item.Guid); W.WriteUInt32(Property); W.WriteUInt32(Value);
+            Session.ReceiveGameMessage(W.GetData());
+        };
+        const auto Saved = Session.WorldObjects[Item.Guid];
+        for (uint32 Property : {8u, 50u, 52u})
+        {
+            DataID(Property, 0x06001234, 1);
+            const auto Hash = Binder->HashInventoryOverlayState();
+            DataID(Property, 0, 2);
+            TestTrue(TEXT("Zero icon DataID invalidates an already painted inventory"), Hash != Binder->HashInventoryOverlayState());
+        }
+        auto& Caster = Session.WorldObjects[Item.Guid];
+        Caster.ItemType = ACEItemType::Caster; Caster.WielderId = Session.PlayerGuid;
+        Caster.CurrentWieldedLocation = ACEEquipMask::Held; Caster.ContainerId = 0;
+        DataID(28, 1, 1);
+        Binder->SelectedCombatSpellSlot = -1;
+        Binder->SyncSpellTabSelection();
+        TestEqual(TEXT("Incremental innate spell becomes available to spellbar selection"), Binder->BuiltInSpellId, 1);
+        DataID(28, 0, 2);
+        Binder->SyncSpellTabSelection();
+        TestEqual(TEXT("Cleared innate spell leaves no stale cast source"), Binder->BuiltInCasterGuid, 0);
+        TestEqual(TEXT("Spellbar clears the removed innate spell"), Binder->BuiltInSpellId, 0);
+        TestTrue(TEXT("Selection leaves a removed innate spell slot"), Binder->SelectedCombatSpellSlot >= 0);
+        Session.WorldObjects[Item.Guid] = Saved;
+    }
+
     FACEAppraisalInfo Appraisal;
     const auto Handle = Session.OnAppraisal.AddLambda([&](const FACEAppraisalInfo& Info) { Appraisal = Info; });
     ON_SCOPE_EXIT { Session.OnAppraisal.Remove(Handle); };

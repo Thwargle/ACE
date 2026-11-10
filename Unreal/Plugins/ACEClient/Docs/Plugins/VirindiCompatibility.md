@@ -1,5 +1,105 @@
 # Virindi compatibility review
 
+## Ordinary route interactions and scheduler priority (2026-11-10)
+
+VT `uTank2/cLogic.cs::InitializeDefaultLogicRules` schedules normal recharge before
+navigation; `g8.cs` and `cr.cs` honor navigation/item-use locks independently.
+The existing portal/recall handling in UCM yielded after the native action gate
+cleared, but an ordinary Use waypoint returned before recovery or combat could
+run. Ordinary Use now yields in the same way without resubmitting the item.
+
+Navigation advances only on a completed use for its recorded item, with a newer
+action serial and a request timestamp from that waypoint attempt. Healing-item
+receipts, unrelated failures and older uses of the same item cannot complete or
+reject it. A matching error or the existing timeout pauses navigation only.
+Portal/recall arrival still requires teleport/position evidence. Legacy snapshots
+without correlated history retain their previous action-counter fallback.
+
+This closes the ordinary route-use wait gap from the previous pass. Meta-command
+interaction waits, exact recovery-efficiency heuristics, and the other incomplete
+features listed below remain separate work; this is not a complete VT port.
+
+Validation: `ACE.Plugins.SchedulingParity` covers both navigation priorities,
+native busy gating, healing and combat while waiting, unrelated/old receipts,
+matching success/failure and timeout. Recovery, route/tell requests, automatic
+combat route recovery, blocked-route safety, route joining and shared metas also
+passed. Reports: `TestOutput/Parity-Nov10/first-tests/index.json` and
+`TestOutput/Parity-Nov10/related-tests/index.json` (12 selected suites total,
+including retail UI/network checks). The Win64 Development Editor build passed.
+
+## Recovery priority and streak finishing (2026-11-09)
+
+This pass compared the supplied VT `cr.cs` recharge scheduler, `hi.cs` combat
+selector and `es.cs` target-health tracker with the current UCM script.
+The older dated lists below are historical evidence, not a current feature list.
+
+- VT checks health before stamina before mana once its item-use lock permits.
+  UCM now tracks pending recovery separately per vital. A mana/stamina receipt
+  wait no longer postpones a needed heal after the native action gate is free.
+  Completion identity, request time and effect confirmation prevent a late mana
+  failure or an unrelated use result from completing/rejecting an in-flight heal.
+  Unconfirmed uses are not resubmitted; vital replication still confirms effects,
+  and timeouts retain the existing bounded fallback behavior.
+- In mixed bolt/streak mode, VT chooses a streak only at positive remaining HP
+  below integer `(last single-target spell damage, or streak Difficulty)/7`.
+  UCM now follows that finishing rule using target-specific health and confirmed
+  spell damage, instead of comparing spell power alone. New health samples replace
+  old estimates, duplicate hits are ignored, and different targets do not share
+  damage estimates. Streak-only mode remains unconditional when usable; missing
+  streak/ring spells can fall back to bolts/arcs. Available rings keep priority.
+
+Rechecked gaps: vendor restocking, mana-stone donor looting/refilling, Classic's
+standard palette/color rules, and optional ghost-target suppression already have
+runtime implementations and regression coverage. They are not open gaps simply
+because older entries below list them. Automatic fellowship management, DoJiggle,
+random helper buffs, general crafting/ammunition manufacture, complete non-fellow
+assistance, custom loot expressions/User actions, and external plugin/multi-client
+integrations remain incomplete. Unsupported enabled imports remain explicit errors.
+Ordinary route/meta use waits and the exact recovery-efficiency heuristics still
+need separate comparison; this pass does not claim complete VT parity.
+
+Validation: Win64 Development editor build passed. All 13 affected suites passed
+across the staged runs (latest result per suite): Recovery, ActivityFailureIsolation,
+StreakFinishing, PublicAPI, RouteAndTellRequests, BuffEquipmentHandoff,
+CharacterSettings, EquipmentAssessmentCache, FullSpellbookTransitions,
+ResourceMaintenance, SchedulingParity, VoidCombat and VTankWeaponSelection.
+The initial recovery fixtures used the old uncorrelated action-error scalar;
+they now supply native-shaped item receipts and retain the failed-kit fallback
+and bounded retry assertions. The final API test covers full/selective completion
+history and permission checks. Evidence is in `TestOutput/UCMParity-Nov9/`:
+`regression-tests/index.json`, `validated-tests/index.json` and
+`api-tests/index.json`. This is deterministic policy/native validation, not a live
+server soak test. Changes have not been packaged or published.
+
+## Equipment assessments and native mob expressions (2026-11-09)
+
+Full owned-object refreshes cleared UCM appraisals, and unsuccessful periodic
+reassessments replaced successful results. Logout discarded all assessments.
+A separate bounded combat cache now retains successful weapon/shield/ammunition
+qualities per server and character. Equipment identity and ownership must match;
+fresh successful appraisals replace old stats, and current wield requirements
+are rechecked. Resources and general loot/salvage appraisal data remain fresh-only.
+Forced elemental selection also excludes a conflicting elemental caster unless
+it has the requested elemental rend; neutral casting devices remain eligible.
+
+Reviewed VT `cl.cs` monster variables (`name`, `species`, `typeid`, `maxhp`,
+`range`, `hasshield`, `metastate`). Native Mobs Add and Details now use the existing
+bounded VT expression compiler/evaluator, including exact name, species, regex,
+AND and OR. No executable expression functions are permitted in mob predicates.
+Plain-text rules keep their prefix/exact checkbox behavior. Imported catalog
+validation is unchanged; native expressions can use live appraisal species and
+the DAT species-name table.
+
+Win64 Development editor build and eight regression suites passed:
+EquipmentAssessmentCache, VTankWeaponSelection, ImportAndSettingsUI,
+BuffEquipmentHandoff, InventorySalvage, LootRules, Recovery and
+ResourceMaintenance. Coverage includes object refresh, failed reassessment,
+unequip, relog, server/character isolation, current Int64 requirement changes,
+forced Pierce with a cached wand, and native expression add/save/reload/evaluation.
+Evidence: `TestOutput/UCMEquipmentAssessment/final-tests/index.json`.
+This is deterministic client/policy validation; the reporter's live character
+and complete custom profile were not available for a live-server replay.
+
 ## ILT custom wand property-dump follow-up (2026-11-04)
 
 The later UB appraisal for Blunt Sceptre (WCID 29260, GUID F06A016A) identifies

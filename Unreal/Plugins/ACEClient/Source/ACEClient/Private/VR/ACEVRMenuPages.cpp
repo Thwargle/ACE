@@ -266,9 +266,9 @@ void UACEVRMenu::BuildTrade()
         {FACEWorldObject Item;if(Client->GetWorldObject(Guid,Item)){Grid->AddSlot(I%6,I/6)[ItemButton(Item)];++I;}}
         Body->AddSlot().AutoHeight()[Grid];
     }
-    const int32 Accepted=Client->GetTradeAcceptedGuid();
-    if(Accepted)Body->AddSlot().AutoHeight().Padding(4)[PageText(Accepted==Client->GetPlayerGuid()?TEXT("You have accepted this offer."):TEXT("Your partner has accepted this offer."))];
-    Body->AddSlot().AutoHeight().Padding(4)[Button(Accepted==Client->GetPlayerGuid()?TEXT("Withdraw acceptance"):TEXT("Accept trade"),[this](){if(Client->GetTradeAcceptedGuid()==Client->GetPlayerGuid())Client->SendDeclineTrade();else Client->SendAcceptTrade();})];
+    if(Client->HasAcceptedTrade())Body->AddSlot().AutoHeight().Padding(4)[PageText(TEXT("You have accepted this offer."))];
+    if(Client->HasPartnerAcceptedTrade())Body->AddSlot().AutoHeight().Padding(4)[PageText(TEXT("Your partner has accepted this offer."))];
+    Body->AddSlot().AutoHeight().Padding(4)[Button(Client->HasAcceptedTrade()?TEXT("Withdraw acceptance"):TEXT("Accept trade"),[this](){if(Client->HasAcceptedTrade())Client->SendDeclineTrade();else Client->SendAcceptTrade();})];
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Clear your offer"),[this](){Client->SendResetTrade();})];
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Cancel trade"),[this](){Client->SendCloseTrade();bDirty=true;})];
 }

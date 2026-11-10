@@ -186,12 +186,16 @@ def build_release(root, args):
     require(not args.linux_version or args.linux_version == args.windows_version,
             'Linux and Windows must display the same version')
     quest_zip = quest / f'Share/AC-VR-Quest-v{version}-installer-r{args.installer_revision}.zip'
+    quest_update_zip = quest_zip.with_name(quest_zip.stem + '-update-only.zip')
+    quest_update_meta = {}
     apk = quest / 'Packaged/Android_ASTC/ACUnreal-arm64.apk'
     release = root / f'Releases/{date.today():%Y.%m.%d}-v{version}'
     require(not release.exists(), f'Release already exists; preserve it: {release}')
     with zipfile.ZipFile(quest_zip) as archive:
         expected = {'AC-VR-arm64.apk', 'Install-Quest.ps1', 'Install-Quest.cmd', 'Update-Quest.cmd',
                     'Repair-Quest.cmd', 'Quest-DataTransfer.ps1', 'Quest-ProfileMigration.ps1', 'README.txt', 'RELEASE-NOTES.md', 'LICENSE', 'manifest.json', 'START-HERE.html', 'AC-Icon.png'}
+        if version >= 154:
+            expected.update({'Diagnose-Quest.cmd', 'Diagnose-Quest.ps1'})
         require(set(archive.namelist()) == expected, 'Unexpected Quest bundle contents')
         require(archive.testzip() is None, 'Quest ZIP checksum failure')
         manifest = json.loads(archive.read('manifest.json').decode('utf-8-sig'))
@@ -203,6 +207,17 @@ def build_release(root, args):
         require(manifest['apkSha256'] == sha(apk), 'Quest APK differs from the installer manifest')
         require(hashlib.sha256(archive.read('AC-VR-arm64.apk')).hexdigest().upper() == manifest['apkSha256'],
                 'Quest installer APK checksum mismatch')
+        if version >= 154:
+            helpers = {'Install-Quest.ps1', 'Install-Quest.cmd', 'Update-Quest.cmd',
+                       'Repair-Quest.cmd', 'Diagnose-Quest.cmd', 'Diagnose-Quest.ps1',
+                       'Quest-DataTransfer.ps1', 'Quest-ProfileMigration.ps1', 'README.txt'}
+            with zipfile.ZipFile(quest_update_zip) as update:
+                require(set(update.namelist()) == helpers | {'INSTALLER-UPDATE.txt'}, 'Unexpected Quest installer-only contents')
+                require(update.testzip() is None, 'Quest installer-only ZIP checksum failure')
+                require(update.read('INSTALLER-UPDATE.txt') == (quest / 'Sharing/INSTALLER-UPDATE.txt').read_bytes(),
+                        'Quest installer-only instructions differ from source')
+                for name in helpers:
+                    require(update.read(name) == archive.read(name), f'Quest helper differs between bundles: {name}')
     exe = windows / 'ACUnreal/Binaries/Win64/ACUnreal.exe'
     # The source stamp is a consistency check, not a substitute for build validation.
     stamp = (root / 'Unreal/Plugins/ACEClient/Source/ACEClient/Public/ACEClientBuild.h').read_text()
@@ -252,6 +267,11 @@ def build_release(root, args):
     direct_apk = release / f'AC-VR-Quest-v{version}.apk'
     shutil.copy2(apk, direct_apk)
     downloads = archives + [direct_apk]
+    if version >= 154:
+        copied_update = release / quest_update_zip.name
+        shutil.copy2(quest_update_zip, copied_update)
+        downloads.append(copied_update)
+        quest_update_meta = {'questInstallerUpdate': artifact(copied_update)}
     if getattr(args, 'android_version', None):
         phone_apk = release / f'AC-Unreal-Android-v{version}.apk'
         shutil.copy2(android_apk, phone_apk)
@@ -269,7 +289,7 @@ def build_release(root, args):
         'gameDataIncluded': False, 'serverIncluded': False, 'savedSettingsIncluded': False,
         'headsetAcceptance': 'See RELEASE-NOTES.md; packaging alone is not live acceptance.',
         'archives': [{'name': p.name, 'bytes': p.stat().st_size, 'sha256': sha(p)} for p in archives],
-        'questApk': artifact(direct_apk), 'windowsFiles': members, **linux_meta, **android_meta,
+        'questApk': artifact(direct_apk), 'windowsFiles': members, **linux_meta, **android_meta, **quest_update_meta,
     }, indent=2) + '\n', encoding='utf-8')
     print(json.dumps({'release': str(release), 'archives': [{'name': p.name, 'bytes': p.stat().st_size} for p in archives]}, indent=2))
     return release
@@ -280,7 +300,7 @@ def main():
     parser.add_argument('--quest-version', type=int, required=True)
     parser.add_argument('--windows-version', required=True)
     parser.add_argument('--linux-version', help='Required for release 88 onward; must match the Windows/Quest display version')
-    parser.add_argument('--installer-revision', type=int, default=7)
+    parser.add_argument('--installer-revision', type=int, default=10)
     parser.add_argument('--android-version', help='Include the verified Android phone/tablet preview APK')
     args = parser.parse_args()
     try:

@@ -143,7 +143,8 @@ void MonsterMatrix()
     Actions->AddSlot()[Button(TEXT("Add selected mob"),[this](){AddSelectedMonster();})];
     Add(Actions);
     Add(SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1)[SAssignNew(MonsterName,SACEPluginEditableTextBox)
-        .Style(&FACEPluginStyle::Current()->Edit).HintText(FText::FromString(TEXT("Mob name begins with…")))
+        .Style(&FACEPluginStyle::Current()->Edit).HintText(FText::FromString(TEXT("Mob name or expression…")))
+        .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Plain text matches a name prefix. Examples: species==Tusker; name==Snow Tusker; name#`^Snow.*`. Combine conditions with && (AND) or || (OR)."))))
         .OnTextCommitted_Lambda([this](const FText& V,ETextCommit::Type How){if(How==ETextCommit::OnEnter)AddMonster(V.ToString());})]
         +SHorizontalBox::Slot().AutoWidth().Padding(6,0)[Button(TEXT("Add"),[this](){AddMonster(MonsterName->GetText().ToString());})]);
     Add(SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1)[SNew(SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit)

@@ -250,6 +250,17 @@
     Panel->ExpandedMonster=INDEX_NONE;Panel->Rebuild();
     Panel->AddMonster(TEXT("Temporary mob"));Click(TEXT("Temporary mob"),TEXT("remove"));
     TestFalse(TEXT("Remove acts directly from the matrix"),FindMonsterName(TEXT("Temporary mob")).IsValid());
+    Panel->AddMonster(TEXT("species==Tusker"));
+    auto ExpressionRule=Plugin->Profile->GetArrayField(TEXT("monsters")).Last()->AsObject();
+    TestTrue(TEXT("Native Add compiles a mob species expression"),ExpressionRule->HasField(TEXT("expression")));
+    TestTrue(TEXT("Expression name appears in the matrix"),FindMonsterName(TEXT("species==Tusker")).IsValid());
+    const int32 ExpressionCount=Plugin->Profile->GetArrayField(TEXT("monsters")).Num();
+    Panel->AddMonster(TEXT("species=="));
+    TestEqual(TEXT("Invalid expression does not add a broken mob rule"),Plugin->Profile->GetArrayField(TEXT("monsters")).Num(),ExpressionCount);
+    Panel->Save();Host->SelectUCMSection(TEXT("Monsters"),TEXT("Default"));Host->SelectUCMSection(TEXT("Monsters"),TEXT("Matrix"));
+    ExpressionRule=Plugin->Profile->GetArrayField(TEXT("monsters")).Last()->AsObject();
+    TestTrue(TEXT("Native expression survives profile save/reload"),ExpressionRule->HasField(TEXT("expression")));
+    Panel->RemoveMonster(ExpressionRule);
     auto ManyRules=Plugin->Profile->GetArrayField(TEXT("monsters"));
     for(int32 I=0;I<24;++I){auto R=MakeShared<FJsonObject>();R->SetStringField(TEXT("name"),FString::Printf(TEXT("Monster %d"),I));ManyRules.Add(MakeShared<FJsonValueObject>(R));}
     Plugin->Profile->SetArrayField(TEXT("monsters"),ManyRules);Panel->Save();Panel->AddMonster(TEXT("Last monster"));

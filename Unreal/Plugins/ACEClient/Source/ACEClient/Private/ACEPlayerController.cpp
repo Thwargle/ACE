@@ -1181,14 +1181,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		}
 		else if (ACEInputBindings::Pressed(this, EKeys::Home))
 		{
-			if (TSharedPtr<FACESession> Session = Client->GetSession())
-			{
-				const int32 Attacker = Session->GetLastAttackerGuid();
-				if (Attacker != 0)
-				{
-					Client->SelectObject(Attacker);
-				}
-			}
+			SelectLastAttacker();
 		}
 		else if (ACEInputBindings::Pressed(this, EKeys::Escape))
 		{
@@ -8498,6 +8491,23 @@ void AACEPlayerController::PollObjectHover()
 void AACEPlayerController::CycleNearbyTarget(bool bEnemies, int32 Direction)
 {
 	if (const int32 Target = FindNearbyTarget(bEnemies,Direction)) Client->SelectObject(Target);
+}
+
+void AACEPlayerController::SelectLastAttacker()
+{
+	if (!Client || Client->GetSessionState() != EACESessionState::InWorld || !Client->GetSession()) return;
+	const int32 Attacker = Client->GetSession()->GetLastAttackerGuid();
+	FACEWorldObject Object;
+	if (!Attacker || Attacker == Client->GetPlayerGuid() || !Client->GetWorldObject(Attacker, Object)
+		|| !Object.IsSelectableWorldObject()) return;
+	FACEPosition PlayerPosition = Client->GetPlayerPosition();
+	TryGetLocallyPredictedPosition(PlayerPosition);
+	if (!PlayerPosition.IsValid()) return;
+	// CPlayerSystem's Last Attacker action has no 15-second expiry. It requires
+	// a known world object strictly inside the planar indoor/outdoor radar radius.
+	const double RangeSquared = FMath::Square(ACERadarVisuals::RangeAc(uint32(PlayerPosition.CellId)));
+	if (FVector::DistSquaredXY(Object.Position.ToUnrealLocation(1.f), PlayerPosition.ToUnrealLocation(1.f)) < RangeSquared)
+		Client->SelectObject(Attacker);
 }
 
 int32 AACEPlayerController::FindNearbyTarget(bool bEnemies, int32 Direction, int32 ExcludeGuid) const

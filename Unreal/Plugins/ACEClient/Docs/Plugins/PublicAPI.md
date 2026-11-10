@@ -88,6 +88,18 @@ cached inventory path described below. Other full automation fields can build
 the shared full snapshot before filtering; use only
 the fields your observer needs to reduce native work and Lua allocations.
 
+Character quality maps (`char_ints`, `char_quads`, `char_doubles`, `char_bools`,
+and `char_strings`) use decimal property IDs as string keys. They reflect the
+server's received character qualities, including custom IDs, live replacements
+and removals. A removed key is absent (`nil` in Lua); an explicit zero, false
+quality or empty string remains present. `char_bools` values are numeric `0`/`1`,
+so compare them explicitly rather than using Lua truthiness. Missing qualities
+are not universally equivalent to zero: for example, an absent
+`SpellComponentsRequired` bool (68) means components are required. Use the
+derived `components_required` field for that policy. `char_strings["1"]` may
+still fall back to the player's public object name when the name quality is
+absent. These maps describe the current character, not arbitrary nearby objects.
+
 ## Plugin title and toolbar icon
 
 Every plugin can set a default display title and its own artwork in `plugin.json`:
@@ -557,6 +569,24 @@ as well. `identified=false` means a property may be unknown; it is not evidence
 that the property is zero. Automation appraisal uses inventory permission;
 companions use the narrower identify permission above.
 
+Combat equipment also exposes `combat_identified` and `combat_appraisal_cached`.
+When `combat_appraisal_cached=true`, an owned weapon, shield or ammunition item
+has a previous successful assessment restored from a character/server-specific
+cache. Its flat combat fields (`damage_type`, damage/modifier, weapon skill/time,
+variance, slayer/element bonuses and current `can_wield`/`wield_reason`) remain
+available through swaps, background appraisal failures and relogging.
+`combat_int_properties` and `combat_float_properties` contain only the retained
+combat qualities (requirements, element, rend/cleave and combat bonuses).
+Fresh assessments continue to use the ordinary property maps; choose the combat
+map when present and otherwise use the ordinary map for weapon selection.
+Records require matching GUID, WCID, name, type, setup, icon and material, expire
+after 30 days, and are replaced by successful fresh appraisals. Current ownership
+and character requirements are checked again before equipping.
+This does **not** change `identified`: cached combat knowledge must never stand
+in for a fresh appraisal in loot matching, salvage, mana/charge management or
+other item-use decisions. Resource counts, spell lists and general loot qualities
+are not restored by this cache. Use the server response as the final authority.
+
 Assessed inventory entries expose `can_wield` and, when a requirement fails,
 `wield_reason`. The reason identifies the requirement slot, type/property, required
 value and observed value. Eligibility checks all four wield-requirement triplets,
@@ -588,6 +618,15 @@ augmentation bonuses) and `remaining` (time left now). Permanent effects have a
 negative duration. Use remaining time and power/category to decide whether a
 refresh is needed; base spell duration alone does not describe the active timer.
 
+`cooldowns` is a map from decimal item cooldown IDs to remaining seconds, for
+example `s.cooldowns["213"]`. Match the ID in an item's `int_properties["280"]`;
+the map removes the `0x8000` marker used by the wire enchantment ID. Items sharing
+that ID share the timer. Values reflect server updates and elapsed time, including
+timers restored at login. A missing key or zero means no known active timer for
+that ID. Cooldowns are separate from `enchantments` and `harmful_enchantments`.
+API 2 companions can request just `cooldowns` in `snapshot_fields` with `data`
+permission; automation policies receive the same map.
+
 Inventory entries expose `salvage_tool_available` for an owned Ust that is usable
 from its current pack and not offered in trade (including its containing pack).
 This remains true for a retained Ust: retention protects it from destruction,
@@ -618,6 +657,28 @@ confirm success; a completed cast does not prove that its projectile hit.
 Completion reports the client action gate being released, including local
 cancellation/timeouts; an error of zero alone is not proof an item was consumed.
 Use inventory revisions or the corresponding server result to confirm effects.
+
+Full snapshots also provide `action_events`, the most recent 64 completed use/cast
+events for the current session. Data-authorized selective snapshots can request
+it without building world, inventory or spell data. Unlike the per-plugin `events`
+delivery queue, this bounded history repeats between callbacks: deduplicate by
+`action_serial`. Each completion retains `requested_at` (monotonic client seconds),
+plus the original source/target/spell and completion `time`/`error`. Cast completions
+also include `confirmed`, indicating the tracked spell effect was confirmed;
+this is not an offensive projectile-hit receipt. Match both action identity and
+request time before acknowledging a pending operation. A new session clears the
+history; overflow evicts the oldest entries, so retain bounded local pending state
+and timeouts rather than treating absence as a success.
+
+`combat_events` entries have `serial`, `target`, `hit`, `unhittable` and `time`.
+Correlated single-target spell hits additionally carry `spell` and, when supplied
+by the damage result, positive `damage`. Neither UseDone nor spell words count as
+damage. Target snapshots expose `health` when supplied by an appraisal, or
+`health_fraction` from a later health reply, with `health_observed_at` and known
+`max_health`. Fractional health is not an exact integer measurement. A newer
+health sample supersedes earlier damage estimates; avoid subtracting those hits
+again. Unknown current health remains absent.
+
 `activity_failure` is a separate optional object with the native failure's
 `activity` and `status`. The stock policy also receives this through
 `profile.ucm_activity_failure`. A rejected loot/route/equipment activity does not

@@ -8,6 +8,509 @@ button exists, its opcode has a constant, or a focused regression test passes.
 This is the working acceptance record, most recently reviewed on 2026-10-13. The client
 is **not yet a feature-complete retail replacement**.
 
+## Character quality removal and live panel values: 2026-11-10
+
+Compared retail `CM_Qualities` private/public remove dispatchers,
+`ClientObjMaintSystem::RemoveStat`, `QualityRegistrar::CallRemoveHandler` and
+`ClientCombatSystem::OnQualityChanged`. These removal messages have no value
+payload; public removals put the GUID before the property, including strings.
+
+- Handle private/public removal of character int, int64, bool, float and string
+  qualities (`0x1D1`–`0x1D8`, `0x2B8`/`0x2B9`). Delete the map entry instead of
+  replacing it with zero. Lua character maps and component-policy defaults now
+  reflect server deletion without needing a relog.
+- Use each replacement family's timestamp for removals too. A late replacement
+  cannot resurrect a removed value, and an old removal cannot delete a newer
+  value. Preserve retail's equal-stamp and wraparound behavior; reject partial
+  headers before advancing the stamp.
+- Recompute derived skills/vitals after deletion, remove cached augmentation,
+  aetheria, character-info, XP/luminance and template values, and refresh vitae
+  subscribers where relevant. Public/private character integer replacements
+  now share their application path, including live level, credits, age, deaths,
+  fishing/chess and heritage values instead of leaving the panel mirror stale.
+- Removal is not a synthetic object update: preserve public descriptor flags,
+  icons, burden, ownership and the current combat stance. Retail does not call
+  the descriptor's `OnStatUpdated` on removal, and its combat handler keeps the
+  current mode when the CombatMode quality is absent. Duplicate removals retain
+  ordering without rebuilding unchanged UI.
+
+Scope: these are the five quality maps already stored for the current character.
+Generic non-player qualities, DataID/InstanceID/position quality removal and
+their subscriber APIs remain unimplemented; no inventory move/drop is inferred
+from removing a quality. Public API docs explain absent keys versus zero/false.
+Validation: Win64 editor build and all ten focused suites passed:
+QualityRemoval, PrivateStatParity, LivePropertyUpdates, RouteAndTellRequests,
+AugmentationStats, CharacterInformation, CharacterStats, CombatProtocol,
+NetworkTransport and PkStatus. Wire fixtures cover all five families and every
+private/public update/removal pairing, malformed headers, equal/late/wrapped
+stamps, character isolation, early luminance removal, real DAT stat recomputation,
+Lua snapshot key deletion and restoration of the component-policy default.
+Evidence: `TestOutput/Parity-Nov10/quality-removal-final-build.log` and
+`quality-removal-tests/index.json`. No live-server removal stream was exercised.
+
+## Live item DataIDs and string update compatibility: 2026-11-10
+
+Compared retail `ACCWeenieObject::OnStatUpdated(DataID)`,
+`ClientObjMaintSystem::UpdateStat<DataID_QualityType>` and
+`UIQueueManager::HandleStringUpdateEvents`, plus ACE's
+`GameMessagePublicUpdatePropertyString` writer and retail spellbar endowment
+selection (`gmSpellcastingUI::UpdateEndowmentIcon`).
+
+- Explicit zero DataIDs now clear icon, overlay and underlay fields; the same
+  rule applies to our existing item-spell update path. Removing an innate spell
+  no longer leaves a stale caster slot selected. An appraisal's explicit zero
+  icon also clears the inspect result's fallback to the previous icon.
+- Handle public descriptor PhysicsScript (44) separately from the physics
+  default script. Changed inventory/held-item metadata invalidates the cached
+  Lua inventory, so UCM/plugins receive current icons and innate spells without
+  a manual inventory refresh. Equal retransmissions avoid cache churn; metadata
+  changes do not recreate actors or discard successful appraisals.
+- Inventory object arrival/replacement now also invalidates the cached list.
+  This covers CreateObject completing after ContainId or an inventory snapshot,
+  when no further containment receipt arrives to refresh a previously absent row.
+- Decode public strings in retail GUID/property order and the local ACE writer's
+  property/GUID order. Known object identity selects the ACE form, with retail
+  taking precedence if ambiguous. Player identity works before ObjectCreate;
+  no fixed property-ID range excludes custom server keys. Receive ordering and
+  dispatch use the same decoder, sharing timestamps across private/public and
+  both wire layouts. Reject incomplete text/alignment before consuming a stamp.
+
+Scope: this is explicit DataID replacement/clearing, not DataID quality-removal opcode
+support. Non-player string-quality storage/notifications remain a gap; this pass
+does not rewrite public object names from string qualities. Retail's string
+quality update path does not directly modify its public name descriptor.
+
+Validation: Win64 editor build and all seven focused suites passed:
+LivePropertyUpdates, SpellDataRevision, EquipmentAssessmentCache,
+RouteAndTellRequests, InventoryOrder, ItemPresentation and NetworkTransport.
+Fixtures cover explicit clears, duplicate/stale/wrapped stamps, every truncated
+string prefix (including padding), both public string layouts, private/public
+shared ordering, player updates before ObjectCreate, appraisal icon clearing,
+spellbar selection, and immutable Lua inventory refresh with appraisal retention.
+The cached-empty-inventory fixture exposed and now covers the object-arrival
+invalidation gap. Evidence: `TestOutput/Parity-Nov10/live-properties-final-build.log`
+and `live-properties-final-tests/index.json`. No live server has been exercised
+for these changes.
+
+## Writable book pages: 2026-11-10
+
+Compared retail `gmBookUI::DisplayPageData`, `PageTextBlank`, `CloseCurPage`,
+`SetCurPage`, `OpenBook` and `OnVisibilityChanged`, plus `CM_Writing` and
+`PageData`. Cross-checked ACE's `Player_Book`, `Book`, and book response writers.
+
+- Decode each page's author ID/name and `IgnoreAuthor` flag in both supported
+  PageData formats. Account strings remain discarded. Only the author or a
+  shared page gets an editor; other pages retain the read-only reader.
+- The desktop DAT book panel now supports multiline writing with its DAT font,
+  character limit, clipping, wheel scrolling and existing scrollbar. Keyboard
+  focus suppresses gameplay input. Turning pages, closing the panel, or switching
+  panels saves changes; closing/turning away from one's blank page deletes it.
+  Blank detection follows retail's space/newline rule (tabs are not blank).
+  The title now targets the actual DAT `DisplayedBookNameText` element and shows
+  the book name (or inscription) and current page instead of an empty header.
+- Add pages up to the supplied capacity, including the first page of an empty
+  book and pages after another author's writing. Do not append repeatedly after
+  an already blank last page. Read back authoritative metadata after creation.
+- Implement modify/add/delete actions `0xAB`/`0xAC`/`0xAD` on WeenieQueue and
+  responses `0xB5`/`0xB6`/`0xB7`, using zero-based page indices. Changed-page
+  navigation waits for acknowledgement before changing local indices. Partial,
+  mismatched and duplicate replies cannot commit the draft or move the reader.
+  Failed writes retain the editable draft while the book is open. An unconfirmed
+  write times out without resending a potentially non-idempotent add/delete;
+  the player is asked to reopen the book before further editing. Duplicate open
+  snapshots do not overwrite an unsaved or pending draft.
+- World exit/disconnect discard editing state without writing as another
+  character. Closing sends a save once and late write acknowledgements cannot
+  reopen the panel. The existing subsystem navigation wrapper uses the same
+  save-before-turn path.
+
+Validation: `ACE.Network.BookWriting` uses actual encoded events, loopback
+outbound packets and the DAT book panel, including rendering at 1x/1.5x,
+editable-page scrollbar routing, author permissions, capacity, failed/truncated
+replies, timeouts, close/panel-switch saves and world reset. Evidence is under
+`TestOutput/Parity-Nov10/book-writing*`; rendered pages are in the isolated test
+user directory's `Saved/Automation/BookWriting` folder. This is local protocol
+and desktop UI validation, not a live-server persistence test. ACE's current
+modify handler always acknowledges success, even when its internal modification
+fails, so an acknowledgement alone is not proof of server-side persistence.
+The native mobile reader and retail page-selection menu are not expanded by
+this pass.
+
+Win64 editor build and all seven focused suites passed (BookWriting,
+BookContainerParity, ServerDialogs, KeyboardBindings, NetworkTransport,
+TextEntryScroll and UIScreens). After fixing the title binding, the build and
+BookWriting/UIScreens passed again; the final 1x/1.5x renders were inspected.
+
+## Server attacker identity and Last Attacker selection: 2026-11-10
+
+Compared retail `CM_Qualities::DispatchUI_PrivateUpdateInstanceID`,
+`ClientObjMaintSystem::UpdateStat<InstanceID_QualityType>`,
+`ACCWeenieObject::OnStatUpdated`, `ClientCombatSystem::AutoTarget` and its
+defender/evasion notifications, plus `CPlayerSystem`'s Last Attacker action
+(`0x10000038`) / `ObjectIsWithinRadarRange`. ACE's `Player.SetCurrentAttacker`
+sends private IID 11 when the attacker changes, including evades and resisted
+spells; it does not repeat that property on every hit.
+
+- Added private InstanceID message `0x02D9` and shared its per-owner/per-property
+  timestamp family with public `0x02DA`. Both feed the existing descriptor-IID
+  application path. Truncated messages cannot change identity or consume stamps.
+- CurrentAttacker uses the server GUID, including the initial PlayerDescription
+  IID table, explicit clears, and targets not yet present locally. Incoming
+  combat text no longer guesses a GUID by matching names. Another object's
+  CurrentAttacker never changes the local player's selection identity.
+- Hits and evades refresh the separate 15-second retaliation timer, even when
+  the attacker ID did not change. Outgoing damage/misses and IID updates alone
+  do not refresh it. Login snapshots, world exit and disconnect clear the timer;
+  world exit/disconnect also clear the remembered attacker.
+- The Last Attacker key (including rebinding) now requires a known selectable
+  world object strictly inside the planar indoor/outdoor radar radius. It keeps
+  the current selection if the attacker is absent or out of range. Manual Last
+  Attacker selection has no 15-second expiration; that limit belongs to combat
+  entry's retaliation preference.
+
+Validation: Win64 Development Editor build succeeded. `ACE.Network.AttackerIdentity`
+passed with duplicate creature names, hit/evade timing, private/public ordering,
+wrap/equal timestamps, every truncated packet boundary, login/logout resets,
+combat-entry targeting, default/rebound keyboard polling, and radar boundaries.
+The six surrounding `ACE.RetailParity` suites (`CombatChat`, `InventoryOrder`,
+`NetworkTransport`, `KeyboardBindings`, `SelectionToolbar`, `CharacterStats`)
+also passed. Evidence: `TestOutput/Parity-Nov10/attacker-identity-final-build.log`,
+`attacker-identity-final-tests/index.json`, and the six successful suites in
+`attacker-identity-verified-tests/index.json`. The initial hotkey fixture processed
+input twice and left the physical pawn at world origin; both fixture issues were
+corrected before the focused test passed. No live server or device verification,
+release, or claim of complete combat-system parity.
+
+## Compact player-stat messages: 2026-11-10
+
+Compared retail `CM_Qualities` private update dispatchers,
+`ClientObjMaintSystem::UpdateStat`, `AttributeCache::SetAttribute/SetAttribute2nd`,
+`CACQualities::SetSkillLevel`, `Skill::SetSkillAdvancementClass`, and
+`ExperienceSystem::SkillLevelFromExperience` / `ExperienceTable::GetLevelForExperience`.
+
+- Added the previously ignored private compact skill-level (`0x02DF`), skill
+  advancement (`0x02E1`), and attribute-level (`0x02E5`) messages. A compact
+  level replaces the starting value; it does not replace purchased ranks or XP.
+  All six attributes refresh their dependent DAT formulas and movement skills.
+- Skill advancement updates preserve starting bonuses and unsigned spent XP,
+  then recalculate ranks using the trained/specialized DAT curve. Inactive and
+  untrained skills have zero purchased ranks. Recalculation waits for the DAT
+  resolver if unavailable; a later full skill packet supersedes it. Full packets
+  retain explicit server ranks, including custom-server values.
+- `0x02E9` now handles maximum-vital IDs 1/3/5 as starting values as well as
+  current-vital IDs 2/4/6. Maximum updates preserve the corresponding ranks, XP,
+  and current amount. Accepted messages publish through the existing shared
+  stat notification used by gameplay, UI and plugins; no Lua API shape changed.
+- Full and compact forms share retail's per-stat sequence family. Late packets
+  cannot undo a newer update; equal stamps and byte wrap retain existing retail
+  behavior. Compact packets validate length, IDs and representable values before
+  committing timestamps, so rejected packets cannot suppress a valid update.
+
+Validation: Win64 Development Editor build and all seven tests passed:
+`ACE.Network.PrivateStatParity`, `ACE.RetailParity.CharacterStats`,
+`ACE.RetailParity.Augmentations`, `ACE.RetailParity.AugmentationStats`,
+`ACE.RetailParity.CharacterInformation`, `ACE.RetailParity.RunSpeed`, and
+`ACE.RetailParity.NetworkTransport`. The new suite checks real DAT XP thresholds
+(including unsigned XP and the cap), enchantments, dependent movement values,
+shared publication, deferred resolution, custom full-packet ranks, new entries,
+every compact-packet truncation boundary, invalid values, mixed full/compact
+ordering, equal stamps, byte wrap and receive-state reset.
+
+Evidence: `TestOutput/Parity-Nov10/private-stats-verified-build.log` and
+`TestOutput/Parity-Nov10/private-stats-tests/index.json`. This pass covers private
+player-stat messages; public object-stat messages and legacy full-skill
+serialization are not claimed as complete. No live-server verification or release.
+
+## Server instructions and confirmation lifetime: 2026-11-10
+
+Compared retail `CM_Communication::DispatchUI_PopUpString`,
+`ClientCommunicationSystem::Handle_Communication__PopUpString`,
+`DialogFactory::CreateDialog_`, `MessageDialog::ListenToElementMessage`,
+`Dialog::UpdatePopupSizeAndPosition`, the `UIMainFramework` destructor's dialog
+reset, and ACE's `GameEventPopupString`, `GameEventConfirmationRequest` and
+`GameEventConfirmationDone` writers.
+
+- Previously ignored `PopupString` (`0x0004`) messages now show quest/minigame
+  instructions using retail MessageDialog template `0x24` in DAT `0x2100003C`,
+  its font/body, and its OK button (`0x26`). Dismissal is local: it never sends
+  a `ConfirmationResponse` or other game action. Mobile uses an OK-only touch
+  message, and VR opens the retail panel for controller interaction.
+- Identical messages retain separate local identities. Stale dismissals cannot
+  remove a subsequent message, including after character changes. Unlike retail's
+  overlapping nonqueued message windows, this client presents instructions in
+  arrival order and defers them while an action confirmation is visible. After
+  64 pending messages, overflow text goes to chat rather than being discarded.
+- Confirmation requests require the entire string and padding before replacing
+  an existing prompt. Withdrawals match both type and context; replies retain
+  the retail `0x0275` UI-queue payload. Malformed packets cannot partially update
+  dialog state. This validation is additional to the retail wire format.
+- Returning to character selection now clears confirmations as well as popup
+  messages. Dialog rendering also checks world state, preventing old prompts
+  from remaining visible outside gameplay. Full disconnect clears both queues.
+
+Validation: Win64 Development Editor build passed, followed by all seven suites:
+`ACE.Network.ServerDialogs`, `ACE.Network.SocialParity`,
+`ACE.Network.BookContainerParity`, `ACE.RetailParity.Housing`,
+`ACE.RetailParity.NetworkTransport`, `ACE.Mobile.TouchAndMenus`, and
+`ACE.VR.RigAndMenus`. The new test checks every packet truncation boundary,
+replacement/withdrawal identities, UI-queue reply bytes, repeated messages,
+overflow, logout/disconnect cleanup, actual DAT fonts/controls and scaled OK
+hit testing. Mobile and VR tests exercise local dismissal without a game action.
+Rendered dialogs were reviewed at normal and enlarged scale.
+
+Evidence: `TestOutput/Parity-Nov10/server-dialogs-verified-build.log`,
+`TestOutput/Parity-Nov10/server-dialogs-tests/index.json`, and captures under
+`TestOutput/Parity-Nov10/EditorUser-467d2e3d3a8847fd8de2b84d5e8a238f/Saved/Automation/ServerDialogs`.
+These are local automation results. This pass does not claim full dialog-system
+parity, physical-device testing, or live-server verification; no release was made.
+
+## Housing guest reports and maintenance updates: 2026-11-10
+
+Compared retail `ClientHousingSystem::Handle_House__Recv_UpdateHAR`,
+`HAR::UnPack/Dump`, `GuestInfo::UnPack/Dump`, `HouseData::UnPack`,
+`HousePaymentList::ClearPayment`, `gmHouseUI::RecvNotice_UpdateRentTime`,
+`gmHouseUI::RecvNotice_UpdateRentPayment`, and the matching ACE event writers.
+
+- `@house guest list` already sent the request, but its `0x0257` reply was
+  discarded. It now prints the retail guest report, including storage-access
+  asterisks, allegiance permissions, and open-house status. Both the legacy
+  unversioned record and versioned records with/without roommate lists decode;
+  roommate IDs are consumed without being printed, as in retail's `Dump(false)`.
+  Complete names and nested lists are required before emitting any chat.
+- The previously ignored rent-period (`0x0227`) and payment-list (`0x0228`)
+  responses update the owned-house panel. A new period clears paid quantities
+  while retaining requirements; a payment reply replaces the current list,
+  without accumulating repeated replies. Neither response can create ownership
+  after a no-house status. The separate slumlord offer remains authoritative to
+  its own profile replies.
+- Full house snapshots now require the complete location as well as both payment
+  lists. They share the slumlord's checked string/payment decoder. Truncated
+  snapshots/status notices preserve the last valid housing state; invalid counts,
+  negative payment amounts and nonfinite positions are rejected. List sizes are
+  bounded by the payload instead of an arbitrary 256-payment cutoff.
+
+Malformed-message rejection is defensive validation around the retail wire
+format. This does not implement world-object restriction replication (`0x0248`)
+or certify every housing operation.
+
+Validation: Win64 Development Editor build passed. All seven selected suites
+passed: `ACE.Network.HousingParity`, `ACE.Network.BookContainerParity`,
+`ACE.Network.SocialParity`, `ACE.RetailParity.Housing`,
+`ACE.RetailParity.NetworkTransport`, `ACE.RetailParity.UIScreens` and
+`ACE.VR.RigAndMenus`. Coverage includes guest-list command serialization,
+legacy/versioned HAR replies, storage/allegiance/open-house output, duplicate
+guest IDs, every truncation boundary, invalid payment counts, full/partial rent
+updates, period reset, late replies after ownership clears and logout. The real
+DAT housing test checks visible amounts and paid/unpaid colors, and the rendered
+new-period panel was reviewed. The added command check lives in the housing
+suite because adding it to the existing oversized UIScreens function exceeded
+the compiler's optimization size limit.
+
+Evidence: `TestOutput/Parity-Nov10/housing-network-verified-build.log` and
+`TestOutput/Parity-Nov10/housing-network-tests/index.json`; captures are under
+`TestOutput/Parity-Nov10/EditorUser-64faff53d5d149f28ee14d881f039ce0/Saved/Automation/Housing`.
+These are local automation results; no release or live-server verification was
+performed in this pass.
+
+## Enchantment refreshes and plugin cooldowns: 2026-11-10
+
+Compared retail `Enchantment::UnPack`,
+`CEnchantmentRegistry::ReplaceEnchantmentInList/AttemptToReplaceSpellInList/UpdateVitae`,
+the packed-ID equality operator at `ContentProfile.cpp:37`, registry snapshot
+unpacking, and ACE's enchantment event writers.
+
+- Incremental enchantment refreshes use spell/layer identity rather than caster
+  identity. A timed recast on a new layer replaces the earlier timed copy, while
+  permanent equipment layers remain separate. Vitae is a singleton; cooldown,
+  additive and multiplicative effects retain separate registry membership.
+- Full login registries retain the server's complete lists instead of running
+  incremental recast replacement on each snapshot entry. Each registry/list must
+  decode completely before changing active effects. Truncated update/remove/dispel
+  batches cannot partially refresh buffs, remove effects or notify observers;
+  nonfinite timer/stat values are rejected. This protects the enchantment section,
+  not every other field in the larger PlayerDescription message.
+- Plugin snapshots now explicitly include the cooldown registry when building
+  `cooldowns`. Previously the shared getter filtered it out before that map was
+  built. Native UCM, API 2 and selective companions receive shared item cooldown
+  IDs and remaining time, including elapsed time restored at login. Buff/debuff
+  lists and the default UI getter continue to exclude cooldown records.
+- Public Lua API documentation specifies the cooldown map's key format, item
+  property 280 relationship, remaining-time semantics and selective data access.
+
+Malformed-message rejection is defensive validation around the retail protocol.
+Custom server records without additive/multiplicative flags remain supported.
+Validation: Win64 Development Editor build passed. All eight selected suites
+passed without test warnings: `ACE.Network.EnchantmentParity`,
+`ACE.Plugins.PublicAPI`, `ACE.Plugins.Recovery`, `ACE.Plugins.ResourceMaintenance`,
+`ACE.RetailParity.CharacterStats`, `ACE.RetailParity.PlayerModuleOptions`,
+`ACE.RetailParity.SelectionToolbar` and `ACE.RetailParity.UIScreens`. Coverage
+includes caster/layer refreshes, independent equipment effects, registry ordering,
+truncation boundaries, nonfinite values, atomic removals, and native/public/selective
+plugin cooldown data, expiry and removal. Evidence is
+`TestOutput/Parity-Nov10/enchantments-build.log`,
+`TestOutput/Parity-Nov10/enchantments-final-build.log` and
+`TestOutput/Parity-Nov10/enchantments-verified-tests/index.json`.
+These are local automation results; no release or live-server validation was
+performed in this pass.
+
+## Contract updates, repeat timers and journal sorting: 2026-11-10
+
+Compared retail `CContractTracker::UnPack`, `CPlayerSystem::UpdateContractTrackerTable`,
+`gmContractsUI::FillProgressString/ListenToElementMessage`,
+`ContractInfoSortStatus/ContractInfoReverseSortStatus`, and
+`ClientUISystem::DeltaTimeToString` with ACE's contract event writers and DAT loader.
+
+- Contract tables are validated completely before replacing the journal. Truncated
+  snapshots/deltas and nonfinite timers preserve existing entries and timestamps
+  without notifying the UI. Valid empty tables still clear the journal. Timers
+  retain the wire's double precision, and duplicate IDs retain the last value.
+- Completed contracts display `Done`, a remaining `Done (... to Repeat)` countdown,
+  or `Available`, using receipt time and the DAT repeat flag. Expiration changes
+  the displayed status without requiring another server event or rewriting the
+  server's stage. Countdown formatting follows retail's month/day/hour/minute/second
+  units; existing progress-count descriptions and wrapping remain intact.
+- Clicking the same journal heading reverses sorting; changing headings resets
+  ascending order. Status sorting uses displayed status, numeric repeat time and
+  name ties, rather than raw stage numbers. Expired timers join Available entries
+  consistently; selection remains on the same contract when rows move.
+
+Malformed-message handling is defensive validation around the retail protocol.
+The item appraisal-completion dispatch was also checked: the retail dispatch calls
+a no-op implementation, so no new completion behavior was introduced there.
+
+Validation: Win64 Development Editor build passed (87 actions). All four selected
+suites passed without test warnings: `ACE.Network.ContractParity`,
+`ACE.Network.SocialParity`, `ACE.RetailParity.UIScreens` and
+`ACE.RetailParity.PanelResizeSocial`. Coverage includes every truncation boundary,
+nonfinite timers, precision, add/update/delete, valid empty snapshots, duplicate
+IDs, abandon request serialization, countdown expiry, DAT repeatability, numeric
+sorting, direction changes and selection retention. The rendered journal was also
+checked for wrapped countdowns. Evidence is
+`TestOutput/Parity-Nov10/contracts-build.log` and
+`TestOutput/Parity-Nov10/contracts-tests/index.json`.
+These are local automation results; no release or live-server validation was
+performed in this pass.
+
+## Book reading and container snapshots: 2026-11-10
+
+Compared retail `PageData::UnPack`, `PageDataList::UnPack`,
+`gmBookUI::OpenBook/SetCurPage/BookPageDataResponseEvent`, and
+`ClientUISystem::OnViewContents` with ACE's book/container event writers.
+
+- Book decoding accepts both legacy `textIncluded` and version-2 page records.
+  The page-list capacity is no longer mistaken for the number of existing pages.
+  Complete page records and the scribe trailer are required before replacing the
+  current book. Page indices cannot grow the cache beyond the received list.
+- Received text is cached, including empty pages. Reopening a page within the
+  same reading session no longer refetches it, and inline text avoids the initial
+  redundant request. Desktop/VR and mobile distinguish blank pages from loading.
+- Refreshing the same book retains the selected page, clamped to the final
+  existing page if the new list is shorter, matching retail `OpenBook`.
+- Page navigation waits for the outstanding request as retail does. A five-second
+  retry escape prevents a nonresponding host from locking navigation indefinitely.
+  Late replies populate only their own cache slot and do not change the selected
+  page, complete a different request, or reopen a closed reader. Logout/reset
+  clears both the book and pending request. The wire format has no per-request
+  nonce, so replies from reopening the same book cannot be distinguished by age.
+- Container snapshots are validated in full before allocating their list or
+  changing ownership, expiry queues or the open loot panel. Complete empty
+  snapshots still clear contents; truncated lists preserve the last good state.
+
+Malformed-packet checks and the retry escape are resilience improvements around
+the retail protocol. This pass covers reading, not authoring/deleting book pages.
+
+Validation: Win64 Development Editor build passed. All six selected suites
+passed: `ACE.Network.BookContainerParity`, closed-container lifetime, inventory
+order, world-loot placement, mobile touch/menus and VR rig/menus (including the
+shared desktop book reader's blank/loading display). The packet suite exercises
+both page formats, truncation at every byte boundary, inline/missing/empty text,
+late replies, refresh/clamping, outgoing request counts, logout/reset, and
+container ownership/expiry/UI isolation. Reports are
+`TestOutput/Parity-Nov10/books-network-tests/index.json` and
+`TestOutput/Parity-Nov10/books-related-tests/index.json`; the latter reruns the
+packet suite after the same-book refresh fix. Build evidence is
+`TestOutput/Parity-Nov10/books-build.log` and `books-final-build.log`.
+These are local automation results; no release or live-server validation was
+performed in this pass.
+
+## Social network state and allegiance information: 2026-11-10
+
+Compared the local retail `Fellow::UnPack`, `Fellowship::UnPack`,
+`ClientFellowshipSystem`, `FriendData::UnPack`, `gmFriendsUI::RecvNotice_UpdateFriendsList`,
+`AllegianceHierarchy::UnPack`, and
+`ClientAllegianceSystem::Handle_Allegiance__AllegianceInfoResponseEvent` with ACE's
+social event writers and the client handlers.
+
+- Fellowship and friends updates no longer install partial rosters. Complete
+  records, padded names, nested lists, metadata and update types are validated
+  before replacing live data or notifying the UI/plugins. Counts are bounded by
+  the available payload before allocation. Truncated updates do not freshen old
+  vitals; explicit empty full updates still clear the corresponding list.
+- Fellowship decoding accepts retail's form ending at the departed-members table
+  and ACE's appended lock table. Individual updates retain the complete Fellow
+  record for full/stats/vitals messages, and rosters remain uncapped at nine.
+- Live-vitals subscriptions requested by a panel or plugin while outside the
+  world are retained and reapplied on world entry. Relogging no longer leaves a
+  subscriber enabled locally but disabled on the server. An offline unsubscribe
+  cancels the pending request; no periodic resubscription loop is introduced.
+- `/allegiance info <name>` already sent `0x027B`, but its `0x027C` response was
+  discarded. The response now prints retail's member, patron and direct-vassal
+  report with heritage/gender rank titles and online asterisks. It never replaces
+  the requesting player's own allegiance panel data.
+- Both allegiance message paths share a complete profile decoder, honoring the
+  hierarchy version's optional fields. Incomplete hierarchies leave the current
+  panel state intact. Monarchs now retain their own cached/passed-up XP fields,
+  previously populated only when self appeared after the root record.
+
+Packet validation is deliberately stricter than the permissive legacy dispatch;
+this is resilience work around the retail wire layout, not a claim that retail
+rejects every malformed packet in the same way. Live multiplayer validation and
+the broader allegiance administration feature set remain outside this pass.
+
+Validation: Win64 Development Editor build passed, including the new
+`ACE.Network.SocialParity` automation suite. All seven selected suites passed:
+social packets/state, trade packets/state, network transport, desktop social
+panels, mouse cursors, plugin recovery and VR menus. Reports are
+`TestOutput/Parity-Nov10/social-verified-tests/index.json` and
+`TestOutput/Parity-Nov10/social-related-tests/index.json`; build evidence is
+`TestOutput/Parity-Nov10/social-verified-build.log`. The social suite covers
+truncated snapshots/deltas, retail and ACE fellowship layouts, hierarchy versions
+0 through 11, query isolation, and outgoing subscription packets across relogging.
+These are local automation results, not packaged-release or live-server testing.
+
+## Trade protocol and acceptance display: 2026-11-10
+
+Compared `Trade::Pack/Register/AddItem`, `ContentProfile::Pack`,
+`ClientTradeSystem::AcceptTrade/Handle_Trade__Recv_AcceptTrade/DeclineTrade`, and
+`gmSecureTradeUI::RecvNotice_AcceptTrade` in the local retail decompile.
+
+- Acceptance previously serialized only a partial placeholder header: zero stamp,
+  zero status, the initiator GUID where retail uses a boolean, and no offer lists.
+  It now echoes the registered timestamp, registered status, initiator boolean,
+  self/partner acceptance and both ordered ContentProfile lists. Stock ACE ignores
+  most of this data, but that is not a substitute for the retail wire contract.
+- One accepted-player GUID could not represent simultaneous acceptance. Separate
+  self/partner flags now drive desktop and VR trade controls. Local accept/decline
+  responds immediately; a partner's acknowledgement or decline does not overwrite
+  the player's choice. Retail's zero-source acceptance notice clears self only.
+- AddToTrade now honors the server's list position, rejects duplicate/cross-side
+  items and invalid sides, and uses retail's list-size bound. A rejected offer
+  item is removed from the self list instead of remaining visible. Offer changes
+  invalidate acceptance, and truncated registration cannot replace a valid trade.
+
+ACE's `Player_Trade.ClearTradeAcceptance` also clears server offer lists; that
+existing compatibility behavior is preserved. This pass does not claim every
+trade or fellowship behavior is complete, nor validation on a strict live server.
+
+Validation: Win64 Development Editor build passed. The real-DAT UI suite,
+network transport and new trade packet/state suite passed, with the authored
+partner-accepted screenshot reviewed. Related vendor and VR-menu regressions
+also passed. All 12 selected suites succeeded across
+`TestOutput/Parity-Nov10/first-tests/index.json` and
+`TestOutput/Parity-Nov10/related-tests/index.json`; build evidence is
+`TestOutput/Parity-Nov10/build-fixed.log`. These are local automation results,
+not a packaged-release or two-player live-server verification.
+
 ## UCM loot and salvage handoff latency: 2026-11-09
 
 The host imposed a fixed three-second throttle after each item salvage and

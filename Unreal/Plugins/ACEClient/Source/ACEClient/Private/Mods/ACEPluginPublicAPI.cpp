@@ -73,7 +73,7 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::PublicSnapshot(FACEClientPlugin& P)
     // navigation visibility, or vendor transaction data just to discard it.
     static const TSet<FString> Lightweight={TEXT("char_strings"),TEXT("char_ints"),TEXT("char_quads"),TEXT("char_doubles"),TEXT("char_bools"),
         TEXT("inventory"),TEXT("inventory_revision"),TEXT("appraisal_revision"),TEXT("window_chrome_hidden"),TEXT("level"),TEXT("character_name"),TEXT("action_serial"),TEXT("action_error"),TEXT("last_spell"),TEXT("last_spell_confirmed"),
-        TEXT("profile_name"),TEXT("waiting_action"),TEXT("log"),TEXT("panel"),TEXT("activity_failure"),TEXT("capabilities"),TEXT("automation_owner"),
+        TEXT("profile_name"),TEXT("waiting_action"),TEXT("log"),TEXT("panel"),TEXT("activity_failure"),TEXT("capabilities"),TEXT("automation_owner"),TEXT("action_events"),
         TEXT("objects"),TEXT("objects_truncated"),TEXT("selection"),TEXT("tracked_targets"),TEXT("target_effects")};
     bool FullData=!P.SelectiveSnapshot;
     if(P.SelectiveSnapshot)for(const auto& Field:P.SnapshotFields)if(!Common->HasField(Field)&&!Lightweight.Contains(Field)){FullData=true;break;}
@@ -97,6 +97,7 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::PublicSnapshot(FACEClientPlugin& P)
         Result->SetNumberField(TEXT("level"),V.Level);Result->SetNumberField(TEXT("action_serial"),ActionSerial);
         Result->SetNumberField(TEXT("action_error"),LastActionError);Result->SetNumberField(TEXT("last_spell"),LastCompletedSpell);
         Result->SetBoolField(TEXT("last_spell_confirmed"),LastSpellConfirmed);
+        if(P.WantsSnapshotField(TEXT("action_events")))Result->SetArrayField(TEXT("action_events"),ActionOutcomes);
     }
     if(DataAllowed && P.WantsSnapshotField(TEXT("character_name")))
         if(auto Session=GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->GetSession())Result->SetStringField(TEXT("character_name"),Session->GetPlayerName());

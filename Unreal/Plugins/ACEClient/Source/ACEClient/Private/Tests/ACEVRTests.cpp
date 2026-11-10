@@ -1066,6 +1066,22 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("Controller accepts the actual bookie confirmation"),VR->Client->Session->GetConfirmations().IsEmpty());
 		}
 		else AddError(TEXT("Confirmation Yes button is missing"));
+		{
+			FACEBinaryWriter Popup;Popup.WriteUInt32(100);Popup.WriteUInt32(2);Popup.WriteUInt32(ACEGameEvent::PopupString);
+			Popup.WriteString16L(TEXT("Rescue the sleeping pets and return them to their cages."));
+			FACEBinaryReader R(Popup.GetData());VR->Client->Session->HandleGameEvent(R);
+			Gameplay->TickRefresh();PaintRetail();
+			TestTrue(TEXT("Quest popup is shown on the retail VR canvas"),VR->bInventoryOpen && Gameplay->ServerPopupRoot && Gameplay->ServerPopupRoot->bVisible);
+			if(auto OK=Manager->FindElementByName(TEXT("ServerMessageOK")))
+			{
+				const uint32 Sequence=VR->Client->Session->NextGameActionSequence;
+				PointAt(VR->RetailPanel,GameCanvas->LayoutToViewport(FVector2D(OK->GetScreenOrigin())+FVector2D(OK->Width,OK->Height)*.5));
+				VR->Trigger(false,true);VR->Trigger(false,false);PaintRetail();
+				TestTrue(TEXT("VR trigger dismisses informational messages without a server action"),VR->Client->Session->GetServerPopups().IsEmpty()
+					&& VR->Client->Session->NextGameActionSequence==Sequence);
+			}
+			else AddError(TEXT("Message OK button is missing"));
+		}
 		if (TestTrue(TEXT("Retail spellbook provides a draggable row"), !Gameplay->SpellbookRowIds.IsEmpty()))
 		{
 			int32 Row = Gameplay->SpellbookRowIds.IndexOfByPredicate([&](int32 Id) { return Id != 0 && !VR->Client->GetSpellBar(0).Contains(Id); });
@@ -1403,6 +1419,7 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			Session.Book.bOpen=true; Session.Book.BookGuid=70001;Session.Book.CurrentPage=0;Session.Book.NumPages=2;
 			FString LongPage;for(int32 I=0;I<100;++I)LongPage+=TEXT("A long page must remain readable and scroll within the parchment.\n");
 			Session.Book.Pages={LongPage,TEXT("Second page.")};
+			Session.Book.PageTextIncluded={true,true};
 			Gameplay->ShowPanelPage(TEXT("BookPanel_Field"));Gameplay->RefreshBookOverlays();PaintRetail();Gameplay->RefreshBookOverlays();PaintRetail();
 			TestNotNull(TEXT("Book uses a bounded scrolling text container"),Gameplay->BookScroll.Get());
 			const auto Bar=Gameplay->GetBookScrollbar();
@@ -1423,6 +1440,11 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 				Session.Book.CurrentPage=1;Gameplay->RefreshBookOverlays();PaintRetail();
 				TestEqual(TEXT("Changing book pages resets scroll to the top"),Gameplay->BookScroll->GetScrollOffset(),0.f);
 			}
+			Session.Book.Pages[1].Reset();Session.Book.PageTextIncluded[1]=true;
+			Gameplay->RefreshBookOverlays();
+			TestTrue(TEXT("Received blank page renders blank instead of an endless loading label"),Gameplay->BookPageTextLabel->GetText().IsEmpty());
+			Session.Book.PageTextIncluded[1]=false;Gameplay->RefreshBookOverlays();
+			TestTrue(TEXT("Unreceived page still reports loading"),Gameplay->BookPageTextLabel->GetText().ToString().Contains(TEXT("Loading")));
 			Session.Book={};Gameplay->HidePanel();
 		}
 		FACEWorldObject Bread; Bread.Guid = 301; Bread.ContainerId = 100; Bread.Name = TEXT("VR vendor test bread");

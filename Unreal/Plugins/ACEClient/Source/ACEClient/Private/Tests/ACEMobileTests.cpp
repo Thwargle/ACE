@@ -246,6 +246,7 @@ bool FACEMobileTouchTest::RunTest(const FString&)
     Touch->ClosePanel();
     Session.Book.bOpen=true;Session.Book.BookGuid=1000;Session.Book.NumPages=2;
     Session.Book.Pages={TEXT("A readable first page."),TEXT("The second page.")};
+    Session.Book.PageTextIncluded={true,true};
     Client->OnBookChanged.Broadcast();Touch->UpdateMobile();
     TestEqual(TEXT("Books open a touch reader instead of a hidden desktop window"),Touch->Panel,FName("Book"));
     TestTrue(TEXT("Reading a book blocks movement"),Touch->IsBlockingMovement());
@@ -254,6 +255,18 @@ bool FACEMobileTouchTest::RunTest(const FString&)
     ++GFrameCounter;Canvas->TickGameplayState(false);Touch->UpdateMobile();
     TestEqual(TEXT("Server confirmations remain accessible with the desktop UI hidden"),Touch->Panel,FName("Confirmation"));
     Touch->ResolveConfirmation(false);TestTrue(TEXT("Touch No resolves the pending server question"),Session.Confirmations.IsEmpty());
+    {
+        FACEBinaryWriter Message;Message.WriteUInt32(100);Message.WriteUInt32(2);Message.WriteUInt32(ACEGameEvent::PopupString);
+        Message.WriteString16L(TEXT("Bring the sleeping pet back to its cage."));
+        FACEBinaryReader R(Message.GetData());Session.HandleGameEvent(R);
+        ++GFrameCounter;Canvas->TickGameplayState(false);Touch->UpdateMobile();
+        TestTrue(TEXT("Server instructions open a touch message with local OK instead of Yes/No"),Touch->Panel=="Confirmation"
+            && Touch->ConfirmationPopupId!=0 && Touch->ConfirmationText==TEXT("Bring the sleeping pet back to its cage."));
+        const uint32 Sequence=Session.NextGameActionSequence;
+        Touch->ResolveConfirmation(true);
+        TestTrue(TEXT("Touch OK dismisses without sending confirmation or gameplay actions"),Session.GetServerPopups().IsEmpty()
+            && Session.NextGameActionSequence==Sequence && Touch->ConfirmationPopupId==0);
+    }
     {
         auto* Host=GI->GetSubsystem<UACEPluginSubsystem>();
         const auto Plugin=Host->Plugins.FindByPredicate([](const auto& P){return P->Id==TEXT("ucm");});

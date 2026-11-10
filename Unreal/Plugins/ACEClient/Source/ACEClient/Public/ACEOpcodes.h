@@ -16,6 +16,16 @@ namespace ACEOpcode
 	constexpr uint32 InventoryRemoveObject          = 0x0024;
 	constexpr uint32 SetStackSize                   = 0x0197;
 	constexpr uint32 PlayerKilled                   = 0x019E;
+	constexpr uint32 PrivateRemovePropertyInt       = 0x01D1;
+	constexpr uint32 PublicRemovePropertyInt        = 0x01D2;
+	constexpr uint32 PrivateRemovePropertyBool      = 0x01D3;
+	constexpr uint32 PublicRemovePropertyBool       = 0x01D4;
+	constexpr uint32 PrivateRemovePropertyFloat     = 0x01D5;
+	constexpr uint32 PublicRemovePropertyFloat      = 0x01D6;
+	constexpr uint32 PrivateRemovePropertyString    = 0x01D7;
+	constexpr uint32 PublicRemovePropertyString     = 0x01D8;
+	constexpr uint32 PrivateRemovePropertyInt64     = 0x02B8;
+	constexpr uint32 PublicRemovePropertyInt64      = 0x02B9;
 	constexpr uint32 PrivateUpdatePropertyInt       = 0x02CD;
 	constexpr uint32 PublicUpdatePropertyInt        = 0x02CE;
 	constexpr uint32 PrivateUpdatePropertyInt64     = 0x02CF;
@@ -28,9 +38,13 @@ namespace ACEOpcode
 	constexpr uint32 PublicUpdatePropertyBool       = 0x02D2;
 	constexpr uint32 PrivateUpdatePropertyDataID    = 0x02D7;
 	constexpr uint32 PublicUpdatePropertyDataID     = 0x02D8;
+	constexpr uint32 PrivateUpdateInstanceId        = 0x02D9;
 	constexpr uint32 PublicUpdateInstanceId         = 0x02DA;
 	constexpr uint32 PrivateUpdateSkill             = 0x02DD;
+	constexpr uint32 PrivateUpdateSkillLevel        = 0x02DF;
+	constexpr uint32 PrivateUpdateSkillAC           = 0x02E1;
 	constexpr uint32 PrivateUpdateAttribute         = 0x02E3;
+	constexpr uint32 PrivateUpdateAttributeLevel    = 0x02E5;
 	constexpr uint32 PrivateUpdateVital             = 0x02E7;
 	constexpr uint32 PublicUpdateVital              = 0x02E8;
 	constexpr uint32 PrivateUpdateAttribute2ndLevel = 0x02E9;
@@ -66,6 +80,7 @@ namespace ACEOpcode
 /** Nested GameEvent types (inside 0xF7B0). */
 namespace ACEGameEvent
 {
+	constexpr uint32 PopupString = 0x0004;
 	constexpr uint32 QueryAgeResponse = 0x01C3;
 	constexpr uint32 PlayerDescription         = 0x0013;
 	constexpr uint32 InventoryPutObjInContainer = 0x0022;
@@ -146,10 +161,17 @@ namespace ACEGameEvent
 	constexpr uint32 HouseData                 = 0x0225;
 	/** Answer to HouseQuery when the character owns nothing (WeenieError). */
 	constexpr uint32 HouseStatus               = 0x0226;
+	constexpr uint32 HouseUpdateRentTime       = 0x0227;
+	constexpr uint32 HouseUpdateRentPayment    = 0x0228;
+	/** Full house guest/storage access report (HAR). */
+	constexpr uint32 HouseUpdateHAR            = 0x0257;
 	/** Room ids for Turbine chat (General/Trade/LFG/…). */
 	constexpr uint32 SetTurbineChatChannels    = 0x0295;
 	/** Book TOC / page metadata after using a book. */
 	constexpr uint32 BookDataResponse          = 0x00B4;
+	constexpr uint32 BookModifyPageResponse    = 0x00B5;
+	constexpr uint32 BookAddPageResponse       = 0x00B6;
+	constexpr uint32 BookDeletePageResponse    = 0x00B7;
 	/** One book page's author + text. */
 	constexpr uint32 BookPageDataResponse      = 0x00B8;
 }
@@ -353,6 +375,9 @@ namespace ACEGameAction
 	constexpr uint32 AbuseLogRequest       = 0x0140;
 	/** Open / page a book (BookData 0x00AA, BookPageData 0x00AE). */
 	constexpr uint32 BookData              = 0x00AA;
+	constexpr uint32 BookModifyPage        = 0x00AB;
+	constexpr uint32 BookAddPage           = 0x00AC;
+	constexpr uint32 BookDeletePage        = 0x00AD;
 	constexpr uint32 BookPageData          = 0x00AE;
 	/** Chess: join / resign / move / pass / offer stalemate. */
 	constexpr uint32 ChessJoin             = 0x0269;

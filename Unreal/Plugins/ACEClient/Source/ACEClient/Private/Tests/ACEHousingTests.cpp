@@ -164,6 +164,15 @@ bool FACEHousingTest::RunTest(const FString&)
 	if(!S.SocketC2S)return false;
 	ON_SCOPE_EXIT {S.SocketC2S->Close();Sockets->DestroySocket(S.SocketC2S);S.SocketC2S=nullptr;};
 	S.ServerC2SAddr=Address; S.IssacClient=MakeUnique<FACEIsaac>(123);
+	TestTrue(TEXT("Chat dispatch recognizes house guest list"),Binder->TryDispatchChatCommand(TEXT("@house guest list")));
+	const auto* GuestRequest=S.CachedC2SPackets.Find(S.NextPacketSequence-1);
+	if(TestNotNull(TEXT("Guest-list command sends a request"),GuestRequest))
+	{
+		FACEBinaryReader R(GuestRequest->Payload);R.Skip(14);
+		TestEqual(TEXT("Guest-list request uses retail weenie queue"),R.ReadUInt16(),uint16(ACEQueue::WeenieQueue));
+		R.Skip(8);TestEqual(TEXT("Guest-list command opcode"),R.ReadUInt32(),0x024du);
+		TestEqual(TEXT("Guest-list request has no extra payload"),R.Remaining(),0);
+	}
 	Binder->OnElementActivated(Manager->FindElementByName(TEXT("HouseBuy_Button"))); Binder->FinishServerConfirmation(true);
 	const auto* Packet=S.CachedC2SPackets.Find(S.NextPacketSequence-1);
 	if(TestNotNull(TEXT("Confirmed purchase sends action"),Packet))
@@ -323,6 +332,20 @@ bool FACEHousingTest::RunTest(const FString&)
 	TestEqual(TEXT("Retail housing paragraphs are centered"),Binder->HouseTextElements[0]->TextHorizontalJustification,1u);
 	TestEqual(TEXT("Retail housing paragraph spacing"),Binder->HouseTextElements[0]->TextMargins.Bottom,8.f);
 	TestTrue(TEXT("Unpaid maintenance uses retail yellow"),Binder->HouseTextRows.ContainsByPredicate([](const UTextBlock* Text)
+		{return Text->GetText().ToString().StartsWith(TEXT("Warning!")) && Text->GetColorAndOpacity().GetSpecifiedColor()==FLinearColor::Yellow;}));
+	FACEBinaryWriter PaidRent; PaidRent.WriteUInt32(1); PaidRent.WriteInt32(1000); PaidRent.WriteInt32(1000); PaidRent.WriteUInt32(273);
+	PaidRent.WriteString16L(TEXT("Pyreal")); PaidRent.WriteString16L(TEXT("Pyreals"));
+	FACEBinaryReader PaidReader(PaidRent.GetData()); S.HandleHouseUpdateRentPayment(PaidReader);
+	Binder->RefreshWorldOverlays();
+	TestTrue(TEXT("Incremental payment updates the visible rent amounts"),Binder->HouseTextRows.ContainsByPredicate([](const UTextBlock* Text)
+		{return Text->GetText().ToString()==TEXT("Rent:\n1000/1000 Pyreals");}));
+	TestTrue(TEXT("Incremental payment changes the maintenance warning to paid"),Binder->HouseTextRows.ContainsByPredicate([](const UTextBlock* Text)
+		{return Text->GetText().ToString().StartsWith(TEXT("The maintenance has already")) && Text->GetColorAndOpacity().GetSpecifiedColor()==FLinearColor::Green;}));
+	FACEBinaryWriter Period; Period.WriteUInt32(1752592000); FACEBinaryReader PeriodReader(Period.GetData()); S.HandleHouseUpdateRentTime(PeriodReader);
+	Binder->RefreshWorldOverlays();Draw(TEXT("HousingNewPeriod"));
+	TestTrue(TEXT("New rent period redraws zero paid amounts"),Binder->HouseTextRows.ContainsByPredicate([](const UTextBlock* Text)
+		{return Text->GetText().ToString()==TEXT("Rent:\n0/1000 Pyreals");}));
+	TestTrue(TEXT("New rent period restores the unpaid warning"),Binder->HouseTextRows.ContainsByPredicate([](const UTextBlock* Text)
 		{return Text->GetText().ToString().StartsWith(TEXT("Warning!")) && Text->GetColorAndOpacity().GetSpecifiedColor()==FLinearColor::Yellow;}));
 	S.House.bMaintenanceFree=true;Binder->RefreshWorldOverlays();Draw(TEXT("HousingPaid"),1.25f);
 	TestTrue(TEXT("Paid maintenance uses retail green"),Binder->HouseTextRows.ContainsByPredicate([](const UTextBlock* Text)

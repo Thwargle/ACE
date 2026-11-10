@@ -69,11 +69,22 @@ bool FACESession::AcceptPropertyStamp(const TArray<uint8>& Message)
 	int32 ValueBytes = 4;
 	switch (Opcode)
 	{
+	case ACEOpcode::PublicRemovePropertyInt: Public = true; [[fallthrough]];
+	case ACEOpcode::PrivateRemovePropertyInt: Family = ACEOpcode::PrivateUpdatePropertyInt; ValueBytes = 0; break;
+	case ACEOpcode::PublicRemovePropertyInt64: Public = true; [[fallthrough]];
+	case ACEOpcode::PrivateRemovePropertyInt64: Family = ACEOpcode::PrivateUpdatePropertyInt64; ValueBytes = 0; break;
+	case ACEOpcode::PublicRemovePropertyBool: Public = true; [[fallthrough]];
+	case ACEOpcode::PrivateRemovePropertyBool: Family = ACEOpcode::PrivateUpdatePropertyBool; ValueBytes = 0; break;
+	case ACEOpcode::PublicRemovePropertyFloat: Public = true; [[fallthrough]];
+	case ACEOpcode::PrivateRemovePropertyFloat: Family = ACEOpcode::PrivateUpdatePropertyFloat; ValueBytes = 0; break;
+	case ACEOpcode::PublicRemovePropertyString: Public = true; [[fallthrough]];
+	case ACEOpcode::PrivateRemovePropertyString: Family = ACEOpcode::PrivateUpdatePropertyString; ValueBytes = 0; break;
 	case ACEOpcode::SetStackSize: Public = true; Family = ACEOpcode::PrivateUpdatePropertyInt; break;
 	case ACEOpcode::PublicUpdatePropertyInt: Public = true; Family = ACEOpcode::PrivateUpdatePropertyInt; break;
 	case ACEOpcode::PublicUpdatePropertyBool: Public = true; Family = ACEOpcode::PrivateUpdatePropertyBool; break;
 	case ACEOpcode::PublicUpdatePropertyDataID: Public = true; Family = ACEOpcode::PrivateUpdatePropertyDataID; break;
-	case ACEOpcode::PublicUpdateInstanceId: Public = true; break;
+	case ACEOpcode::PublicUpdateInstanceId: Public = true; Family = ACEOpcode::PrivateUpdateInstanceId; break;
+	case ACEOpcode::PrivateUpdateInstanceId: break;
 	case ACEOpcode::PublicUpdatePropertyInt64: Public = true; Family = ACEOpcode::PrivateUpdatePropertyInt64; ValueBytes = 8; break;
 	case ACEOpcode::PublicUpdatePropertyFloat: Public = true; Family = ACEOpcode::PrivateUpdatePropertyFloat; ValueBytes = 8; break;
 	case ACEOpcode::PublicUpdatePropertyString: Public = String = true; Family = ACEOpcode::PrivateUpdatePropertyString; ValueBytes = 0; break;
@@ -84,29 +95,37 @@ bool FACESession::AcceptPropertyStamp(const TArray<uint8>& Message)
 	case ACEOpcode::PrivateUpdatePropertyFloat: ValueBytes = 8; break;
 	case ACEOpcode::PrivateUpdatePropertyString: String = true; ValueBytes = 0; break;
 	case ACEOpcode::PrivateUpdateAttribute: ValueBytes = 12; break;
+	case ACEOpcode::PrivateUpdateAttributeLevel: Family = ACEOpcode::PrivateUpdateAttribute; break;
 	case ACEOpcode::PrivateUpdateSkill: ValueBytes = 28; break;
+	case ACEOpcode::PrivateUpdateSkillLevel:
+	case ACEOpcode::PrivateUpdateSkillAC: Family = ACEOpcode::PrivateUpdateSkill; break;
 	case ACEOpcode::PrivateUpdateVital: ValueBytes = 16; break;
 	case ACEOpcode::PrivateUpdateAttribute2ndLevel: Family = ACEOpcode::PrivateUpdateVital; break;
 	default: return true;
 	}
 	if (!Reader.CanRead(5 + (Public ? 4 : 0) + ValueBytes)) return false;
 	const uint8 Stamp = Reader.ReadUInt8();
-	// String updates alone place stype before sender (UIQueueManager::HandleStringUpdateEvents).
 	int32 Owner = PlayerGuid;
 	uint32 Property;
 	if (String)
 	{
-		Property = Reader.ReadUInt32();
-		if (Public) Owner = Reader.ReadInt32();
-		Reader.Align();
-		if (!Reader.CanRead(2)) return false;
-		const uint16 Length = Reader.ReadUInt16();
-		if (!Reader.CanRead(Length)) return false;
+		if (!ReadStringPropertyHeader(Reader, Public, Owner, Property)) return false;
 	}
 	else
 	{
 		if (Public) Owner = Reader.ReadInt32();
 		Property = Opcode == ACEOpcode::SetStackSize ? 12u : Reader.ReadUInt32();
+	}
+	// Reject malformed compact stats before consuming their shared timestamp.
+	// Full/level/advancement messages for a stat use one retail WTimeStamper key.
+	if (Opcode == ACEOpcode::PrivateUpdateAttributeLevel || Opcode == ACEOpcode::PrivateUpdateAttribute2ndLevel)
+	{
+		if (Property < 1 || Property > 6 || Reader.ReadUInt32() > MAX_int32) return false;
+	}
+	else if (Opcode == ACEOpcode::PrivateUpdateSkillLevel || Opcode == ACEOpcode::PrivateUpdateSkillAC)
+	{
+		if (!Property || Property > MAX_int32
+			|| Reader.ReadUInt32() > (Opcode == ACEOpcode::PrivateUpdateSkillAC ? 3u : uint32(MAX_int32))) return false;
 	}
 	// Inventory InstanceID updates can establish a weenie before its physics
 	// CreateObject arrives. Keep their stamps too; the handlers build placeholders.

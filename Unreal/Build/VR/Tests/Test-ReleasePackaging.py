@@ -72,6 +72,18 @@ class ReleasePackagingTests(unittest.TestCase):
                 archive.writestr(name, b'fixture')
             archive.writestr('manifest.json', json.dumps(manifest))
             archive.writestr('AC-VR-arm64.apk', apk.read_bytes())
+            if version >= 154:
+                archive.writestr('Diagnose-Quest.cmd', b'fixture diagnostic launcher')
+                archive.writestr('Diagnose-Quest.ps1', b'fixture diagnostic collector')
+        if version >= 154:
+            put(self.root, 'Quest/Sharing/INSTALLER-UPDATE.txt', b'fixture installer update instructions')
+            with zipfile.ZipFile(quest_zip) as archive, zipfile.ZipFile(
+                    quest_zip.with_name(quest_zip.stem + '-update-only.zip'), 'w') as update:
+                for name in ('Install-Quest.ps1', 'Install-Quest.cmd', 'Update-Quest.cmd', 'Repair-Quest.cmd',
+                             'Diagnose-Quest.cmd', 'Diagnose-Quest.ps1', 'Quest-DataTransfer.ps1',
+                             'Quest-ProfileMigration.ps1', 'README.txt'):
+                    update.writestr(name, archive.read(name))
+                update.writestr('INSTALLER-UPDATE.txt', b'fixture installer update instructions')
         put(self.root, 'Unreal/Saved/VRWindowsArchive/Windows/ACUnreal/Binaries/Win64/ACUnreal.exe',
             b'MZ' + (display + '\0ACE.LocalCosmetics/1\0').encode('utf-16-le'))
         put(self.root, 'Unreal/Saved/VRWindowsArchive/Windows/Update-Client.ps1')
@@ -154,6 +166,30 @@ class ReleasePackagingTests(unittest.TestCase):
         _, meta = self.assemble()
         self.assertEqual(meta['clientPluginApis']['lua'], 2)
         self.assertEqual(meta['clientPluginApis']['supportedLua'], [1, 2])
+
+    def test_quest_diagnostics_ship_in_full_and_small_downloads(self):
+        self.fixture(version=154)
+        release, meta = self.assemble()
+        update = meta['questInstallerUpdate']
+        with zipfile.ZipFile(release / update['file']) as archive:
+            self.assertEqual(archive.read('Diagnose-Quest.ps1'), b'fixture diagnostic collector')
+            self.assertNotIn('AC-VR-arm64.apk', archive.namelist())
+        self.assertIn(update['file'], (release / 'SHA256SUMS.txt').read_text())
+        public = self.publish_local(release)
+        self.assertEqual(public['questInstallerUpdate'], update)
+
+    def test_quest_inconsistent_diagnostics_rejected_before_release_created(self):
+        self.fixture(version=154)
+        update = self.root / 'Quest/Share/AC-VR-Quest-v154-installer-r6-update-only.zip'
+        with zipfile.ZipFile(update) as archive:
+            files = {name: archive.read(name) for name in archive.namelist()}
+        files['Diagnose-Quest.ps1'] = b'stale helper'
+        with zipfile.ZipFile(update, 'w') as archive:
+            for name, content in files.items():
+                archive.writestr(name, content)
+        with self.assertRaisesRegex(ValueError, 'Quest helper differs'):
+            self.assemble()
+        self.assertFalse((self.root / 'Releases').exists())
 
     def test_converted_cosmetic_assets_rejected_from_release(self):
         self.fixture()

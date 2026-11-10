@@ -113,6 +113,32 @@ bool FACEUCMSchedulingTest::RunTest(const FString&)
   P->SetBoolField(TEXT("navigation"),false);S->SetNumberField(TEXT("pack_slots"),1);S->SetNumberField(TEXT("inventory_revision"),2);
   TestEqual(TEXT("Space in any pack resumes looting without restarting UCM"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("open_corpse")));
  }
+ // Ordinary NAV use waits are cooperative too. Once native use is idle,
+ // recovery and combat keep running without their receipts advancing the route.
+ for(bool Boost:{false,true}) for(int32 Outcome:{0,1,2})
+ {
+  FACEPluginVM VM;TestTrue(TEXT("Use waypoint policy loads"),VM.Load(Source,Error));auto S=Snapshot();
+  auto P=Json(TEXT(R"({"buffing":false,"recovery":true,"combat":"melee","navigation":true,"route":[{"kind":"use","object_id":800,"cell":30998795,"x":30,"y":-34,"z":0},{"cell":30998795,"x":45,"y":-34,"z":0}]})"));
+  P->SetBoolField(TEXT("nav_priority"),Boost);S->SetArrayField(TEXT("action_events"),{});
+  S->SetArrayField(TEXT("route_objects"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":800,"name":"Lever","distance":0})")))});
+  TestEqual(TEXT("Use waypoint sends the recorded item once"),Step(VM,S,P)->GetNumberField(TEXT("item")),800.);
+  S->SetNumberField(TEXT("health"),10);S->SetNumberField(TEXT("time"),101);S->SetBoolField(TEXT("busy"),true);
+  TestFalse(TEXT("Use waypoint retains the native busy gate"),Step(VM,S,P)->HasField(TEXT("action")));
+  S->SetBoolField(TEXT("busy"),false);
+  TestEqual(TEXT("Waiting use waypoint allows health recovery"),Step(VM,S,P)->GetNumberField(TEXT("item")),51.);
+  S->SetNumberField(TEXT("health"),100);S->SetNumberField(TEXT("time"),102);S->SetNumberField(TEXT("action_serial"),1);
+  S->SetArrayField(TEXT("action_events"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"type":"use","source":51,"action_serial":1,"requested_at":101,"error":0})")))});
+  S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":500,"name":"Rat","distance":1,"identified":true,"line_of_sight":true})")))});
+  TestEqual(TEXT("Waiting use waypoint allows combat regardless of navigation priority"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+  S->SetArrayField(TEXT("targets"),{});Step(VM,S,P);
+  auto Old=Json(TEXT(R"({"type":"use","source":800,"action_serial":2,"requested_at":99,"error":1})"));
+  S->SetArrayField(TEXT("action_events"),{MakeShared<FJsonValueObject>(Old)});
+  TestEqual(TEXT("Neither unrelated nor stale receipt advances/rejects the waypoint"),Step(VM,S,P)->GetStringField(TEXT("status")),FString(TEXT("Waiting for route action")));
+  if(Outcome<2){Old->SetNumberField(TEXT("requested_at"),100);Old->SetNumberField(TEXT("error"),Outcome);}
+  else S->SetNumberField(TEXT("time"),131);
+  const auto Done=Step(VM,S,P);
+  TestEqual(TEXT("Only matching success resumes walking; error/timeout pause navigation"),Done->GetStringField(TEXT("action")),FString(Outcome==0?TEXT("move"):TEXT("pause_navigation")));
+ }
  for(bool Recall:{false,true}) for(bool Boost:{false,true}) for(bool Arrives:{false,true})
  {
   FACEPluginVM VM;TestTrue(TEXT("Portal scheduling policy loads"),VM.Load(Source,Error));auto S=Snapshot();

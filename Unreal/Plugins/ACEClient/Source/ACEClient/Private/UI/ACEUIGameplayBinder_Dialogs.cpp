@@ -1,11 +1,13 @@
 #include "Components/Border.h"
 #include "UI/ACERetailTextBlock.h"
+#include "UI/ACERetailTextEntry.h"
 #include "UI/ACEUIFontStyles.h"
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
 #include "UI/ACEUIElement.h"
 #include "ACEClientSubsystem.h"
+#include "ACESession.h"
 #include "ACEOpcodes.h"
 #include "Components/EditableTextBox.h"
 #include "Components/TextBlock.h"
@@ -139,6 +141,7 @@ void UACEUIGameplayBinder::HideDialogOverlays()
 	if (UrgentComplaintEntry) { UrgentComplaintEntry->SetVisibility(ESlateVisibility::Collapsed); }
 	if (BookPageTextLabel) { BookPageTextLabel->SetVisibility(ESlateVisibility::Collapsed); }
 	if (BookScroll) { BookScroll->SetVisibility(ESlateVisibility::Collapsed); }
+	if (BookPageEditor) { BookPageEditor->SetVisibility(ESlateVisibility::Collapsed); }
 	if (BookTitleLabel) { BookTitleLabel->SetVisibility(ESlateVisibility::Collapsed); }
 }
 
@@ -356,7 +359,7 @@ void UACEUIGameplayBinder::RequestBookPageIfNeeded(int32 PageIndex)
 	{
 		return;
 	}
-	// BookDataResponse leaves page text null — always fetch the visible page.
+	// Session navigation reuses received pages and requests only missing text.
 	Client->SendBookPageData(Info.BookGuid, PageIndex);
 }
 
@@ -385,6 +388,7 @@ void UACEUIGameplayBinder::RefreshBookOverlays()
 	{
 		if (BookPageTextLabel) { BookPageTextLabel->SetVisibility(ESlateVisibility::Collapsed); }
 		if (BookScroll) { BookScroll->SetVisibility(ESlateVisibility::Collapsed); }
+		if (BookPageEditor) { BookPageEditor->SetVisibility(ESlateVisibility::Collapsed); }
 		if (BookTitleLabel) { BookTitleLabel->SetVisibility(ESlateVisibility::Collapsed); }
 		return;
 	}
@@ -403,32 +407,36 @@ void UACEUIGameplayBinder::RefreshBookOverlays()
 	}
 
 	const FACEBookInfo Info = Client->GetBookInfo();
+	const auto Session = Client->GetSession();
 	FString Title = TEXT("Book");
-	if (!Info.AuthorName.IsEmpty())
+	FACEWorldObject Object;
+	if (Client->GetWorldObject(Info.BookGuid, Object) && !Object.Name.IsEmpty()) Title = Object.Name;
+	// gmBookUI titles inscribed books with their inscription, otherwise their object name.
+	if (!Info.AuthorName.IsEmpty() && !Info.Inscription.IsEmpty()) Title = Info.Inscription;
+	if (Info.NumPages > 0)
 	{
-		Title = FString::Printf(TEXT("Book — %s"), *Info.AuthorName);
+		Title += FString::Printf(TEXT("  (%d / %d)"), Info.CurrentPage + 1, Info.NumPages);
 	}
-	if (Info.NumPages > 0 || Info.MaxPages > 0)
-	{
-		const int32 Total = Info.NumPages > 0 ? Info.NumPages : Info.MaxPages;
-		Title += FString::Printf(TEXT("  (%d / %d)"), Info.CurrentPage + 1, Total);
-	}
-	PlaceTextOnElement(BookTitleLabel,
-		Manager->FindElementUnder(TEXT("BookPanel_Field"), TEXT("TitleText")),
-		Title, 10, DlgGold, 720, true);
+	const auto TitleEl = Manager->FindElementUnder(TEXT("BookPanel_Field"), TEXT("DisplayedBookNameText"));
+	PlaceTextOnElement(BookTitleLabel, TitleEl, Title, 10,
+		TitleEl ? TitleEl->TextColor.Get(FLinearColor::Black) : FLinearColor::Black, 720, true);
 
 	FString Body;
 	if (!Info.bOpen)
 	{
 		Body = TEXT("Double-click a book in your inventory to read it.");
 	}
-	else if (Info.Pages.IsValidIndex(Info.CurrentPage) && !Info.Pages[Info.CurrentPage].IsEmpty())
+	else if (Info.HasPageText(Info.CurrentPage))
 	{
-		Body = Info.Pages[Info.CurrentPage];
+		Body = Session ? Session->GetBookPageText() : Info.Pages[Info.CurrentPage];
 	}
 	else if (!Info.Inscription.IsEmpty() && Info.CurrentPage == 0)
 	{
 		Body = Info.Inscription;
+	}
+	else if (Info.Pages.IsEmpty())
+	{
+		Body = TEXT("(Blank book)");
 	}
 	else
 	{
@@ -447,6 +455,7 @@ void UACEUIGameplayBinder::RefreshBookOverlays()
 	if (ScrolledBookGuid != Info.BookGuid || ScrolledBookPage != Info.CurrentPage)
 	{
 		BookScroll->SetScrollOffset(0.f);
+		if (BookPageEditor) BookPageEditor->SetScrollOffset(0.f);
 		ScrolledBookGuid = Info.BookGuid; ScrolledBookPage = Info.CurrentPage;
 	}
 	BookPageTextLabel->SetText(FText::FromString(Body));
@@ -455,11 +464,40 @@ void UACEUIGameplayBinder::RefreshBookOverlays()
 	BookPageTextLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
 	if (auto* Retail = Cast<UACERetailTextBlock>(BookPageTextLabel))
 		Retail->SetRetailElement(Canvas->GetResourceResolver(), TextEl, Canvas->GetLastScale2D(), TextEl->Width, false);
-	BookScroll->SetVisibility(ESlateVisibility::Visible);
-	Canvas->PlaceWidgetAtElement(BookScroll, TextEl, 721);
-	const float Max = BookScroll->GetScrollOffsetOfEnd();
-	SyncDatScrollbar(GetBookScrollbar(), Max > 0.f ? BookScroll->GetScrollOffset()/Max : 0.f,
+	const bool Editable = Session && Session->CanEditBookPage();
+	if (Editable)
+	{
+		if (!BookPageEditor)
+		{
+			BookPageEditor = Tree->ConstructWidget<UACERetailTextEntry>();
+			BookPageEditor->bMultiline = true;
+			BookPageEditor->OnTextChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleBookTextChanged);
+		}
+		BookPageEditor->MaxLength = FMath::Clamp(Info.MaxCharsPerPage, 0, 65535);
+		BookPageEditor->TextColor = TextEl->TextColor.Get(FLinearColor::Black);
+		BookPageEditor->SetRetailElement(Canvas->GetResourceResolver(), TextEl);
+		BookPageEditor->SetText(FText::FromString(Body));
+		EditedBookGuid = Info.BookGuid; EditedBookPage = Info.CurrentPage;
+		BookPageEditor->SetVisibility(ESlateVisibility::Visible);
+		Canvas->PlaceWidgetAtElement(BookPageEditor, TextEl, 722);
+	}
+	else if (BookPageEditor) BookPageEditor->SetVisibility(ESlateVisibility::Collapsed);
+	BookScroll->SetVisibility(Editable ? ESlateVisibility::Collapsed : ESlateVisibility::Visible);
+	if (!Editable) Canvas->PlaceWidgetAtElement(BookScroll, TextEl, 721);
+	const float Max = Editable ? BookPageEditor->GetScrollOffsetOfEnd() : BookScroll->GetScrollOffsetOfEnd();
+	const float Offset = Editable ? BookPageEditor->GetScrollOffset() : BookScroll->GetScrollOffset();
+	SyncDatScrollbar(GetBookScrollbar(), Max > 0.f ? Offset/Max : 0.f,
 		TextEl->Height/FMath::Max(1.f, Max + TextEl->Height));
+}
+
+void UACEUIGameplayBinder::HandleBookTextChanged(const FText& Text)
+{
+	if (auto Session = Client ? Client->GetSession() : nullptr)
+	{
+		const auto& Info = Session->GetBookInfo();
+		if (Info.BookGuid == EditedBookGuid && Info.CurrentPage == EditedBookPage)
+			Session->SetBookPageText(Text.ToString());
+	}
 }
 
 namespace
@@ -897,7 +935,7 @@ bool UACEUIGameplayBinder::HandleDialogNamedClick(const FString& Name)
 		const FACEBookInfo Info = Client->GetBookInfo();
 		if (Info.bOpen && Info.CurrentPage > 0)
 		{
-			Client->SendBookPageData(Info.BookGuid, Info.CurrentPage - 1);
+			if (auto Session = Client->GetSession()) Session->TurnBookPage(Info.CurrentPage - 1);
 		}
 		RefreshBookOverlays();
 		return true;
@@ -905,10 +943,10 @@ bool UACEUIGameplayBinder::HandleDialogNamedClick(const FString& Name)
 	if (Name == TEXT("BookNextButton") && Client)
 	{
 		const FACEBookInfo Info = Client->GetBookInfo();
-		const int32 Total = Info.NumPages > 0 ? Info.NumPages : Info.MaxPages;
+		const int32 Total = Info.MaxPages;
 		if (Info.bOpen && Info.CurrentPage + 1 < Total)
 		{
-			Client->SendBookPageData(Info.BookGuid, Info.CurrentPage + 1);
+			if (auto Session = Client->GetSession()) Session->TurnBookPage(Info.CurrentPage + 1);
 		}
 		RefreshBookOverlays();
 		return true;

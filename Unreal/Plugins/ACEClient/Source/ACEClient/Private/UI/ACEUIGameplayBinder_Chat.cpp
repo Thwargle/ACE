@@ -1102,6 +1102,17 @@ bool UACEUIGameplayBinder::TryHandleModalPopupClick(FVector2D Absolute)
 		}
 		return true;
 	}
+	if (ServerPopupRoot && ServerPopupRoot->bVisible && Canvas && Manager)
+	{
+		const FVector2D Pos = Canvas->ViewportToLayout(Canvas->GetCachedGeometry().AbsoluteToLocal(Absolute));
+		if (const auto OK = Manager->FindElementByName(TEXT("ServerMessageOK")))
+		{
+			const FIntPoint Origin = OK->GetScreenOrigin();
+			if (Pos.X >= Origin.X && Pos.Y >= Origin.Y && Pos.X < Origin.X + OK->Width && Pos.Y < Origin.Y + OK->Height)
+				FinishServerPopup(ServerPopupId);
+		}
+		return true;
+	}
 	if (bChatTargetPopupOpen)
 	{
 		TryHandleChatTargetPopupClick(Absolute);

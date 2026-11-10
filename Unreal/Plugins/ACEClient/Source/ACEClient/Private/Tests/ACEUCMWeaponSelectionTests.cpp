@@ -91,6 +91,38 @@ bool FACEUCMWeaponSelectionTest::RunTest(const FString&)
         Wands[Index]->AsObject()->SetBoolField(TEXT("equipped"),false);
         Item(Step(S,P),90+Index,TEXT("Monster element selects the matching elemental wand"));
     }
+    // A background refresh must not make an assessed pierce wand disappear
+    // from the loadout, and force-Pierce must not silently use a blunt wand.
+    S=State();P=Profile();P->SetStringField(TEXT("combat"),TEXT("magic"));P->SetNumberField(TEXT("damage_type"),2);
+    SetItems(S,TEXT(R"({"items":[{"id":90,"name":"Blunt wand","type":32768,"damage_type":4,"identified":true,"can_wield":true,"equipped":true,"element_mod":3},{"id":91,"name":"Pierce wand","type":32768,"damage_type":2,"identified":false,"combat_identified":true,"can_wield":true,"combat_int_properties":{"179":16},"element_mod":2}]})"));
+    S->SetArrayField(TEXT("spells"),Json(TEXT(R"({"items":[{"id":1,"category":122,"school":1,"power":100,"skill":400},{"id":2,"category":118,"school":1,"power":100,"skill":400}]})"))->GetArrayField(TEXT("items")));
+    Item(Step(S,P),91,TEXT("Force pierce selects cached piercing wand over equipped blunt wand"));
+    S->GetArrayField(TEXT("inventory"))[1]->AsObject()->SetBoolField(TEXT("combat_identified"),false);
+    auto Unknown=Step(S,P);TestEqual(TEXT("Never-assessed piercing candidate is inspected before wrong-element attack"),Unknown->GetStringField(TEXT("action")),FString(TEXT("identify")));
+    Item(Unknown,91,TEXT("Inspect the unknown candidate rather than silently using blunt"));
+    // Native editor expressions use the same bounded AST as imported VT rules.
+    S=State();P=Profile();P->SetStringField(TEXT("combat"),TEXT("melee"));
+    S->SetObjectField(TEXT("species_names"),Json(TEXT(R"({"1":"Tusker"})")));
+    SetItems(S,TEXT(R"({"items":[{"id":90,"name":"Sword","type":1,"damage_type":1,"identified":true,"can_wield":true,"equipped":true,"damage":30}]})"));
+    for(const TCHAR* Expression:{TEXT("species==Tusker"),TEXT("name==Snow Tusker"),TEXT("species==Tusker && name==Snow Tusker"),TEXT("name==No match || species==Tusker"),TEXT("name#`^Snow.*`")})
+    {
+        auto Rule=MakeShared<FJsonObject>();TestTrue(TEXT("Native mob expression compiles"),ACEVTProfile::SetMonsterMatch(Rule,Expression,Error));
+        Rule->SetNumberField(TEXT("priority"),-1);P->SetArrayField(TEXT("monsters"),{MakeShared<FJsonValueObject>(Rule)});
+        FString Action;Step(S,P)->TryGetStringField(TEXT("action"),Action);
+        TestNotEqual(TEXT("Matching expression skips target marked ignored"),Action,FString(TEXT("attack")));
+        S->GetArrayField(TEXT("targets"))[0]->AsObject()->SetStringField(TEXT("name"),TEXT("Other creature"));
+        S->GetArrayField(TEXT("targets"))[0]->AsObject()->SetNumberField(TEXT("creature_type"),2);
+        TestEqual(TEXT("Nonmatching expression leaves target attackable"),Step(S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+        S->GetArrayField(TEXT("targets"))[0]->AsObject()->SetStringField(TEXT("name"),TEXT("Snow Tusker"));
+        S->GetArrayField(TEXT("targets"))[0]->AsObject()->SetNumberField(TEXT("creature_type"),1);
+    }
+    auto Editable=MakeShared<FJsonObject>();ACEVTProfile::SetMonsterMatch(Editable,TEXT("species==Tusker"),Error);
+    TestFalse(TEXT("Incomplete expression rejected"),ACEVTProfile::SetMonsterMatch(Editable,TEXT("species=="),Error));
+    TestEqual(TEXT("Invalid edit retains prior rule"),Editable->GetStringField(TEXT("name")),FString(TEXT("species==Tusker")));
+    TestFalse(TEXT("Action calls cannot run in a mob expression"),ACEVTProfile::SetMonsterMatch(Editable,TEXT("name==actiontryuseitem[1]"),Error));
+    TestTrue(TEXT("Expression can be changed back to a plain name"),ACEVTProfile::SetMonsterMatch(Editable,TEXT("Snow"),Error));
+    TestFalse(TEXT("Plain prefix no longer carries old expression"),Editable->HasField(TEXT("expression")));
+
     // Reported custom wand identity, through the native snapshot and real Lua.
     // Zero physical weapon-profile fields are normal for a caster. Custom GUIDs
     // and bonuses must not require a retail WCID/name whitelist.

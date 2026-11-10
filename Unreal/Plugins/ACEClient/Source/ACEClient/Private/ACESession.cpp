@@ -48,6 +48,8 @@ void FACESession::SetState(EACESessionState NewState)
 		PortalYearTicksAtConnect = PortalYearTicksRealtime = 0.0;
 	}
 	State = NewState;
+	if (State == EACESessionState::InWorld && bFellowshipUpdatesRequested)
+		SendFellowshipUpdateRequest(true);
 	OnStateChanged.Broadcast(State);
 }
 
@@ -83,11 +85,16 @@ bool FACESession::Connect(const FACELoginCredentials& Credentials)
 
 void FACESession::Disconnect()
 {
+	ResetBookEditing();
+	Book = FACEBookInfo();
+	PendingBookPage = INDEX_NONE;
+	BookPageRequestedAt = 0.0;
 	ManualAppraisalGuid = 0;
 	bBackgroundAppraisalContext = false;
 	PendingInventoryTransfers.Reset();
 	GiveRecipientGuid = 0;
 	Confirmations.Reset();
+	ServerPopups.Reset();
 	LastServerPacketAt = 0.0;
 	LastServerDatagramAt = LastReceivePortKeepaliveAt = 0.0;
 	LoginRequestAt = 0.0;
@@ -140,6 +147,8 @@ void FACESession::Disconnect()
 	VendorSellRate = 1.f;
 	TradePartnerGuid = 0;
 	TradeInitiatorGuid = 0;
+	bTradeSelfAccepted = bTradePartnerAccepted = false;
+	TradeStamp = 0.0;
 	TradeSelfItems.Reset();
 	TradeRemovedItems.Reset();
 	TradePartnerItems.Reset();
@@ -149,6 +158,8 @@ void FACESession::Disconnect()
 	CombatEventRevision = 0;
 	bServerAttackInProgress = false;
 	LastAttackError = 0;
+	LastAttackerGuid = 0;
+	LastAttackerTimeSeconds = 0.0;
 	DisplayTitleId = 0;
 	CharacterTitleIds.Reset();
 	Fellowship = FACEFellowshipInfo();
@@ -267,6 +278,12 @@ void FACESession::RequestLogOff()
 
 void FACESession::ClearWorldState()
 {
+	ResetBookEditing();
+	Confirmations.Reset();
+	ServerPopups.Reset();
+	Book = FACEBookInfo();
+	PendingBookPage = INDEX_NONE;
+	BookPageRequestedAt = 0.0;
 	ManualAppraisalGuid = 0;
 	bBackgroundAppraisalContext = false;
 	ObjectVisibilityDeadlines.Reset();
@@ -301,6 +318,8 @@ void FACESession::ClearWorldState()
 	VendorSellRate = 1.f;
 	TradePartnerGuid = 0;
 	TradeInitiatorGuid = 0;
+	bTradeSelfAccepted = bTradePartnerAccepted = false;
+	TradeStamp = 0.0;
 	TradeSelfItems.Reset();
 	TradeRemovedItems.Reset();
 	TradePartnerItems.Reset();
@@ -310,6 +329,8 @@ void FACESession::ClearWorldState()
 	CombatEventRevision = 0;
 	bServerAttackInProgress = false;
 	LastAttackError = 0;
+	LastAttackerGuid = 0;
+	LastAttackerTimeSeconds = 0.0;
 	DisplayTitleId = 0;
 	CharacterTitleIds.Reset();
 	Fellowship = FACEFellowshipInfo();
@@ -448,6 +469,7 @@ bool FACESession::HasConnectionTimedOut(double Now) const
 void FACESession::Tick(float DeltaSeconds)
 {
 	ACE_PROFILE_SCOPE(Network);
+	CheckBookWriteTimeout();
 	for(auto It=PendingInventoryTransfers.CreateIterator();It;++It)
 		if(State!=EACESessionState::InWorld||FPlatformTime::Seconds()>=It.Value())It.RemoveCurrent();
 	if (PendingEquipmentGuid && FPlatformTime::Seconds() >= PendingEquipmentUntil)
@@ -1818,6 +1840,9 @@ void FACESession::HandleGameMessage(const TArray<uint8>& MessageBytes)
 	case ACEOpcode::PrivateUpdateAttribute:
 		HandlePrivateUpdateAttribute(Reader);
 		break;
+	case ACEOpcode::PrivateUpdateAttributeLevel:
+		HandlePrivateUpdateAttributeLevel(Reader);
+		break;
 	case ACEOpcode::PrivateUpdateVital:
 		HandlePrivateUpdateVital(Reader);
 		break;
@@ -1827,9 +1852,35 @@ void FACESession::HandleGameMessage(const TArray<uint8>& MessageBytes)
 	case ACEOpcode::PrivateUpdateSkill:
 		HandlePrivateUpdateSkill(Reader);
 		break;
+	case ACEOpcode::PrivateUpdateSkillLevel:
+		HandlePrivateUpdateSkillValue(Reader, false);
+		break;
+	case ACEOpcode::PrivateUpdateSkillAC:
+		HandlePrivateUpdateSkillValue(Reader, true);
+		break;
 	case ACEOpcode::PrivateUpdatePropertyInt:
 		HandlePrivateUpdatePropertyInt(Reader);
 		break;
+	case ACEOpcode::PrivateRemovePropertyInt:
+		HandleRemoveProperty(Reader, ACEOpcode::PrivateUpdatePropertyInt, false); break;
+	case ACEOpcode::PublicRemovePropertyInt:
+		HandleRemoveProperty(Reader, ACEOpcode::PrivateUpdatePropertyInt, true); break;
+	case ACEOpcode::PrivateRemovePropertyInt64:
+		HandleRemoveProperty(Reader, ACEOpcode::PrivateUpdatePropertyInt64, false); break;
+	case ACEOpcode::PublicRemovePropertyInt64:
+		HandleRemoveProperty(Reader, ACEOpcode::PrivateUpdatePropertyInt64, true); break;
+	case ACEOpcode::PrivateRemovePropertyBool:
+		HandleRemoveProperty(Reader, ACEOpcode::PrivateUpdatePropertyBool, false); break;
+	case ACEOpcode::PublicRemovePropertyBool:
+		HandleRemoveProperty(Reader, ACEOpcode::PrivateUpdatePropertyBool, true); break;
+	case ACEOpcode::PrivateRemovePropertyFloat:
+		HandleRemoveProperty(Reader, ACEOpcode::PrivateUpdatePropertyFloat, false); break;
+	case ACEOpcode::PublicRemovePropertyFloat:
+		HandleRemoveProperty(Reader, ACEOpcode::PrivateUpdatePropertyFloat, true); break;
+	case ACEOpcode::PrivateRemovePropertyString:
+		HandleRemoveProperty(Reader, ACEOpcode::PrivateUpdatePropertyString, false); break;
+	case ACEOpcode::PublicRemovePropertyString:
+		HandleRemoveProperty(Reader, ACEOpcode::PrivateUpdatePropertyString, true); break;
 	case ACEOpcode::PrivateUpdatePropertyInt64:
 		HandlePrivateUpdatePropertyInt64(Reader);
 		break;
@@ -1865,6 +1916,9 @@ void FACESession::HandleGameMessage(const TArray<uint8>& MessageBytes)
 		break;
 	case ACEOpcode::PublicUpdateInstanceId:
 		HandlePublicUpdateInstanceId(Reader);
+		break;
+	case ACEOpcode::PrivateUpdateInstanceId:
+		HandlePrivateUpdateInstanceId(Reader);
 		break;
 	case ACEOpcode::InventoryRemoveObject:
 		HandleInventoryRemoveObject(Reader);
@@ -1948,6 +2002,8 @@ void FACESession::UpsertWorldObject(const FACEWorldObject& Object, bool bForceRe
 	ObjectVisibilityDeadlines.Remove(Object.Guid);
 	FACEWorldObject Merged = Object;
 	const FACEWorldObject* Existing = WorldObjects.Find(Object.Guid);
+	const bool bWasInventory = Existing && (HasPlayerInventoryState(*Existing)
+		|| (PlayerGuid && Existing->ParentGuid == PlayerGuid));
 	const bool bSameInstance = Existing && (Existing->bPhysicsDescriptionPending
 		|| !Object.bHasPhysicsTimestamps || !Existing->bHasPhysicsTimestamps
 		|| Object.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance] == Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]);
@@ -2067,6 +2123,11 @@ void FACESession::UpsertWorldObject(const FACEWorldObject& Object, bool bForceRe
 	}
 	ApplyPlayerInventoryCapacity(Merged);
 	WorldObjects.Add(Merged.Guid, Merged);
+	// CreateObject can complete after ContainId, or arrive without another
+	// inventory receipt. Refresh cached rows on arrival/replacement as well as
+	// movement; an appraisal-only refresh cannot insert a previously absent row.
+	if (bWasInventory || HasPlayerInventoryState(Merged)
+		|| (PlayerGuid && Merged.ParentGuid == PlayerGuid)) ++InventoryDataRevision;
 	QueueReadyGameEvents(Merged.Guid);
 	if (Merged.Guid == PlayerGuid) AdoptPlayerPhysicsTimestamps(Merged);
 	ReconcileOpenContainerOwnership();
@@ -2816,24 +2877,10 @@ void FACESession::HandleGameEvent(FACEBinaryReader& Reader)
 				SendGameActionU32(0x0258, HouseOffer.LordGuid);
 		}
 		break;
+	case ACEGameEvent::PopupString:
 	case 0x0274: // CharacterConfirmationRequest
-	{
-		if (State != EACESessionState::InWorld || !Reader.CanRead(10)) break;
-		FACEConfirmation Request;
-		Request.Type = Reader.ReadUInt32(); Request.Context = Reader.ReadUInt32();
-		Request.Prompt = Reader.ReadString16L();
-		if (Request.Prompt.IsEmpty()) break;
-		if (auto* Existing = Confirmations.FindByPredicate([&](const FACEConfirmation& C) { return C.Type == Request.Type && C.Context == Request.Context; }))
-			*Existing = MoveTemp(Request);
-		else if (Confirmations.Num() < 16) Confirmations.Add(MoveTemp(Request));
-		break;
-	}
-	case 0x0276: // CharacterConfirmationDone: withdraw expired/resolved dialogs.
-		if (Reader.CanRead(8))
-		{
-			const uint32 Type = Reader.ReadUInt32(), Context = Reader.ReadUInt32();
-			Confirmations.RemoveAll([&](const FACEConfirmation& C) { return C.Type == Type && C.Context == Context; });
-		}
+	case 0x0276: // CharacterConfirmationDone
+		HandleServerDialog(EventType, Reader);
 		break;
 	case 0xF7D1: HandleVRPose(Reader); break;
 	case 0xF7D2: HandleHealthFeedback(Reader); break;
@@ -2978,7 +3025,9 @@ void FACESession::HandleGameEvent(FACEBinaryReader& Reader)
 		HandleAllegianceLoginNotification(Reader);
 		break;
 	case ACEGameEvent::AllegianceUpdateDone:
+		break;
 	case ACEGameEvent::AllegianceInfoResponse:
+		HandleAllegianceInfoResponse(Reader);
 		break;
 	case ACEGameEvent::FriendsListUpdate:
 		HandleFriendsListUpdate(Reader);
@@ -3001,6 +3050,15 @@ void FACESession::HandleGameEvent(FACEBinaryReader& Reader)
 	case ACEGameEvent::HouseStatus:
 		HandleHouseStatus(Reader);
 		break;
+	case ACEGameEvent::HouseUpdateRentTime:
+		HandleHouseUpdateRentTime(Reader);
+		break;
+	case ACEGameEvent::HouseUpdateRentPayment:
+		HandleHouseUpdateRentPayment(Reader);
+		break;
+	case ACEGameEvent::HouseUpdateHAR:
+		HandleHouseUpdateHAR(Reader);
+		break;
 	case ACEGameEvent::SetTurbineChatChannels:
 		HandleSetTurbineChatChannels(Reader);
 		break;
@@ -3009,6 +3067,11 @@ void FACESession::HandleGameEvent(FACEBinaryReader& Reader)
 		break;
 	case ACEGameEvent::BookPageDataResponse:
 		HandleBookPageDataResponse(Reader);
+		break;
+	case ACEGameEvent::BookModifyPageResponse:
+	case ACEGameEvent::BookAddPageResponse:
+	case ACEGameEvent::BookDeletePageResponse:
+		HandleBookWriteResponse(EventType, Reader);
 		break;
 	case ACEGameEvent::CharacterTitle:
 		HandleCharacterTitle(Reader);
@@ -3136,9 +3199,21 @@ void FACESession::HandleCombatKillerNotification(FACEBinaryReader& Reader)
 	}
 }
 
+static bool ReadCombatNotificationName(FACEBinaryReader& Reader, FString& Name)
+{
+	if (!Reader.CanRead(2)) return false;
+	const int32 Start = Reader.Tell();
+	const int32 Length = Reader.ReadUInt16();
+	Reader.Seek(Start);
+	if (!Reader.CanRead((Length + 2 + 3) & ~3)) return false;
+	Name = Reader.ReadString16L();
+	return true;
+}
+
 void FACESession::HandleCombatAttackerNotification(FACEBinaryReader& Reader)
 {
-	const FString DefenderName = Reader.ReadString16L();
+	FString DefenderName;
+	if (!ReadCombatNotificationName(Reader, DefenderName)) return;
 	if (!Reader.CanRead(4 + 8 + 4 + 4 + 8))
 	{
 		return;
@@ -3156,7 +3231,8 @@ void FACESession::HandleCombatAttackerNotification(FACEBinaryReader& Reader)
 
 void FACESession::HandleCombatDefenderNotification(FACEBinaryReader& Reader)
 {
-	const FString AttackerName = Reader.ReadString16L();
+	FString AttackerName;
+	if (!ReadCombatNotificationName(Reader, AttackerName)) return;
 	if (!Reader.CanRead(4 + 8 + 4 + 4 + 4 + 8))
 	{
 		return;
@@ -3168,29 +3244,18 @@ void FACESession::HandleCombatDefenderNotification(FACEBinaryReader& Reader)
 	const bool bCritical = Reader.ReadUInt32() != 0;
 	const uint64 Conditions = Reader.ReadUInt64();
 	Reader.Align();
+	// Retail refreshes the retaliation timer on each hit. Identity comes from
+	// CurrentAttacker (IID 11), never a name search among identical creatures.
+	LastAttackerTimeSeconds = FPlatformTime::Seconds();
 	const FString Msg = ACECombatChat::FormatDefenderNotification(
 		AttackerName, DamageType, Percent, Damage, DamageLocation, bCritical, Conditions);
 	EmitChatMessage(Msg, TEXT(""), ACEChatMessageType::CombatEnemy);
-
-	// Retail AutoTarget remembers the last attacker for 15s (name→GUID lookup).
-	if (!AttackerName.IsEmpty())
-	{
-		for (const TPair<int32, FACEWorldObject>& Pair : WorldObjects)
-		{
-			if (Pair.Value.Name.Equals(AttackerName, ESearchCase::IgnoreCase)
-				&& Pair.Key != PlayerGuid)
-			{
-				LastAttackerGuid = Pair.Key;
-				LastAttackerTimeSeconds = FPlatformTime::Seconds();
-				break;
-			}
-		}
-	}
 }
 
 void FACESession::HandleCombatEvasionAttacker(FACEBinaryReader& Reader)
 {
-	const FString DefenderName = Reader.ReadString16L();
+	FString DefenderName;
+	if (!ReadCombatNotificationName(Reader, DefenderName)) return;
 	OnCombatFeedback.Broadcast(DefenderName, 0, false, false);
 	EmitChatMessage(ACECombatChat::FormatEvasionAttacker(DefenderName), TEXT(""),
 		ACEChatMessageType::CombatSelf);
@@ -3198,7 +3263,9 @@ void FACESession::HandleCombatEvasionAttacker(FACEBinaryReader& Reader)
 
 void FACESession::HandleCombatEvasionDefender(FACEBinaryReader& Reader)
 {
-	const FString AttackerName = Reader.ReadString16L();
+	FString AttackerName;
+	if (!ReadCombatNotificationName(Reader, AttackerName)) return;
+	LastAttackerTimeSeconds = FPlatformTime::Seconds();
 	OnCombatFeedback.Broadcast(AttackerName, 0, true, false);
 	EmitChatMessage(ACECombatChat::FormatEvasionDefender(AttackerName), TEXT(""),
 		ACEChatMessageType::CombatEnemy);
@@ -3380,6 +3447,7 @@ void FACESession::HandlePlayerDescription(FACEBinaryReader& Reader)
 	Reader.ReadUInt32(); // weenie type
 
 	FACEPlayerVitals Vitals;
+	int32 DescriptionAttackerGuid = 0;
 
 	auto ReadTableHeader = [&Reader]() -> int32
 	{
@@ -3545,10 +3613,12 @@ void FACESession::HandlePlayerDescription(FACEBinaryReader& Reader)
 	if (PropertyFlags & FlagPropertyIid)
 	{
 		const int32 Count = ReadTableHeader();
-		for (int32 i = 0; i < Count && Reader.CanRead(8); ++i)
+		if (Count < 0 || !Reader.CanRead(Count * 8)) return;
+		for (int32 i = 0; i < Count; ++i)
 		{
-			Reader.ReadUInt32();
-			Reader.ReadUInt32();
+			const uint32 Key = Reader.ReadUInt32();
+			const int32 Value = Reader.ReadInt32();
+			if (Key == 11) DescriptionAttackerGuid = Value;
 		}
 	}
 	if (PropertyFlags & FlagPosition)
@@ -3680,55 +3750,29 @@ void FACESession::HandlePlayerDescription(FACEBinaryReader& Reader)
 
 	if (VectorFlags & VectorEnchant)
 	{
-		if (Reader.CanRead(4))
+		if (!Reader.CanRead(4)) return;
+		const uint32 EnchantMask = Reader.ReadUInt32();
+		if (EnchantMask & ~0xFu) return;
+		TArray<FACEActiveEnchantment> UpdatedEnchantments;
+		if ((EnchantMask & 0x1) && !ReadEnchantmentList(Reader, UpdatedEnchantments)) return;
+		if ((EnchantMask & 0x2) && !ReadEnchantmentList(Reader, UpdatedEnchantments)) return;
+		if (EnchantMask & 0x8)
 		{
-			ActiveEnchantments.Reset();
-			const uint32 EnchantMask = Reader.ReadUInt32();
-			auto ReadList = [this, &Reader]()
-			{
-				if (!Reader.CanRead(4)) { return; }
-				const uint32 N = Reader.ReadUInt32();
-				for (uint32 i = 0; i < N; ++i)
-				{
-					FACEActiveEnchantment Entry;
-					if (!ReadEnchantmentRecord(Reader, Entry))
-					{
-						break;
-					}
-					UpsertEnchantment(Entry);
-				}
-			};
-			if (EnchantMask & 0x1) { ReadList(); } // Multiplicative
-			if (EnchantMask & 0x2) { ReadList(); } // Additive
-			if (EnchantMask & 0x8)
-			{
-				// Cooldowns — keep marked so UI can filter them out.
-				if (Reader.CanRead(4))
-				{
-					const uint32 N = Reader.ReadUInt32();
-					for (uint32 i = 0; i < N; ++i)
-					{
-						FACEActiveEnchantment Entry;
-						if (!ReadEnchantmentRecord(Reader, Entry))
-						{
-							break;
-						}
-						Entry.bCooldown = true;
-						UpsertEnchantment(Entry);
-					}
-				}
-			}
-			if (EnchantMask & 0x4)
-			{
-				FACEActiveEnchantment Vitae;
-				if (ReadEnchantmentRecord(Reader, Vitae))
-				{
-					Vitae.bVitae = true;
-					UpsertEnchantment(Vitae);
-				}
-			}
-			RecomputeAttributeEnchantments(Vitals);
+			const int32 Start = UpdatedEnchantments.Num();
+			if (!ReadEnchantmentList(Reader, UpdatedEnchantments)) return;
+			for (int32 I = Start; I < UpdatedEnchantments.Num(); ++I) UpdatedEnchantments[I].bCooldown = true;
 		}
+		if (EnchantMask & 0x4)
+		{
+			FACEActiveEnchantment Vitae;
+			if (!ReadEnchantmentRecord(Reader, Vitae)) return;
+			Vitae.bVitae = true;
+			UpdatedEnchantments.Add(Vitae);
+		}
+		// A registry snapshot carries the server's complete lists. Do not apply
+		// incremental recast replacement rules to entries within that snapshot.
+		ActiveEnchantments = MoveTemp(UpdatedEnchantments);
+		RecomputeAttributeEnchantments(Vitals);
 	}
 
 	// Player module / options (shortcuts, 8 spell bars, filters…).
@@ -3953,6 +3997,8 @@ void FACESession::HandlePlayerDescription(FACEBinaryReader& Reader)
 	Vitals.bValid = true;
 	Vitals.bHasLuminanceBalance = true;
 	PlayerVitals = Vitals;
+	LastAttackerGuid = DescriptionAttackerGuid;
+	LastAttackerTimeSeconds = 0.0; // A login snapshot is not a new hit.
 	Log(FString::Printf(TEXT("PlayerDescription: L%d H%d/%d S%d/%d M%d/%d run=%d skills=%d spells=%d"),
 		Vitals.Level, Vitals.Health, Vitals.MaxHealth, Vitals.Stamina, Vitals.MaxStamina,
 		Vitals.Mana, Vitals.MaxMana, Vitals.RunSkillCurrent, Vitals.Skills.Num(), KnownSpells.Num()));
@@ -4018,6 +4064,29 @@ void FACESession::HandlePrivateUpdateAttribute(FACEBinaryReader& Reader)
 	NotifyVitalsChanged();
 }
 
+void FACESession::HandlePrivateUpdateAttributeLevel(FACEBinaryReader& Reader)
+{
+	// AttributeCache::SetAttribute(stype, value) changes _init_level only.
+	if (!Reader.CanRead(9)) return;
+	Reader.ReadUInt8();
+	const uint32 Attribute = Reader.ReadUInt32();
+	const uint32 Value = Reader.ReadUInt32();
+	if (Value > MAX_int32) return;
+	const int32 Start = static_cast<int32>(Value);
+	switch (Attribute)
+	{
+	case 1: PlayerVitals.StrengthStart = Start; PlayerVitals.Strength = Start + PlayerVitals.StrengthRanks; break;
+	case 2: PlayerVitals.EnduranceStart = Start; PlayerVitals.Endurance = Start + PlayerVitals.EnduranceRanks; break;
+	case 3: PlayerVitals.QuicknessStart = Start; PlayerVitals.Quickness = Start + PlayerVitals.QuicknessRanks; break;
+	case 4: PlayerVitals.CoordinationStart = Start; PlayerVitals.Coordination = Start + PlayerVitals.CoordinationRanks; break;
+	case 5: PlayerVitals.FocusStart = Start; PlayerVitals.Focus = Start + PlayerVitals.FocusRanks; break;
+	case 6: PlayerVitals.SelfStart = Start; PlayerVitals.Self = Start + PlayerVitals.SelfRanks; break;
+	default: return;
+	}
+	PlayerVitals.RecomputeMaxVitals();
+	NotifyVitalsChanged();
+}
+
 void FACESession::HandlePrivateUpdateSkill(FACEBinaryReader& Reader)
 {
 	// byte sequence, skillId u32, ranks u16, adjustPP u16, sac u32, xp u32, init u32,
@@ -4036,6 +4105,42 @@ void FACESession::HandlePrivateUpdateSkill(FACEBinaryReader& Reader)
 	Reader.ReadUInt32(); // resistance
 	Reader.ReadDouble(); // lastUsed
 
+	FACESkillInfo& Skill = FindOrAddPlayerSkill(SkillId);
+	Skill.Ranks = Ranks;
+	Skill.AdvancementClass = Sac;
+	Skill.XpSpent = XpSpent;
+	Skill.InitLevel = InitLevel;
+	// An explicit full update supersedes a deferred compact SAC calculation.
+	Skill.bRecomputeRanksFromXp = false;
+	UpdatePlayerSkillFallback(Skill);
+	NotifyVitalsChanged();
+}
+
+void FACESession::HandlePrivateUpdateSkillValue(FACEBinaryReader& Reader, bool bAdvancementClass)
+{
+	if (!Reader.CanRead(9)) return;
+	Reader.ReadUInt8();
+	const uint32 SkillId = Reader.ReadUInt32();
+	const uint32 Value = Reader.ReadUInt32();
+	if (!SkillId || SkillId > MAX_int32 || Value > (bAdvancementClass ? 3u : uint32(MAX_int32))) return;
+	FACESkillInfo& Skill = FindOrAddPlayerSkill(static_cast<int32>(SkillId));
+	if (bAdvancementClass)
+	{
+		Skill.AdvancementClass = static_cast<int32>(Value);
+		// Skill::SetSkillAdvancementClass retains XP/init, but changes the XP curve.
+		Skill.bRecomputeRanksFromXp = Value >= 2;
+		if (Value < 2) Skill.Ranks = 0;
+	}
+	else
+	{
+		Skill.InitLevel = static_cast<int32>(Value);
+	}
+	UpdatePlayerSkillFallback(Skill);
+	NotifyVitalsChanged();
+}
+
+FACESkillInfo& FACESession::FindOrAddPlayerSkill(int32 SkillId)
+{
 	FACESkillInfo* Found = nullptr;
 	for (FACESkillInfo& Sk : PlayerVitals.Skills)
 	{
@@ -4069,24 +4174,26 @@ void FACESession::HandlePrivateUpdateSkill(FACEBinaryReader& Reader)
 			: FString::Printf(TEXT("Skill %d"), SkillId);
 		Found = &Added;
 	}
-	Found->Ranks = Ranks;
-	Found->AdvancementClass = Sac;
-	Found->XpSpent = XpSpent;
-	Found->InitLevel = InitLevel;
-	Found->Current = InitLevel + Ranks;
-	switch (SkillId)
+	return *Found;
+}
+
+void FACESession::UpdatePlayerSkillFallback(FACESkillInfo& Skill)
+{
+	Skill.Current = Skill.InitLevel + Skill.Ranks;
+	switch (Skill.SkillId)
 	{
-	case 6:  Found->Current += (PlayerVitals.Coordination + PlayerVitals.Quickness) / 3; break;
-	case 7:  Found->Current += (PlayerVitals.Coordination + PlayerVitals.Quickness) / 5; break;
-	case 15: Found->Current += (PlayerVitals.Focus + PlayerVitals.Self) / 7; break;
-	case 22: Found->Current += (PlayerVitals.Strength + PlayerVitals.Coordination) / 2; break;
+	case 6:  Skill.Current += (PlayerVitals.Coordination + PlayerVitals.Quickness) / 3; break;
+	case 7:  Skill.Current += (PlayerVitals.Coordination + PlayerVitals.Quickness) / 5; break;
+	case 15: Skill.Current += (PlayerVitals.Focus + PlayerVitals.Self) / 7; break;
+	case 22: Skill.Current += (PlayerVitals.Strength + PlayerVitals.Coordination) / 2; break;
 	case 24:
-		Found->Current += PlayerVitals.Quickness;
-		PlayerVitals.RunSkillCurrent = Found->Current;
+		Skill.Current += PlayerVitals.Quickness;
+		PlayerVitals.RunSkillCurrent = Skill.Current;
 		break;
 	default: break;
 	}
-	NotifyVitalsChanged();
+	Skill.Base = Skill.Current;
+	if (Skill.SkillId == 22) PlayerVitals.JumpSkillCurrent = Skill.Current;
 }
 
 void FACESession::HandlePrivateUpdateVital(FACEBinaryReader& Reader)
@@ -4145,19 +4252,24 @@ void FACESession::HandlePrivateUpdateVital(FACEBinaryReader& Reader)
 
 void FACESession::HandlePrivateUpdateAttribute2ndLevel(FACEBinaryReader& Reader)
 {
-	// byte sequence, vital (Health=2/Stamina=4/Mana=6) u32, current u32
+	// Odd IDs change _init_level; even IDs change _current_level (AttributeCache).
 	if (!Reader.CanRead(9))
 	{
 		return;
 	}
 	Reader.ReadUInt8();
 	const uint32 Vital = Reader.ReadUInt32();
-	const int32 Current = static_cast<int32>(Reader.ReadUInt32());
+	const uint32 Value = Reader.ReadUInt32();
+	if (Value > MAX_int32) return;
+	const int32 Current = static_cast<int32>(Value);
 
 	switch (Vital)
 	{
+	case 1: PlayerVitals.HealthStart = Current; break;
 	case 2: PlayerVitals.Health = Current; break;
+	case 3: PlayerVitals.StaminaStart = Current; break;
 	case 4: PlayerVitals.Stamina = Current; break;
+	case 5: PlayerVitals.ManaStart = Current; break;
 	case 6: PlayerVitals.Mana = Current; break;
 	default: return;
 	}
@@ -4179,6 +4291,11 @@ void FACESession::HandlePrivateUpdatePropertyInt(FACEBinaryReader& Reader)
 	Reader.ReadUInt8();
 	const uint32 Key = Reader.ReadUInt32();
 	const int32 Value = Reader.ReadInt32();
+	ApplyPlayerIntQuality(Key, Value);
+}
+
+void FACESession::ApplyPlayerIntQuality(uint32 Key, int32 Value)
+{
 	PlayerVitals.StatQualityInts.Add(static_cast<int32>(Key), Value);
 	if (Key == 25) // Level
 	{
@@ -4204,6 +4321,10 @@ void FACESession::HandlePrivateUpdatePropertyInt(FACEBinaryReader& Reader)
 		PlayerVitals.HeritageGroup = Value;
 		NotifyVitalsChanged();
 	}
+	else if (Key == 113) { PlayerVitals.Gender = Value; NotifyVitalsChanged(); }
+	else if (Key == 125) { PlayerVitals.AgeSeconds = Value; NotifyVitalsChanged(); }
+	else if (Key == 43) { PlayerVitals.NumDeaths = Value; NotifyVitalsChanged(); }
+	else if (Key == 192) { PlayerVitals.FishingSkill = Value; NotifyVitalsChanged(); }
 	else if (Key == 40) // PropertyInt.CombatMode
 	{
 		ApplyServerCombatMode(Value);
@@ -4310,19 +4431,42 @@ void FACESession::HandleUpdatePropertyFloat(FACEBinaryReader& Reader, bool bPubl
 	NotifyVitalsChanged();
 }
 
-void FACESession::HandleUpdatePropertyString(FACEBinaryReader& Reader, bool bPublic)
+bool FACESession::ReadStringPropertyHeader(FACEBinaryReader& Reader, bool bPublic, int32& Guid, uint32& Property) const
 {
-	if (!Reader.CanRead(bPublic ? 9 : 5)) return;
-	Reader.ReadUInt8();
-	// Unlike numeric properties, retail strings put the property before the GUID.
-	const int32 Key = static_cast<int32>(Reader.ReadUInt32());
-	const int32 Guid = bPublic ? static_cast<int32>(Reader.ReadUInt32()) : PlayerGuid;
+	if (!Reader.CanRead(bPublic ? 8 : 4)) return false;
+	Property = Reader.ReadUInt32();
+	Guid = PlayerGuid;
+	if (bPublic)
+	{
+		const uint32 Second = Reader.ReadUInt32();
+		// Retail UIQueueManager sends GUID, property; ACE's public string writer
+		// sends property, GUID. Use known identity, not a property-ID range (custom
+		// servers use high keys). Prefer retail if neither/both words are owners.
+		const auto IsOwner = [this](uint32 Id)
+		{
+			return Id != 0 && (int32(Id) == PlayerGuid || WorldObjects.Contains(int32(Id)));
+		};
+		if (!IsOwner(Property) && IsOwner(Second)) Guid = int32(Second);
+		else { Guid = int32(Property); Property = Second; }
+	}
 	Reader.Align();
-	if (!Reader.CanRead(2)) return;
+	if (!Reader.CanRead(2)) return false;
 	const int32 StringStart = Reader.Tell();
 	const uint16 Length = Reader.ReadUInt16();
-	if (!Reader.CanRead(Length)) return;
+	// A partial payload must not consume the property's timestamp, including
+	// String16L's trailing alignment bytes.
+	if (!Reader.CanRead(Length + ((4 - ((2 + Length) & 3)) & 3))) return false;
 	Reader.Seek(StringStart);
+	return Guid != 0;
+}
+
+void FACESession::HandleUpdatePropertyString(FACEBinaryReader& Reader, bool bPublic)
+{
+	if (!Reader.CanRead(1)) return;
+	Reader.ReadUInt8();
+	int32 Guid;
+	uint32 Key;
+	if (!ReadStringPropertyHeader(Reader, bPublic, Guid, Key)) return;
 	const FString Value = Reader.ReadString16L();
 	if (Guid != PlayerGuid) return;
 	PlayerVitals.QualityStrings.Add(Key, Value);
@@ -5355,24 +5499,39 @@ void FACESession::SendAcceptTrade()
 	{
 		return;
 	}
-	// ACE GameActionAcceptTrade reads a Trade blob then ignores it.
+	// Retail Trade::Pack includes the registered timestamp, a boolean initiator
+	// flag, both acceptance flags and both ordered ContentProfile lists. Stock
+	// ACE ignores most of the blob; stricter hosts still need the complete wire form.
 	FACEBinaryWriter W;
 	W.WriteUInt32(static_cast<uint32>(TradePartnerGuid));
-	W.WriteDouble(0.0);
-	W.WriteUInt32(0); // tradeStatus
-	W.WriteUInt32(static_cast<uint32>(TradeInitiatorGuid != 0 ? TradeInitiatorGuid : PlayerGuid));
-	W.WriteUInt32(1); // initiatorAccepts
-	W.WriteUInt32(0); // partnerAccepts
+	W.WriteDouble(TradeStamp);
+	W.WriteUInt32(2); // registered trade
+	W.WriteUInt32(TradeInitiatorGuid == PlayerGuid ? 1 : 0);
+	W.WriteUInt32(1); // self accepts
+	W.WriteUInt32(bTradePartnerAccepted ? 1 : 0);
+	for (const TArray<int32>* Items : {&TradeSelfItems, &TradePartnerItems})
+	{
+		W.WriteUInt32(Items->Num());
+		for (int32 Guid : *Items)
+		{
+			W.WriteUInt32(static_cast<uint32>(Guid));
+			W.WriteUInt32(0); // Trade::AddItem constructs ContentProfile with no container flags
+		}
+	}
 	SendGameAction(ACEGameAction::AcceptTrade, W.GetData(), ACEQueue::WeenieQueue);
+	bTradeSelfAccepted = true;
+	OnTradeEvent.Broadcast(static_cast<int32>(ACEGameEvent::AcceptTrade));
 }
 
 void FACESession::SendDeclineTrade()
 {
-	if (State != EACESessionState::InWorld)
+	if (State != EACESessionState::InWorld || TradePartnerGuid == 0)
 	{
 		return;
 	}
 	SendGameAction(ACEGameAction::DeclineTrade, {}, ACEQueue::WeenieQueue);
+	bTradeSelfAccepted = false;
+	OnTradeEvent.Broadcast(static_cast<int32>(ACEGameEvent::DeclineTrade));
 }
 
 void FACESession::SendResetTrade()
@@ -5671,16 +5830,50 @@ bool FACESession::ReadEnchantmentRecord(FACEBinaryReader& Reader, FACEActiveEnch
 	Out.bBeneficial = (static_cast<uint32>(Out.StatModType) & FlagBeneficial) != 0;
 	Out.bVitae = (static_cast<uint32>(Out.StatModType) & FlagVitae) != 0 || Out.SpellId == 666;
 	Out.bCooldown = (static_cast<uint32>(Out.StatModType) & FlagCooldown) != 0;
+	return FMath::IsFinite(Out.StartTime) && FMath::IsFinite(Out.Duration) && FMath::IsFinite(Out.StatModValue);
+}
+
+bool FACESession::ReadEnchantmentList(FACEBinaryReader& Reader, TArray<FACEActiveEnchantment>& Out)
+{
+	if (!Reader.CanRead(4)) return false;
+	const uint32 Count = Reader.ReadUInt32();
+	if (Count > static_cast<uint32>(Reader.Remaining() / 60)) return false;
+	Out.Reserve(Out.Num() + static_cast<int32>(Count));
+	for (uint32 I = 0; I < Count; ++I)
+	{
+		FACEActiveEnchantment Entry;
+		if (!ReadEnchantmentRecord(Reader, Entry)) return false;
+		Out.Add(Entry);
+	}
 	return true;
 }
 
 void FACESession::UpsertEnchantment(const FACEActiveEnchantment& Entry)
 {
-	ActiveEnchantments.RemoveAll([&Entry](const FACEActiveEnchantment& E)
+	// Retail CEnchantmentRegistry keeps separate vitae, cooldown, multiplicative
+	// and additive lists. Identity is the packed spell/layer ID, never the caster.
+	auto List = [](const FACEActiveEnchantment& E)
 	{
-		return E.SpellId == Entry.SpellId && E.Layer == Entry.Layer && E.CasterGuid == Entry.CasterGuid;
+		if (E.bVitae || E.SpellId == 666) return 4;
+		if (E.bCooldown) return 8;
+		if (E.StatModType & 0x4000) return 1;
+		if (E.StatModType & 0x8000) return 2;
+		return 0; // Preserve custom server records without a retail modifier flag.
+	};
+	const int32 Kind = List(Entry);
+	int32 Existing = ActiveEnchantments.IndexOfByPredicate([&](const FACEActiveEnchantment& E)
+	{
+		return List(E) == Kind && (Kind == 4 || (E.SpellId == Entry.SpellId && E.Layer == Entry.Layer));
 	});
-	ActiveEnchantments.Add(Entry);
+	// AttemptToReplaceSpellInList: a timed recast may have a different layer.
+	// Permanent item effects on other layers must remain independently removable.
+	if (Existing == INDEX_NONE && Entry.Duration > 0.f)
+		Existing = ActiveEnchantments.IndexOfByPredicate([&](const FACEActiveEnchantment& E)
+		{
+			return List(E) == Kind && E.SpellId == Entry.SpellId && E.Duration > 0.f;
+		});
+	if (Existing != INDEX_NONE) ActiveEnchantments[Existing] = Entry;
+	else ActiveEnchantments.Add(Entry);
 }
 
 void FACESession::RemoveEnchantment(uint16 SpellId, uint16 Layer)
@@ -5698,12 +5891,12 @@ void FACESession::NotifyEnchantmentsChanged()
 	OnEnchantmentsChanged.Broadcast();
 }
 
-void FACESession::GetActiveEnchantments(TArray<FACEActiveEnchantment>& Out) const
+void FACESession::GetActiveEnchantments(TArray<FACEActiveEnchantment>& Out, bool bIncludeCooldowns) const
 {
 	Out.Reset();
 	for (const FACEActiveEnchantment& E : ActiveEnchantments)
 	{
-		if (!E.bCooldown)
+		if (bIncludeCooldowns || !E.bCooldown)
 		{
 			Out.Add(E);
 		}
@@ -5892,21 +6085,10 @@ void FACESession::HandleMagicRemoveEnchantment(FACEBinaryReader& Reader)
 
 void FACESession::HandleMagicUpdateMultipleEnchantments(FACEBinaryReader& Reader)
 {
-	if (!Reader.CanRead(4))
-	{
-		return;
-	}
-	const uint32 Count = Reader.ReadUInt32();
-	for (uint32 i = 0; i < Count; ++i)
-	{
-		FACEActiveEnchantment Entry;
-		if (!ReadEnchantmentRecord(Reader, Entry))
-		{
-			break;
-		}
-		UpsertEnchantment(Entry);
-	}
-	NotifyEnchantmentsChanged();
+	TArray<FACEActiveEnchantment> Updates;
+	if (!ReadEnchantmentList(Reader, Updates)) return;
+	for (const auto& Entry : Updates) UpsertEnchantment(Entry);
+	if (!Updates.IsEmpty()) NotifyEnchantmentsChanged();
 }
 
 void FACESession::HandleMagicRemoveMultipleEnchantments(FACEBinaryReader& Reader)
@@ -5916,8 +6098,9 @@ void FACESession::HandleMagicRemoveMultipleEnchantments(FACEBinaryReader& Reader
 		return;
 	}
 	const uint32 Count = Reader.ReadUInt32();
+	if (Count > static_cast<uint32>(Reader.Remaining() / 4)) return;
 	bool bChanged = false;
-	for (uint32 i = 0; i < Count && Reader.CanRead(4); ++i)
+	for (uint32 i = 0; i < Count; ++i)
 	{
 		const uint16 SpellId = Reader.ReadUInt16();
 		const uint16 Layer = Reader.ReadUInt16();
@@ -6180,7 +6363,7 @@ void FACESession::HandleIdentifyObjectResponse(FACEBinaryReader& Reader)
 		{
 			const uint32 Prop = Reader.ReadUInt32();
 			const uint32 Did = Reader.ReadUInt32();
-			if (Prop == 8 && Did != 0) // PropertyDataId.Icon
+			if (Prop == 8) // PropertyDataId.Icon (including an explicit clear)
 			{
 				Info.IconDid = static_cast<int32>(Did);
 			}
@@ -6339,9 +6522,12 @@ void FACESession::HandleViewContents(FACEBinaryReader& Reader)
 	}
 	const int32 ContainerGuid = static_cast<int32>(Reader.ReadUInt32());
 	const uint32 ItemCount = Reader.ReadUInt32();
+	// A partial list must not revoke known contents, alter ownership, or cancel
+	// closed-container expiry. Bound before reserving or changing any live state.
+	if (!ContainerGuid || ItemCount > static_cast<uint32>(Reader.Remaining() / 8)) return;
 	TArray<FACEContainerItemRef> Items;
 	Items.Reserve(static_cast<int32>(ItemCount));
-	for (uint32 i = 0; i < ItemCount && Reader.CanRead(8); ++i)
+	for (uint32 i = 0; i < ItemCount; ++i)
 	{
 		FACEContainerItemRef Entry;
 		Entry.ItemGuid = static_cast<int32>(Reader.ReadUInt32());
@@ -6610,17 +6796,16 @@ void FACESession::HandleApproachVendor(FACEBinaryReader& Reader)
 
 void FACESession::HandleRegisterTrade(FACEBinaryReader& Reader)
 {
-	if (!Reader.CanRead(8))
+	if (!Reader.CanRead(16))
 	{
 		return;
 	}
 	const int32 InitiatorGuid = static_cast<int32>(Reader.ReadUInt32());
 	const int32 PartnerGuid = static_cast<int32>(Reader.ReadUInt32());
-	if (Reader.CanRead(8))
-	{
-		Reader.Skip(8); // unused long
-	}
-	TradeAcceptedByGuid = 0;
+	const double Stamp = Reader.ReadDouble();
+	if (!FMath::IsFinite(Stamp)) return;
+	TradeStamp = Stamp;
+	bTradeSelfAccepted = bTradePartnerAccepted = false;
 	TradeSelfItems.Reset();
 	TradeRemovedItems.Reset();
 	TradePartnerItems.Reset();
@@ -6657,7 +6842,8 @@ void FACESession::HandleCloseTrade(FACEBinaryReader& Reader)
 	}
 	TradePartnerGuid = 0;
 	TradeInitiatorGuid = 0;
-	TradeAcceptedByGuid = 0;
+	bTradeSelfAccepted = bTradePartnerAccepted = false;
+	TradeStamp = 0.0;
 	TradeSelfItems.Reset();
 	TradeRemovedItems.Reset();
 	TradePartnerItems.Reset();
@@ -6666,20 +6852,22 @@ void FACESession::HandleCloseTrade(FACEBinaryReader& Reader)
 
 void FACESession::HandleAcceptTradeEvent(FACEBinaryReader& Reader)
 {
-	if (Reader.CanRead(4))
-	{
-		TradeAcceptedByGuid = static_cast<int32>(Reader.ReadUInt32());
-	}
+	if (!TradePartnerGuid || !Reader.CanRead(4)) return;
+	const int32 Source = static_cast<int32>(Reader.ReadUInt32());
+	if (Source == PlayerGuid) bTradeSelfAccepted = true;
+	else if (Source == TradePartnerGuid) bTradePartnerAccepted = true;
+	else if (Source == 0) bTradeSelfAccepted = false; // retail acknowledgement reset
+	else return;
 	OnTradeEvent.Broadcast(static_cast<int32>(ACEGameEvent::AcceptTrade));
 }
 
 void FACESession::HandleDeclineTradeEvent(FACEBinaryReader& Reader)
 {
-	if (Reader.CanRead(4))
-	{
-		Reader.ReadUInt32(); // whoDeclined
-	}
-	TradeAcceptedByGuid = 0;
+	if (!TradePartnerGuid || !Reader.CanRead(4)) return;
+	const int32 Source = static_cast<int32>(Reader.ReadUInt32());
+	if (Source == PlayerGuid) bTradeSelfAccepted = false;
+	else if (Source == TradePartnerGuid) bTradePartnerAccepted = false;
+	else return;
 	OnTradeEvent.Broadcast(static_cast<int32>(ACEGameEvent::DeclineTrade));
 }
 
@@ -6690,7 +6878,7 @@ void FACESession::HandleResetTradeEvent(FACEBinaryReader& Reader)
 		Reader.ReadUInt32(); // whoReset
 	}
 	// Retail: resetting the trade clears both accept flags.
-	TradeAcceptedByGuid = 0;
+	bTradeSelfAccepted = bTradePartnerAccepted = false;
 	TradeSelfItems.Reset();
 	TradeRemovedItems.Reset();
 	TradePartnerItems.Reset();
@@ -6702,40 +6890,43 @@ void FACESession::HandleAddToTradeEvent(FACEBinaryReader& Reader)
 	// objectGuid, tradeSide (1=self, 2=partner), location
 	if (!Reader.CanRead(12))
 	{
-		OnTradeEvent.Broadcast(static_cast<int32>(ACEGameEvent::AddToTrade));
 		return;
 	}
 	const int32 ItemGuid = static_cast<int32>(Reader.ReadUInt32());
 	const int32 TradeSide = Reader.ReadInt32();
-	Reader.ReadInt32(); // location
+	const uint32 Location = Reader.ReadUInt32();
+	if (!TradePartnerGuid || !ItemGuid || (TradeSide != 1 && TradeSide != 2)
+		|| TradeSelfItems.Contains(ItemGuid) || TradePartnerItems.Contains(ItemGuid)) return;
 	TArray<int32>& Side = (TradeSide == 2) ? TradePartnerItems : TradeSelfItems;
+	if (Side.Num() >= 0x1A0A) return; // retail Trade::AddItem bound
 	if (TradeSide != 2) TradeRemovedItems.Remove(ItemGuid);
-	Side.Remove(ItemGuid);
-	Side.Add(ItemGuid);
-	TradeAcceptedByGuid = 0;
+	Side.Insert(ItemGuid, static_cast<int32>(FMath::Min(Location, static_cast<uint32>(Side.Num()))));
+	bTradeSelfAccepted = bTradePartnerAccepted = false;
 	OnTradeEvent.Broadcast(static_cast<int32>(ACEGameEvent::AddToTrade));
 }
 
 void FACESession::HandleRemoveFromTradeEvent(FACEBinaryReader& Reader)
 {
 	// objectGuid, tradeSide
-	if (Reader.CanRead(8))
-	{
-		const int32 ItemGuid = static_cast<int32>(Reader.ReadUInt32());
-		const int32 TradeSide = Reader.ReadInt32();
-		TArray<int32>& Side = (TradeSide == 2) ? TradePartnerItems : TradeSelfItems;
-		if (TradeSide != 2) TradeRemovedItems.Remove(ItemGuid);
-		Side.Remove(ItemGuid);
-	}
+	if (!TradePartnerGuid || !Reader.CanRead(8)) return;
+	const int32 ItemGuid = static_cast<int32>(Reader.ReadUInt32());
+	const int32 TradeSide = Reader.ReadInt32();
+	if (TradeSide != 1 && TradeSide != 2) return;
+	TArray<int32>& Side = (TradeSide == 2) ? TradePartnerItems : TradeSelfItems;
+	if (TradeSide == 1) TradeRemovedItems.Remove(ItemGuid);
+	if (!Side.Remove(ItemGuid)) return;
+	bTradeSelfAccepted = bTradePartnerAccepted = false;
 	OnTradeEvent.Broadcast(static_cast<int32>(ACEGameEvent::RemoveFromTrade));
 }
 
 void FACESession::HandleTradeFailure(FACEBinaryReader& Reader)
 {
-	if (Reader.CanRead(8))
-	{
-		Reader.Skip(8); // objectGuid, reason
-	}
+	if (!TradePartnerGuid || !Reader.CanRead(8)) return;
+	const int32 ItemGuid = static_cast<int32>(Reader.ReadUInt32());
+	Reader.ReadUInt32(); // reason
+	// Retail removes a rejected item from the self offer.
+	if (TradeSelfItems.Remove(ItemGuid)) bTradeSelfAccepted = bTradePartnerAccepted = false;
+	TradeRemovedItems.Remove(ItemGuid);
 	OnTradeEvent.Broadcast(static_cast<int32>(ACEGameEvent::TradeFailure));
 }
 
@@ -6743,7 +6934,7 @@ void FACESession::HandleClearTradeAcceptance(FACEBinaryReader& Reader)
 {
 	(void)Reader;
 	// ACE clears ItemsInTradeWindow when broadcasting ClearTradeAcceptance.
-	TradeAcceptedByGuid = 0;
+	bTradeSelfAccepted = bTradePartnerAccepted = false;
 	TradeSelfItems.Reset();
 	TradeRemovedItems.Reset();
 	TradePartnerItems.Reset();
@@ -7142,27 +7333,38 @@ void FACESession::RestampContainerListPlacements(int32 ContainerGuid)
 void FACESession::ApplyPropertyDataID(int32 ObjectGuid, uint32 PropertyId, uint32 Value)
 {
 	FACEWorldObject* Obj = WorldObjects.Find(ObjectGuid);
-	if (!Obj || Value == 0)
+	if (!Obj) return;
+	bool bChanged = false;
+	const auto Assign = [&bChanged](auto& Field, auto NewValue)
 	{
-		return;
-	}
+		if (Field != NewValue) { Field = NewValue; bChanged = true; }
+	};
+	// ACCWeenieObject::OnStatUpdated(DataID) accepts zero too: an explicit zero
+	// clears an icon layer. SpellDID also drives the held caster's innate spell.
 	switch (PropertyId)
 	{
 	case 8: // PropertyDataId.Icon
-		Obj->IconId = static_cast<int32>(Value);
+		Assign(Obj->IconId, static_cast<int32>(Value));
 		break;
 	case 28: // PropertyDataId.Spell — wand innate / item SpellDID
-		Obj->SpellDID = static_cast<int32>(Value);
+		Assign(Obj->SpellDID, static_cast<int32>(Value));
+		break;
+	case 44: // PropertyDataId.PhysicsScript (PublicWeenieDesc, not PhysicsDesc)
+		Assign(Obj->PublicPhysicsScript, static_cast<uint16>(Value));
 		break;
 	case 50: // PropertyDataId.IconOverlay
-		Obj->IconOverlayId = static_cast<int32>(Value);
+		Assign(Obj->IconOverlayId, static_cast<int32>(Value));
 		break;
 	case 52: // PropertyDataId.IconUnderlay
-		Obj->IconUnderlayId = static_cast<int32>(Value);
+		Assign(Obj->IconUnderlayId, static_cast<int32>(Value));
 		break;
 	default:
 		break;
 	}
+	// UI reads these fields directly; Lua/UCM caches inventory by this revision.
+	// Do not re-create actors or invalidate successful appraisals for icon changes.
+	if (bChanged && (Obj->ContainerId || (PlayerGuid &&
+		(Obj->WielderId == PlayerGuid || Obj->ParentGuid == PlayerGuid)))) ++InventoryDataRevision;
 }
 
 void FACESession::HandleInventoryPutObjInContainer(FACEBinaryReader& Reader)
@@ -7687,12 +7889,11 @@ void FACESession::HandlePublicUpdatePropertyInt(FACEBinaryReader& Reader)
 	const int32 Value = Reader.ReadInt32();
 	if (Guid == PlayerGuid)
 	{
-		PlayerVitals.StatQualityInts.Add(static_cast<int32>(Prop), Value);
-		if (Prop != 134) NotifyVitalsChanged();
+		ApplyPlayerIntQuality(Prop, Value);
 	}
 	if (Prop == 134)
 	{
-		ApplyPlayerKillerStatus(Guid, Value);
+		if (Guid != PlayerGuid) ApplyPlayerKillerStatus(Guid, Value);
 		return;
 	}
 	if (FACEWorldObject* Obj = WorldObjects.Find(Guid))
@@ -7855,6 +8056,27 @@ void FACESession::HandlePublicUpdateInstanceId(FACEBinaryReader& Reader)
 	const int32 Guid = static_cast<int32>(Reader.ReadUInt32());
 	const uint32 Prop = Reader.ReadUInt32();
 	const int32 Value = static_cast<int32>(Reader.ReadUInt32());
+	ApplyPropertyInstanceId(Guid, Prop, Value);
+}
+
+void FACESession::HandlePrivateUpdateInstanceId(FACEBinaryReader& Reader)
+{
+	// 0x02D9: the same IID quality, implicitly owned by the player.
+	if (!Reader.CanRead(9)) return;
+	Reader.ReadUInt8();
+	const uint32 Prop = Reader.ReadUInt32();
+	const int32 Value = Reader.ReadInt32();
+	if (PlayerGuid) ApplyPropertyInstanceId(PlayerGuid, Prop, Value);
+}
+
+void FACESession::ApplyPropertyInstanceId(int32 Guid, uint32 Prop, int32 Value)
+{
+	if (Guid == PlayerGuid && Prop == 11)
+	{
+		// ACE sends this only when the attacker changes, including on evade or
+		// resist. Repeated incoming hits maintain the separate retail timer.
+		LastAttackerGuid = Value;
+	}
 	if (FACEWorldObject* Obj = WorldObjects.Find(Guid))
 	{
 		if (Prop == 2) // PropertyInstanceId.Container

@@ -12,6 +12,7 @@ local route_pending, loot_pending, recovery_pending, buff_item_pending = nil, ni
 local loot_full=nil
 local monster_failures,monster_blacklist,combat_serial={},{},0
 local ghost_attempts,ghost_hp={},{ }
+local spell_health={}
 local corpse_pending=nil
 local corpse_contents_wait=nil
 local corpse_spawn_wait,combat_death_seen=nil,nil
@@ -199,8 +200,11 @@ local function element_preference(t,damage)
 end
 -- VT ga.a resolves elemental rends, then cleaves; neither is the weapon's
 -- displayed physical damage mask. Keep these separate from actual attack damage.
+local function equipment_known(v)
+ return v.identified or v.combat_identified
+end
 local function weapon_traits(v)
- local ints,floats=v.int_properties or {},v.float_properties or {}
+ local ints,floats=v.combat_int_properties or v.int_properties or {},v.combat_float_properties or v.float_properties or {}
  local imbue=ints['179'] or 0
  local rend=({[8]=1,[16]=2,[32]=4,[64]=32,[128]=8,[256]=64,[512]=16})[band(imbue,1023)] or 0
  if rend==0 then
@@ -679,7 +683,7 @@ meta_expression=function(e,s)
    for _,v in ipairs(s.inventory or {}) do if band(v.type,0x8000)~=0 then
     if v.equipped then wand=v;break end
     if weapon_allowed(v) then
-     if v.identified and v.can_wield then wand=wand or v elseif not v.identified then unknown=unknown or v end
+     if equipment_known(v) and v.can_wield then wand=wand or v elseif not equipment_known(v) then unknown=unknown or v end
     end
    end end
    if not wand then if unknown then meta.queue[#meta.queue+1]={op='identify',item_id=unknown.id} end;return 0 end
@@ -1393,13 +1397,32 @@ local function tick(s,p)
  -- Failure counts come from server combat feedback, not from elapsed attack time
  -- or evades. Match VT's strict count > limit and let the route run past failures.
  local present={};for _,t in ipairs(s.targets or {}) do present[t.id]=true end
+ -- VT es tracks remaining HP and the last single-target spell's actual damage.
+ -- Fresh health samples supersede estimates; damage before that sample must
+ -- not be subtracted twice. Unknown HP never implies a nearly dead target.
+ for id in pairs(spell_health) do if not present[id] then spell_health[id]=nil end end
+ for _,t in ipairs(s.targets or {}) do
+  local h=spell_health[t.id] or {};spell_health[t.id]=h
+  local maximum=t.max_health
+  if not maximum or maximum<=0 then maximum=((p.monster_catalog or {})[t.name] or {}).max_health end
+  local observed=t.health or (t.health_fraction and maximum and maximum>0 and math.floor(t.health_fraction*maximum+.5))
+  local stamp=t.health_observed_at
+  if observed and ((stamp and stamp>(h.observed_at or -1)) or (not stamp and observed~=h.observed)) then
+   h.hp=observed;h.observed=observed;h.observed_at=stamp
+  elseif h.hp==nil and maximum and maximum>0 then h.hp=maximum end
+ end
  for id in pairs(monster_failures) do if not present[id] then monster_failures[id]=nil end end
  for id,expiry in pairs(monster_blacklist) do if not present[id] or s.time>=expiry then monster_blacklist[id]=nil end end
  for _,e in ipairs(s.combat_events or {}) do if e.serial>combat_serial then
   combat_serial=e.serial
   if present[e.target] then
    if e.unhittable then monster_blacklist[e.target]=s.time+option('monster_blacklist_seconds',120);monster_failures[e.target]=nil
-   elseif e.hit then monster_failures[e.target]=nil;ghost_attempts[e.target]=nil;ghost_hp[e.target]={time=s.time}
+   elseif e.hit then
+    monster_failures[e.target]=nil;ghost_attempts[e.target]=nil;ghost_hp[e.target]={time=s.time}
+    if e.spell and (e.damage or 0)>0 then
+     local h=spell_health[e.target];h.damage=e.damage
+     if h.hp and (not e.time or not h.observed_at or e.time>h.observed_at) then h.hp=math.max(0,h.hp-e.damage) end
+    end
    else
     local failures=(monster_failures[e.target] or 0)+1
     if failures>option('monster_attempts',4) then monster_blacklist[e.target]=s.time+option('monster_blacklist_seconds',120);monster_failures[e.target]=nil
@@ -1519,14 +1542,24 @@ local function tick(s,p)
     local nextpoint=route[point+route_direction]
     if s.teleport_sequence~=route_pending.teleport and not s.portal_space and (v.legacy or (nextpoint and distance(s.position,nextpoint)<30)) then local step=route_pending.confirmed and 2 or 1;route_pending=nil;point=point+route_direction*step
     elseif s.time-route_pending.time>45 then return pause_navigation('portal did not reach the recorded destination') end
-   elseif s.action_serial~=route_pending.serial then
-    if (s.action_error or 0)~=0 then return pause_navigation('route interaction failed') end
-    local step=route_pending.confirmed and 2 or 1;route_pending=nil;point=point+route_direction*step
-   elseif s.time-route_pending.time>30 then return pause_navigation('route action timed out') end
+   else
+    local receipt
+    if s.action_events then
+     for _,e in ipairs(s.action_events) do
+      if (e.action_serial or 0)>(route_pending.serial or 0) and e.type=='use' and e.source==route_pending.item
+       and (not e.requested_at or e.requested_at>=route_pending.time) then receipt=e end
+     end
+    elseif s.action_serial~=route_pending.serial then receipt={error=s.action_error} end
+    if receipt then
+     if (receipt.error or 0)~=0 then return pause_navigation('route interaction failed') end
+     local step=route_pending.confirmed and 2 or 1;route_pending=nil;point=point+route_direction*step
+    elseif s.time-route_pending.time>30 then return pause_navigation('route action timed out') end
+   end
    -- Portal arrival is confirmed by teleport sequence/position, never by a
    -- generic UseDone. While the host is free, VT's recharge/combat rules still
    -- run ahead of navigation. Do not let a missing portal monopolize them.
-   if kind~='portal' and kind~='recall' and kind~='vendor' then return result(nil,'Waiting for route action') end
+   -- Ordinary use waypoints also yield after the native action lock clears.
+   -- Recovery/combat completions cannot acknowledge the recorded route item.
   end
  local by_id,spells,spell_groups=index_spells(s,option('skill_margin',30));local trained={}
  for _,id in ipairs(s.trained_skills or {}) do trained[id]=true end
@@ -1559,7 +1592,7 @@ local function tick(s,p)
   local best,unknown
   for _,v in ipairs(inventory) do if band(v.type,0x8000)~=0 then
    if v.equipped then return end
-   if not v.identified then unknown=v
+   if not equipment_known(v) then unknown=v
    elseif v.can_wield and (not best or (v.element_mod or 1)>(best.element_mod or 1)) then best=v end
   end end
   if best then return equip(best) end
@@ -1740,7 +1773,7 @@ local function tick(s,p)
     if match and (not object or o.distance<object.distance) then object=o end
    end
    if not object then return failed('Route object is not visible; select it and record Use again') end
-   route_pending={kind=kind,time=s.time,serial=s.action_serial,teleport=s.teleport_sequence};return {action='use_world',item=object.id,status='Using '..object.name}
+   route_pending={kind=kind,time=s.time,item=object.id,serial=s.action_serial or 0,teleport=s.teleport_sequence};return {action='use_world',item=object.id,status='Using '..object.name}
   end
   point=point+route_direction
   end
@@ -1775,34 +1808,47 @@ local function tick(s,p)
   end
  end
  local critical_components=split_peas(option('component_critical',4));if critical_components then return critical_components end
- if recovery_pending then
-  local v=recovery_pending.vital;local value=v==2 and s.health or v==4 and s.stamina or s.mana
-  local failed=s.action_serial~=recovery_pending.serial and (s.action_error or 0)~=0
-  local spell_done=recovery_pending.spell and s.action_serial~=recovery_pending.serial and s.last_spell==recovery_pending.spell
-  local confirmed=spell_done and s.last_spell_confirmed==true
-  if spell_done and s.last_spell_confirmed==false then failed=true end
+ for v,q in pairs(recovery_pending or {}) do
+  local value=v==2 and s.health or v==4 and s.stamina or s.mana
+  local failed,confirmed=false,false
+  if s.action_events then
+   for _,e in ipairs(s.action_events) do
+    if (e.action_serial or 0)>q.serial and (not e.requested_at or e.requested_at>=q.started)
+     and ((q.spell and e.type=='cast' and e.spell==q.spell and e.target==s.player)
+       or (q.item and e.type=='use' and e.source==q.item)) then
+     failed=(e.error or 0)~=0 or (q.spell and e.confirmed==false)
+     confirmed=q.spell and e.confirmed==true and not failed
+    end
+   end
+  else
+   -- Older hosts expose only the last cast. Never attribute an unrelated item
+   -- or spell completion to a recovery whose acknowledgement is still pending.
+   local spell_done=q.spell and (s.action_serial or 0)~=q.serial and s.last_spell==q.spell
+   failed=spell_done and ((s.action_error or 0)~=0 or s.last_spell_confirmed==false)
+   confirmed=spell_done and s.last_spell_confirmed==true and not failed
+  end
   -- Vital replication and UseDone may arrive in either order. The authoritative
   -- vital increase is enough; do not accumulate failures across successful uses.
   -- A confirmed heal can be smaller than damage received in the same network
   -- batch. Net HP is not a cast-success test, nor a reason to disable healing.
-  if not failed and (confirmed or value>recovery_pending.before) then recovery_pending=nil
-  elseif not failed and s.time<recovery_pending.expires then return result(nil,'Waiting for recovery result')
-  else
+  if not failed and (confirmed or value>q.before) then recovery_pending[v]=nil
+  elseif failed or s.time>=q.expires then
    -- A rejected or unconfirmed preferred method yields to the other kind.
    -- Otherwise a bad kit could consume all retries without ever trying a heal.
-   if recovery_pending.spell then
+   if q.spell then
     -- Back off only this failed tier briefly; other heals/conversions remain
     -- eligible immediately. Missing components retain the explicit longer ban.
-    unavailable_spells[recovery_pending.spell]=math.max(unavailable_spells[recovery_pending.spell] or 0,s.time+1)
+    unavailable_spells[q.spell]=math.max(unavailable_spells[q.spell] or 0,s.time+1)
     catalog_snapshot=nil;by_id,spells,spell_groups=index_spells(s,option('skill_margin',30))
-   elseif recovery_pending.item then until_time['recover_supply'..v]=s.time+15 end
-   if recovery_pending.handler and not recovery_pending.spell then until_time[recovery_pending.handler]=s.time+15 end
-   recovery_pending=nil
+   elseif q.item then until_time['recover_supply'..v]=s.time+15 end
+   if q.handler and not q.spell then until_time[q.handler]=s.time+15 end
+   recovery_pending[v]=nil
   end
  end
  local recovery_missing={}
  local function recovery(vital,percent,threshold)
   if not activity_ready('recovery'..vital) then return end
+  for v in pairs(recovery_pending or {}) do if v<=vital then return end end
   -- The conversion slider is an independent health trigger, not a subset of
   -- the regular-heal slider. Keep explicit imported handler order authoritative.
   local conversion_threshold=option('emergency_health_threshold',35)
@@ -1811,19 +1857,20 @@ local function tick(s,p)
   end
   if percent>=threshold then return end
   local function pending(handler)
-   recovery_pending={vital=vital,before=vital==2 and s.health or vital==4 and s.stamina or s.mana,expires=s.time+8,serial=s.action_serial,handler=handler}
+   recovery_pending=recovery_pending or {}
+   recovery_pending[vital]={before=vital==2 and s.health or vital==4 and s.stamina or s.mana,expires=s.time+8,started=s.time,serial=s.action_serial or 0,handler=handler}
   end
   local function can_prepare_spell()
    if s.time<(until_time['recover_spell'..vital] or 0) then return false end
    if not s.inventory then return true end
    for _,item in ipairs(inventory) do
-    if band(item.type,0x8000)~=0 and (item.equipped or (item.identified and item.can_wield)) then return true end
+    if band(item.type,0x8000)~=0 and (item.equipped or (equipment_known(item) and item.can_wield)) then return true end
    end
    return false
   end
   local function recover_cast(spell,handler)
    local equipment=caster();if equipment then return equipment end
-   pending(handler);recovery_pending.spell=spell.id
+   pending(handler);recovery_pending[vital].spell=spell.id
    local action=cast(s,spell,s.player,'Recovering with '..(spell.name or 'spell'));last_cast.recovery=true
    return action
   end
@@ -1873,7 +1920,7 @@ local function tick(s,p)
   end
   local function use_supply(best,handler)
    if best.healing_kit and option('kit_peace',false) and s.combat_mode~=1 then return {action='combat_mode',mode=1,status='Entering peace to use healing kit'} end
-   pending(handler);recovery_pending.item=best.id;return {action='use_item',item=best.id,status='Recovering with '..best.name}
+   pending(handler);recovery_pending[vital].item=best.id;return {action='use_item',item=best.id,status='Recovering with '..best.name}
   end
   -- Health emergencies may spend stamina below its normal recovery reserve.
   -- Choose the lowest eligible transfer tier that reaches the health threshold;
@@ -1971,6 +2018,8 @@ local function tick(s,p)
    or recovery(6,mp,not target and math.max(option('idle_mana_threshold',0),option('mana_threshold',45)) or option('mana_threshold',45))
   if action then return action end
  end
+ if recovery_pending and next(recovery_pending) then return result(nil,'Waiting for recovery result') end
+ recovery_pending=nil
  -- Vendor waits never outrank VT's vital recovery. Keep the route at the
  -- vendor until restocking finishes, so a later Close Vendor cannot race Buy.
  if route_wait then return result(nil,route_wait) end
@@ -2671,6 +2720,7 @@ local function tick(s,p)
    end
    local bolt_enabled=not target_rule or target_rule.bolt~=false
    local streak_enabled=not target_rule or target_rule.streak~=false
+   local bolt_fallback=bolt_enabled or streak_enabled or use_ring
    for _,v in ipairs(attack_spells) do local e=element(v)
     local streak=(v.category>=243 and v.category<=249) or v.category==639
     local is_ring=(v.category>=222 and v.category<=228) or v.category==641
@@ -2678,8 +2728,8 @@ local function tick(s,p)
      local score=v.power*resistance(target,e);if damage_override and damage_override~=0 and e~=damage_override then score=-1 end
      if is_ring then if use_ring and score>ring_score then ring=v;ring_score=score end
      elseif streak then if streak_enabled and score>streak_score then streak_spell=v;streak_score=score end
-     elseif band(v.flags,0x1000)~=0 then if bolt_enabled and score>arc_score then arc=v;arc_score=score end
-     elseif bolt_enabled and score>best_score then attack=v;best_score=score end
+     elseif band(v.flags,0x1000)~=0 then if bolt_fallback and score>arc_score then arc=v;arc_score=score end
+     elseif bolt_fallback and score>best_score then attack=v;best_score=score end
     end
    end
    -- VT chooses the higher-quality eligible family first. The arc preference
@@ -2689,7 +2739,10 @@ local function tick(s,p)
    -- VT keeps ordinary spells as fallback if a requested streak/ring is not
    -- usable. Ring-only rules cast with one nearby eligible target, otherwise
    -- the configured minimum applies (counted only from ring-enabled rules).
-   if streak_spell and (not bolt_enabled or streak_score>best_score) then attack=streak_spell;best_score=streak_score end
+   local health=spell_health[target.id] or {}
+   local finishing=streak_spell and health.hp and health.hp>0
+    and health.hp<math.floor(((health.damage or 0)>0 and health.damage or streak_spell.power)/7)
+   if streak_spell and (not bolt_enabled or not attack or finishing) then attack=streak_spell;best_score=streak_score end
    if ring and (ring_count>=option('ring_min_targets',4) or (not bolt_enabled and not streak_enabled and ring_count>0)) then attack=ring;best_score=ring_score end
    local casting_attack=attack or dot_attack
    local casting_score=attack and best_score or dot_score
@@ -2734,7 +2787,7 @@ local function tick(s,p)
    if ammo_cache[key] then return table.unpack(ammo_cache[key]) end
    local best_ammo,best_rank,best_e,unknown
    for _,a in ipairs(ammo_by_kind[v.ammo_type] or {}) do
-    if not a.identified then unknown=a
+    if not equipment_known(a) then unknown=a
     elseif a.can_wield then
      -- Prismatic (retail Base bit) inherits the launcher's damage, not the
      -- monster's preferred element. A neutral bow still fires piercing prisms.
@@ -2763,10 +2816,10 @@ local function tick(s,p)
     if explicit and v.id==explicit.id then rejected(v,'selected weapon does not match '..target_combat..' mode') end
     allowed=false
    end
-   if caster and allowed and v.identified and v.can_wield then usable_caster=true end
-   if not v.identified and allowed and (melee or missile or caster) then unassessed=v end
-   if v.identified and allowed and not v.can_wield then rejected(v,v.wield_reason or 'wield requirements are not met or unavailable') end
-   if v.identified and v.can_wield and allowed and (melee or missile or caster) then
+   if caster and allowed and equipment_known(v) and v.can_wield then usable_caster=true end
+   if not equipment_known(v) and allowed and (melee or missile or caster) then unassessed=v end
+   if equipment_known(v) and allowed and not v.can_wield then rejected(v,v.wield_reason or 'wield requirements are not met or unavailable') end
+   if equipment_known(v) and v.can_wield and allowed and (melee or missile or caster) then
     local damage=v.damage_type or 0
     local rend,bonus=weapon_traits(v)
     local launcher=missile and (v.ammo_type or 0)~=0
@@ -2790,14 +2843,17 @@ local function tick(s,p)
      unassessed_ammo=unknown or unassessed_ammo
     end
     local resist=resistance(target,e)
+    local wrong_caster_element=caster and strict_damage and damage~=0 and band(damage,damage_override)==0 and rend~=damage_override
     local value=caster and spells.score or ((v.damage or 0)*(1-(v.variance or 0)*.5)*math.max(1,v.damage_mod or 1)*resist/(1+(v.weapon_time or 0)/100))
     if caster then
      if not spells.casting then value=-1
+     elseif wrong_caster_element then value=-1
      elseif band(damage,e)~=0 then value=value*math.max(1,v.element_mod or 1) end
     elseif launcher then
      value=ammo and (ammo.damage or 0)*resist*math.max(1,v.damage_mod or 1)/(1+(v.weapon_time or 0)/100) or -1
     elseif strict_damage and band(damage,damage_override)==0 then value=-1 end
-    if value<0 then rejected(v,caster and 'no usable attack spell for the selected element and spell settings'
+    if value<0 then rejected(v,wrong_caster_element and 'casting device does not match the selected damage type'
+      or caster and 'no usable attack spell for the selected element and spell settings'
       or launcher and 'no eligible ammunition for the selected damage type' or 'weapon does not match the selected damage type') end
     if (v.slayer or 0)>0 and v.slayer==target.creature_type then value=value*math.max(1,v.slayer_mod or 1) end
     local skill_id=caster and spells.casting and combat_school_skill[spells.casting.school] or v.weapon_skill
@@ -2911,7 +2967,7 @@ local function tick(s,p)
     local armor=band(v.type,2)~=0 and band(v.slots,0x200000)~=0
     if v.id~=weapon.id and (melee or armor) and (not tether_only or v.auto_wield_left)
      and (requested>3 and requested==v.id or requested<=2 and weapon_allowed(v)) then
-     if not v.identified then unknown=v
+     if not equipment_known(v) then unknown=v
      elseif v.can_wield and (not melee or not damage_override or damage_override==0 or band(v.damage_type,damage_override)~=0) then
       if requested>3 then secondary=v
       elseif armor and not shield then shield=v
@@ -3096,7 +3152,8 @@ local function pause_activity(s,name,reason)
  elseif name=='buffs' then buff_item_pending=nil
  elseif name=='buff_others' then other_job=nil
  elseif name=='combat' then locked_target=nil;debuff_pending=nil;debuff_scan=nil
- elseif name:sub(1,8)=='recovery' then recovery_pending=nil
+ elseif name:sub(1,8)=='recovery' then
+  local vital=tonumber(name:sub(9));if vital and recovery_pending then recovery_pending[vital]=nil else recovery_pending=nil end
  elseif name=='meta' then
   meta.pending=nil;meta.queue={};meta.turn=nil;meta.options={}
   meta.actions={};meta.loading=false;meta.awaiting_load=false;meta.profile_load=nil
@@ -3319,7 +3376,7 @@ return function(s,p)
   corpse_pending=nil;corpse_contents_wait=nil;corpse_spawn_wait=nil;combat_death_seen=s.combat_death and s.combat_death.time;purchase_pending=nil;note_pending=nil;mana_refill_pending=nil;mana_fill_pending=nil;pet_refill_pending=nil;helper_pending=nil;debuff_pending=nil;debuff_scan=nil;pea_pending=nil;pet_pending=nil;dispel_pending=nil
   last_cast=nil;unavailable_spells={};forced_buff=nil;buff_skips={};buff_recast_until=0;other_job=nil
   loot_scan={};loot_jobs={};loot_job_pending=nil;mana_sources={};scroll_reads={};combine_pending=nil;stack_pending=nil;combine_blocked={};stack_blocked={};inventory_salvage_scan={};inventory_salvage_blocked={}
-  retries={};until_time={};item_attempts={};corpses={};monster_failures={};monster_blacklist={};ghost_attempts={};ghost_hp={}
+  retries={};until_time={};item_attempts={};corpses={};monster_failures={};monster_blacklist={};ghost_attempts={};ghost_hp={};spell_health={}
   follow_path={};follow_target=nil;follow_teleport=nil
   activity_pauses={};activity_pause_reasons={}
   history_cleanup_at=0

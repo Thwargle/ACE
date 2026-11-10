@@ -75,6 +75,26 @@ void UACEDatSubsystem::RecomputePlayerStats(FACEPlayerVitals& V, const TArray<FA
 	for (const auto& E : Enchantments) { if (E.bVitae) { Vitae = E.StatModValue; } }
 	for (auto& Skill : V.Skills)
 	{
+		if (Skill.bRecomputeRanksFromXp && EnsureXpTableLoaded())
+		{
+			// Skill::SetSkillAdvancementClass / ExperienceSystem: reinterpret the
+			// same unsigned XP using the new curve. Full skill updates keep their
+			// explicit server ranks, including those used by custom servers.
+			const TArray<uint32>& Curve = Skill.AdvancementClass == 3 ? SpecializedSkillXpList : TrainedSkillXpList;
+			if (!Curve.IsEmpty())
+			{
+				const uint32 Xp = static_cast<uint32>(Skill.XpSpent);
+				int32 Low = 0, High = Curve.Num();
+				while (Low < High)
+				{
+					const int32 Mid = Low + (High - Low) / 2;
+					if (Curve[Mid] <= Xp) Low = Mid + 1;
+					else High = Mid;
+				}
+				Skill.Ranks = FMath::Max(0, Low - 1);
+				Skill.bRecomputeRanksFromXp = false;
+			}
+		}
 		FString Name; uint32 Icon = 0;
 		TryGetSkillInfo(Skill.SkillId, Name, Icon);
 		const auto* Info = SkillInfoCache.Find(Skill.SkillId);

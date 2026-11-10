@@ -46,6 +46,27 @@ platform-tools. It preserves earlier archives and refuses to overwrite a release
 live in `Tests`; native client automation lives in `../Unreal/Plugins/ACEClient/Source`.
 Successful builds and automation do not replace an in-headset gameplay check.
 
+For a black screen/ANR before login, run `Sharing/Diagnose-Quest.ps1` with the
+headset connected immediately after the failure. It works with existing v152
+installs and needs no APK/manifest. The generated ZIP contains app-scoped logs,
+retained Android exit/ANR evidence, version/storage/wake information and DAT
+sizes, without modifying the app or copying credentials/configs. ADB reads have
+bounded timeouts; missing/unsupported diagnostic commands are recorded without
+discarding the rest of the report. `Tests/Test-QuestDiagnostics.ps1` exercises
+the collector under Windows PowerShell, including stalled ADB and absent data.
+
+The November 10 startup review verified the released v152 APK's `AC:VR` label,
+launcher activity and ARM64 ABI. DAT indexing now rejects cyclic/shared directory
+pointers and excessive tree depth, clears partial indexes on failure, and rejects
+impossible resource lengths before allocation. Header/sector reads also check
+physical file bounds before seeking, including packaged Windows' buffered reader.
+This closes corrupt-data crash
+path; it does not establish the cause of the reported Quest 3 v152 black screen.
+Win64 Editor compilation and `ACE.DAT.DirectoryIntegrity`,
+`ACE.RetailParity.MissingDatLogin`, and `ACE.VR.RigAndMenus` passed, as did nine
+Windows PowerShell diagnostic-helper cases. The affected headset's startup/ANR
+capture and native hardware retest remain necessary.
+
 Landscape textures retain the retail 1024-pixel TexMerge output, uncompressed
 BGRA8 pixels and full mipmaps. `ace.Texture.MaxWorldSize` applies to object
 textures, not landscape, UI or sky. The Android ASTC package label does not change

@@ -387,7 +387,7 @@ namespace ACEUCMPanelPrivate
             for(const auto& O:C->GetWorldObjects())
             {
                 if(!Host->IsOwnedPluginItem(O)||(Consumables&&Seen.Contains(O.WeenieClassId)))continue;
-                const auto* A=Host->GetPluginAppraisals().Find(O.Guid);
+                const auto* A=Consumables?Host->GetPluginAppraisals().Find(O.Guid):Host->GetEquipmentAppraisal(O);
                 const bool Equipped=C->GetPlayerGuid()!=0&&(O.WielderId==C->GetPlayerGuid()||(O.CurrentWieldedLocation&&O.ParentGuid==C->GetPlayerGuid()));
                 bool RequiresServerCheck=false;
                 const FString WieldFailure=A&&A->bSuccess&&!Consumables&&!Equipped?ACEPluginEquipment::WieldFailure(*A,C->GetPlayerVitalsView(),&RequiresServerCheck):FString();
@@ -479,10 +479,10 @@ namespace ACEUCMPanelPrivate
         {
             if(!Bool(Rule,TEXT("default")))
             {
-            Add(Text(Rule->HasField(TEXT("expression"))?TEXT("Imported expression (preserved)"):TEXT("Mob name"),14,Muted));
+            Add(Text(TEXT("Mob name or expression"),14,Muted));
             Add(SNew(SACEPluginEditableTextBox).Tag(TEXT("UCMMobDetail.Name")).Style(&FACEPluginStyle::Current()->Edit).Text(FText::FromString(Str(Rule,TEXT("name"))))
-                .IsReadOnly(Rule->HasField(TEXT("expression")))
-                .OnTextCommitted_Lambda([this,Rule](const FText& Value,ETextCommit::Type){const FString Name=Value.ToString().TrimStartAndEnd();if(!Name.IsEmpty()&&Name.Len()<=256){Rule->SetStringField(TEXT("name"),Name);Save();Rebuild();}}));
+                .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Plain text matches the beginning of a name. Examples: species==Tusker; name==Snow Tusker; name#`^Snow.*`; species==Tusker && maxhp>1000. Use || for OR."))))
+                .OnTextCommitted_Lambda([this,Rule](const FText& Value,ETextCommit::Type){FString Error;if(ACEVTProfile::SetMonsterMatch(Rule,Value.ToString(),Error)){Save();Rebuild();}else Host->Notice=Error;}));
             if(!Rule->HasField(TEXT("expression")))Add(SNew(SCheckBox).Tag(TEXT("UCMMobDetail.Exact")).Style(&FACEPluginStyle::Current()->Check)
                 .IsChecked_Lambda([Rule](){return Bool(Rule,TEXT("exact"))?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                 .OnCheckStateChanged_Lambda([this,Rule](ECheckBoxState State){Rule->SetBoolField(TEXT("exact"),State==ECheckBoxState::Checked);SaveMonster(Rule);})
@@ -506,7 +506,8 @@ namespace ACEUCMPanelPrivate
         }
         void AddMonster(const FString& Value)
         {
-            const FString Name=Value.TrimStartAndEnd();if(Name.IsEmpty()||Name.Len()>256){Host->Notice=TEXT("Enter a mob name prefix (maximum 256 characters).");return;}
+            const FString Name=Value.TrimStartAndEnd();auto Rule=MakeShared<FJsonObject>();FString Error;
+            if(!ACEVTProfile::SetMonsterMatch(Rule,Name,Error)){Host->Notice=Error;return;}
             const TArray<TSharedPtr<FJsonValue>>* Old=nullptr;TArray<TSharedPtr<FJsonValue>> Rules;if(P()->TryGetArrayField(TEXT("monsters"),Old))Rules=*Old;
             MonsterSearch.Empty();MonsterFilter.Empty();CollapsedSections.Add(TEXT("Monsters/")+Name,false);
             int32 CustomCount=0;bool HasDefault=false;
@@ -518,7 +519,7 @@ namespace ACEUCMPanelPrivate
                 if(!Default)++CustomCount;
             }
             if(Rules.Num()>=(HasDefault?512:511)){Host->Notice=TEXT("This profile has reached its limit of 511 mob rules plus Default.");return;}
-            auto Rule=MakeShared<FJsonObject>();Rule->SetStringField(TEXT("name"),Name);CopyMonsterDefaults(Rule,false);Rule->SetNumberField(TEXT("priority"),0);
+            CopyMonsterDefaults(Rule,false);Rule->SetNumberField(TEXT("priority"),0);
             Rules.Add(MakeShared<FJsonValueObject>(Rule));P()->SetArrayField(TEXT("monsters"),Rules);ExpandedMonster=INDEX_NONE;MonsterPage=CustomCount/25;Save();Rebuild();
         }
         void AddSelectedMonster()

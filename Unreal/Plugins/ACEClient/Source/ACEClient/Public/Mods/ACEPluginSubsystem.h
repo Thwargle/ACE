@@ -151,6 +151,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEWeaponSkillLootTest;
     friend class FACEUCMLootBuilderTest;
     friend class FACEUCMWeaponSelectionTest;
+    friend class FACEEquipmentAssessmentCacheTest;
     friend class FACEUCMProfilePanelTest;
     friend class FACEUCMSharedMetaTest;
     friend class ACEUCMPanelPrivate::FACEUCMImportUITest;
@@ -314,6 +315,7 @@ public:
     bool GetTargetEffectTimer(int32 Target,int32 Spell,double& Remaining,double& Duration) const;
     bool InventoryInteractionPending() const;
     const TMap<int32, FACEAppraisalInfo>& GetPluginAppraisals() const { return Appraisals; }
+    const FACEAppraisalInfo* GetEquipmentAppraisal(const FACEWorldObject& Item) const;
     uint64 DataRevision = 0;
     UFUNCTION() void ObserveAppraisal(const FACEAppraisalInfo& Info);
     void ObserveUseDone(uint32 Error);
@@ -531,6 +533,20 @@ private:
     TArray<FACEWaypointLandmark> WaypointLocations;
     bool bWaypointLocationsLoaded=false;
     TMap<int32, FACEAppraisalInfo> Appraisals;
+    struct FEquipmentAssessment
+    {
+        FString Name;
+        int32 WCID=0,Type=0,Setup=0,Icon=0,Material=0;
+        double SavedAt=0;
+        FACEAppraisalInfo Info;
+    };
+    TMap<int32,FEquipmentAssessment> EquipmentAssessments;
+    bool EquipmentAssessmentsDirty=false;
+    double NextEquipmentAssessmentSave=0;
+    void RememberEquipmentAppraisal(const FACEWorldObject& Item,const FACEAppraisalInfo& Info);
+    void SaveEquipmentAppraisals();
+    void LoadEquipmentAppraisals();
+    void AddEquipmentSnapshot(const FACEWorldObject& Item,const TSharedPtr<FJsonObject>& Out) const;
     TSharedPtr<FJsonObject> CachedSpeciesNames;
     TMap<int32, double> CorpseFirstSeen;
     struct FLootedCorpse { FACEPosition Position; double LastSeen=0; };
@@ -567,7 +583,7 @@ private:
     void UnbindCombatEvents();
     void ObserveCombatFeedback(const FString& Name,int32 Damage,bool Incoming,bool Critical);
     void RecordCombatOutcome(bool Hit);
-    void AddCombatOutcome(int32 Target,bool Hit,bool Unhittable=false);
+    void AddCombatOutcome(int32 Target,bool Hit,bool Unhittable=false,int32 Spell=0,int32 Damage=0);
     void ObserveOffensiveSpellChat(const FString& Text,const FString& Sender,int32 Type);
     void ExpireOffensiveCasts(double Now);
     struct FOffensiveCast
@@ -585,6 +601,7 @@ private:
     FString PhysicalAttackOwner;
     uint32 CombatOutcomeSerial=0;
     TArray<TSharedPtr<FJsonValue>> CombatOutcomes;
+    TArray<TSharedPtr<FJsonValue>> ActionOutcomes;
     void ObserveMetaChat(const FString& Text,const FString& Sender,int32 Type);
     TArray<TSharedPtr<FJsonValue>> MetaChatEvents,MetaPortalEvents;
     uint32 MetaChatSerial=0,MetaPortalSerial=0;

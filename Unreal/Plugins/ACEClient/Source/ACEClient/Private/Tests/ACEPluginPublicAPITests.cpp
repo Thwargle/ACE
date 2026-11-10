@@ -70,14 +70,46 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
     C->OnChatMessage.Broadcast(TEXT("Quest message"),TEXT(""),ACEChatMessageType::System);
     auto Snapshot=H->PublicSnapshot(*P);
     {
+        TGuardValue<TArray<FACEActiveEnchantment>> RestoreEffects(Session.ActiveEnchantments,{});
+        FACEBinaryWriter Cooldown;
+        Cooldown.WriteUInt16(0x8000+213);Cooldown.WriteUInt16(1);Cooldown.WriteUInt16(0);Cooldown.WriteUInt16(0);
+        Cooldown.WriteUInt32(0);Cooldown.WriteDouble(-60.);Cooldown.WriteDouble(120.);Cooldown.WriteUInt32(Session.PlayerGuid);
+        Cooldown.WriteFloat(0);Cooldown.WriteFloat(0);Cooldown.WriteDouble(0);
+        Cooldown.WriteUInt32(0x01000000);Cooldown.WriteUInt32(0);Cooldown.WriteFloat(0);
+        FACEBinaryReader R(Cooldown.GetData());Session.HandleMagicUpdateEnchantment(R);
+        TestEqual(TEXT("Default UI enchantment view still excludes cooldowns"),C->GetActiveEnchantments().Num(),0);
+        TestEqual(TEXT("Automation view can read the server cooldown registry"),C->GetActiveEnchantments(true).Num(),1);
+        const auto Native=H->Snapshot();
+        const auto Public=H->PublicSnapshot(*P);
         FACEClientPlugin Observer;Observer.Api=2;Observer.Companion=true;Observer.SelectiveSnapshot=true;
-        Observer.Permissions={TEXT("data")};Observer.SnapshotFields={TEXT("char_ints"),TEXT("health"),TEXT("character_name"),TEXT("action_serial")};
+        Observer.Profile=MakeShared<FJsonObject>(); // Discovery supplies this for installed companions.
+        Observer.Permissions={TEXT("data")};Observer.SnapshotFields={TEXT("cooldowns")};
+        const auto Selective=H->PublicSnapshot(Observer);
+        for(const auto& State:{Native,Public,Selective})
+        {
+            double Seconds=0.;
+            TestTrue(TEXT("Native UCM, API 2 and selective companions receive decimal cooldown IDs and remaining seconds"),
+                State->GetObjectField(TEXT("cooldowns"))->TryGetNumberField(TEXT("213"),Seconds) && Seconds>55. && Seconds<=60.);
+            TestFalse(TEXT("Cooldown map uses property 280 ID without the enchantment high bit"),State->GetObjectField(TEXT("cooldowns"))->HasField(TEXT("32981")));
+        }
+        TestTrue(TEXT("Cooldowns do not leak into beneficial or harmful spell lists"),Native->GetArrayField(TEXT("enchantments")).IsEmpty()
+            && Native->GetArrayField(TEXT("harmful_enchantments")).IsEmpty());
+        if(!Session.ActiveEnchantments.IsEmpty())Session.ActiveEnchantments[0].ReceivedAt-=121.;
+        TestEqual(TEXT("Expired cooldown is zero without waiting for a removal event"),H->Snapshot()->GetObjectField(TEXT("cooldowns"))->GetNumberField(TEXT("213")),0.);
+        FACEBinaryWriter Remove;Remove.WriteUInt16(0x8000+213);Remove.WriteUInt16(1);
+        FACEBinaryReader RR(Remove.GetData());Session.HandleMagicRemoveEnchantment(RR);
+        TestFalse(TEXT("Server removal clears the cooldown key"),H->Snapshot()->GetObjectField(TEXT("cooldowns"))->HasField(TEXT("213")));
+    }
+    {
+        FACEClientPlugin Observer;Observer.Api=2;Observer.Companion=true;Observer.SelectiveSnapshot=true;
+        Observer.Permissions={TEXT("data")};Observer.SnapshotFields={TEXT("char_ints"),TEXT("health"),TEXT("character_name"),TEXT("action_serial"),TEXT("action_events")};
         UACEPluginSubsystem::FCompanionReadBatch Batch;
         TGuardValue<UACEPluginSubsystem::FCompanionReadBatch*> Guard(H->CompanionReadBatch,&Batch);
         const auto Small=H->PublicSnapshot(Observer);
         TestTrue(TEXT("Selective data exposes character qualities and action counter"),Small->HasField(TEXT("char_ints"))&&Small->HasField(TEXT("action_serial")));
         TestEqual(TEXT("Selective data keeps requested health"),Small->GetNumberField(TEXT("health")),100.);
         TestFalse(TEXT("Character observer never builds full gameplay data"),Batch.Data.IsValid());
+        TestTrue(TEXT("Correlated completion history is available to lightweight readers"),Small->HasTypedField<EJson::Array>(TEXT("action_events")));
         TestFalse(TEXT("Unused inventory never crosses into Lua"),Small->HasField(TEXT("inventory")));
         TestFalse(TEXT("Unused nearby objects never cross into Lua"),Small->HasField(TEXT("objects")));
         TestTrue(TEXT("Events and capability envelope survive field selection"),Small->HasField(TEXT("events"))&&Small->HasField(TEXT("capabilities")));
@@ -85,9 +117,9 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
         const auto InventoryOnly=H->PublicSnapshot(Observer);
         TestTrue(TEXT("Inventory observer receives cached item data"),InventoryOnly->HasField(TEXT("inventory"))&&InventoryOnly->HasField(TEXT("inventory_revision")));
         TestFalse(TEXT("Inventory observer skips spells, targets and full snapshot construction"),Batch.Data.IsValid()||InventoryOnly->HasField(TEXT("spells"))||InventoryOnly->HasField(TEXT("targets")));
-        Observer.SnapshotFields={TEXT("char_ints"),TEXT("action_serial")};
+        Observer.SnapshotFields={TEXT("char_ints"),TEXT("action_serial"),TEXT("action_events")};
         Observer.Permissions.Reset();const auto Restricted=H->PublicSnapshot(Observer);
-        TestFalse(TEXT("Field requests cannot grant data permission"),Restricted->HasField(TEXT("char_ints"))||Restricted->HasField(TEXT("action_serial")));
+        TestFalse(TEXT("Field requests cannot grant data permission"),Restricted->HasField(TEXT("char_ints"))||Restricted->HasField(TEXT("action_serial"))||Restricted->HasField(TEXT("action_events")));
     }
     for(const TCHAR* Field:{TEXT("inventory"),TEXT("spells"),TEXT("skills"),TEXT("targets"),TEXT("corpses"),TEXT("vendor_stock"),TEXT("fellowship"),TEXT("it_objects"),TEXT("packs"),TEXT("chat_events"),TEXT("events"),TEXT("capabilities")})TestTrue(FString(TEXT("Public snapshot includes "))+Field,Snapshot->HasField(Field));
     TestEqual(TEXT("Chat independent of UCM"),Snapshot->GetArrayField(TEXT("chat_events")).Num(),1);
@@ -177,6 +209,10 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
         TestEqual(TEXT("Use requests and completions are separate events"),P->PluginEvents.Num(),2);
         TestEqual(TEXT("Use event includes the target GUID"),P->PluginEvents[0]->AsObject()->GetNumberField(TEXT("target")),double(Rat.Guid));
         TestEqual(TEXT("Completion carries the action serial"),P->PluginEvents[1]->AsObject()->GetNumberField(TEXT("action_serial")),double(H->ActionSerial));
+        TestEqual(TEXT("Policy keeps correlated completed item receipt"),H->ActionOutcomes.Last()->AsObject()->GetNumberField(TEXT("source")),double(Rat.Guid));
+        TestEqual(TEXT("Completion retains request time for late-reply isolation"),H->ActionOutcomes.Last()->AsObject()->GetNumberField(TEXT("requested_at")),P->PluginEvents[0]->AsObject()->GetNumberField(TEXT("time")));
+        const auto ReceiptSnapshot=H->PublicSnapshot(*P);
+        TestEqual(TEXT("Full policy snapshot exposes the same completed action"),ReceiptSnapshot->GetArrayField(TEXT("action_events")).Last()->AsObject()->GetNumberField(TEXT("action_serial")),double(H->ActionSerial));
         P->PluginEvents.Reset();
     }
     TestTrue(TEXT("Lua presentation script loads"),Presentation.Load(TEXT("return function() return {presentation={title='Quest Tracker - 12 kills',icon='active.png',window={opacity=0.35,pinned=true}}} end"),Error));

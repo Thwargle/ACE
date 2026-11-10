@@ -89,6 +89,17 @@ Use this project's VR-enabled server for its custom VR combat/pose extensions.
 
 UPDATES / TROUBLESHOOTING
 
+- Black screen or "AC:VR isn't responding" before login: while the failure is
+  still recent, connect USB and run Diagnose-Quest.cmd. Accept USB debugging if
+  needed. Send the resulting Quest-Diagnostics-*.zip. It records app version,
+  Horizon/Android build, free storage, DAT presence/sizes, recent game logs and
+  Android's retained app-exit/ANR information, plus native thread stacks when
+  available. Each read has a timeout, so an
+  unresponsive headset cannot leave the helper waiting indefinitely. Logs may
+  contain character/chat text; review them before sharing. This helper does not
+  install, restart, stop, or reset the app, and does not collect saved logins.
+  Capture before rebooting/reinstalling, which can discard the useful evidence.
+  "App Name not Available" alone does not identify the reason for a launch hang.
 - Press Menu for VR options, or hold X for about a second. Tapping X still opens
   inventory. The same hold-X shortcut works with Quest controllers in PC VR.
 - Install a newer bundle the same way. Do not uninstall first: an update keeps

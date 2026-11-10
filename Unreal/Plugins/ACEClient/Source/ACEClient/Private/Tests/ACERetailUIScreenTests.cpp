@@ -77,6 +77,25 @@
 #include "Framework/Application/SlateApplication.h"
 
 // Kept separate from the large screenshot suite to stay within MSVC optimizer limits.
+static FORCENOINLINE void CheckTradeAcceptance(FAutomationTestBase& Test,UACEClientSubsystem* Client,UACEUIElementManager* Manager,
+    TFunctionRef<void(uint32,uint32)> Receive,TFunctionRef<void(const TCHAR*)> Click,
+    TFunctionRef<void()> ResetPackets,TFunctionRef<bool(uint32)> HasAction)
+{
+    ResetPackets();Click(TEXT("Trade_ClearAllButon"));
+    Test.TestTrue(TEXT("Authored Clear All button sends ResetTrade"),HasAction(ACEGameAction::ResetTrade));
+    ResetPackets();Click(TEXT("TradeSelfTradeButton"));
+    Test.TestTrue(TEXT("Authored Trade button sends AcceptTrade"),HasAction(ACEGameAction::AcceptTrade));
+    Receive(ACEGameEvent::AcceptTrade,Client->GetPlayerGuid());
+    ResetPackets();Click(TEXT("TradeSelfTradeButton"));
+    Test.TestTrue(TEXT("Accepted trade button cancels confirmation"),HasAction(ACEGameAction::DeclineTrade));
+    Receive(ACEGameEvent::AcceptTrade,Client->GetTradePartnerGuid());
+    Test.TestTrue(TEXT("Partner acceptance lights authored indicator"),Manager->FindElementByName(TEXT("TradeOtherTradeIndicator"))->bVisible);
+    Receive(ACEGameEvent::AcceptTrade,Client->GetPlayerGuid());
+    Test.TestTrue(TEXT("Both trade acceptance indicators coexist"),Manager->FindElementByName(TEXT("TradeSelfTradeButton"))->bHighlighted && Manager->FindElementByName(TEXT("TradeOtherTradeIndicator"))->bVisible);
+    ResetPackets();Click(TEXT("TradeSelfTradeButton"));
+    Test.TestTrue(TEXT("Own acceptance can be withdrawn while partner remains accepted"),HasAction(ACEGameAction::DeclineTrade) && !Client->HasAcceptedTrade() && Client->HasPartnerAcceptedTrade());
+}
+
 static FORCENOINLINE void CheckCameraPreview(FAutomationTestBase& Test, UACEUIGameplayBinder* Gameplay,
     UACEVideoSettingsWidget* Video, TFunctionRef<void(const TCHAR*)> ChangePage)
 {
@@ -584,13 +603,69 @@ struct FACEContractUIFixture
                 ACEDatText::Ellipsize(ContractFont,Dat->GetContractInfo(Gameplay->QuestRowIds[0])->Name,
                     NameElement->Width-int32(NameElement->TextMargins.Left+NameElement->TextMargins.Right)));
             Test.TestEqual(TEXT("Journal text lets the list receive clicks"),Gameplay->QuestRows[0]->GetVisibility(),ESlateVisibility::HitTestInvisible);
-            Test.TestEqual(TEXT("Journal shows the server stage in the status column"),Gameplay->QuestStatusRows[0]->GetText().ToString(),FString(TEXT("In progress")));
+            Test.TestEqual(TEXT("Journal shows the server stage in the status column"),Gameplay->QuestStatusRows[0]->GetText().ToString(),FString(TEXT("In Progress")));
             Test.TestTrue(TEXT("Journal countdown advances after the server snapshot"),Gameplay->QuestDetailLabels.ContainsByPredicate([](UTextBlock* Label)
                 {return Label && Label->GetText().ToString().Contains(TEXT("00:59:"));}));
             const auto& RowGeometry=Gameplay->QuestStatusRows[1]->GetCachedGeometry();
             const FVector2D RowPoint=Canvas->GetCachedGeometry().AbsoluteToLocal(RowGeometry.LocalToAbsolute(RowGeometry.GetLocalSize()*.5));
             Test.TestTrue(TEXT("Clicking journal status selects its contract"),Gameplay->TryHandleOverlayClick(RowPoint));
             Test.TestEqual(TEXT("Journal detail follows the clicked second row"),Gameplay->SelectedContractId,Gameplay->QuestRowIds[1]);
+        }
+        if (Contracts.Num()==2 && Gameplay->QuestRowIds.Num()>=2)
+        {
+            const TArray<FACEContractEntry> SavedContracts=Contracts;
+            const int32 FirstByName=Gameplay->QuestRowIds[0],SecondByName=Gameplay->QuestRowIds[1];
+            const int32 Selection=Gameplay->SelectedContractId;
+            Gameplay->HandleNamedClick(TEXT("ContractNameSortButton"));
+            Test.TestTrue(TEXT("Clicking active name heading reverses order without changing selection"),
+                Gameplay->QuestRowIds[0]==SecondByName && Gameplay->QuestRowIds[1]==FirstByName
+                && Gameplay->SelectedContractId==Selection);
+            Gameplay->HandleNamedClick(TEXT("ContractNameSortButton"));
+            Test.TestEqual(TEXT("Clicking name heading again restores ascending order"),Gameplay->QuestRowIds[0],FirstByName);
+
+            Contracts[0].Stage=Contracts[1].Stage=3;
+            Contracts[0].TimeWhenDone=Contracts[1].TimeWhenDone=0.0;
+            Contracts[0].ReceivedAt=Contracts[1].ReceivedAt=0.0;
+            Contracts[0].TimeWhenRepeats=120.0; Contracts[1].TimeWhenRepeats=600.0;
+            Gameplay->HandleNamedClick(TEXT("ContractStatusSortButton"));
+            Test.TestTrue(TEXT("Status orders repeat timers numerically, not by text or contract ID"),
+                Gameplay->QuestRowIds[0]==Contracts[0].ContractId && Gameplay->QuestRowIds[1]==Contracts[1].ContractId);
+            Test.TestEqual(TEXT("Repeatable completed contract shows retail countdown"),Gameplay->QuestStatusRows[0]->GetText().ToString(),FString(TEXT("Done (2m 0s to Repeat)")));
+            CaptureScreen(TEXT("GameplayContractRepeatTimers"),1.f);
+            Gameplay->HandleNamedClick(TEXT("ContractStatusSortButton"));
+            Test.TestEqual(TEXT("Second status click reverses numeric countdown order"),Gameplay->QuestRowIds[0],Contracts[1].ContractId);
+            Gameplay->HandleNamedClick(TEXT("ContractNameSortButton"));
+            Test.TestTrue(TEXT("Changing sort heading resets reverse order"),!Gameplay->bQuestReverseSort && Gameplay->QuestRowIds[0]==FirstByName);
+
+            // Age only the local receipt time; no server event is required at expiry.
+            Contracts.SetNum(1); Contracts[0].TimeWhenRepeats=60.; Contracts[0].ReceivedAt=FPlatformTime::Seconds()-61.;
+            Gameplay->RefreshQuestOverlays();
+            Test.TestEqual(TEXT("Elapsed repeat timer becomes Available locally"),Gameplay->QuestStatusRows[0]->GetText().ToString(),FString(TEXT("Available")));
+            Test.TestEqual(TEXT("Presentation does not rewrite the server stage"),Contracts[0].Stage,3);
+            Contracts[0].ReceivedAt=0.; Contracts[0].TimeWhenRepeats=2678405.;
+            Gameplay->RefreshQuestOverlays();
+            Test.TestEqual(TEXT("Long repeat timer uses retail month/day units"),Gameplay->QuestStatusRows[0]->GetText().ToString(),FString(TEXT("Done (1mo 1d 5s to Repeat)")));
+
+            int32 Repeatable=0,OneTime=0;
+            for (int32 Id=1;Id<1000 && (!Repeatable || !OneTime);++Id)
+                if (const auto* Info=Dat->GetContractInfo(Id))
+                {
+                    if (!Info->QuestFlagRepeatTime.IsEmpty()) Repeatable=Id;
+                    else OneTime=Id;
+                }
+            Test.TestTrue(TEXT("Retail DAT supplies repeatable and one-time contract flags"),Repeatable!=0 && OneTime!=0);
+            for (int32 Id : {Repeatable,OneTime}) if (Id)
+            {
+                Contracts[0].ContractId=Id; Contracts[0].TimeWhenRepeats=0.;
+                Gameplay->RefreshQuestOverlays();
+                Test.TestEqual(TEXT("Untimed completion respects DAT repeatability"),Gameplay->QuestStatusRows[0]->GetText().ToString(),
+                    FString(Id==Repeatable?TEXT("Available"):TEXT("Done")));
+            }
+            Contracts=SavedContracts; Gameplay->RefreshQuestOverlays();
+            Contracts[0].Stage=2; Contracts[1].Stage=1;
+            Gameplay->HandleNamedClick(TEXT("ContractStatusSortButton"));
+            Test.TestEqual(TEXT("Status sort follows displayed status instead of raw stage descending"),Gameplay->QuestRowIds[0],Contracts[1].ContractId);
+            Contracts=SavedContracts; Gameplay->HandleNamedClick(TEXT("ContractNameSortButton"));
         }
         CheckContractProgress(Test,Dat,Manager,Contracts,Gameplay->QuestRowIds,Gameplay->QuestStatusRows,
             [&](){Gameplay->RefreshQuestOverlays();},[&](const FString& Name,float Scale){CaptureScreen(Name,Scale);},
@@ -3479,17 +3554,11 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
 			ClickOverlay(Self ? Gameplay->TradeSelfSlots[0] : Gameplay->TradeOtherSlots[0],EKeys::RightMouseButton);
 			TestTrue(TEXT("Trade item right-click sends IdentifyObject"),HasAction(ACEGameAction::IdentifyObject));
 		}
-        Session.CachedC2SPackets.Reset(); NativeClick(TEXT("Trade_ClearAllButon"));
-        TestTrue(TEXT("Authored Clear All button sends ResetTrade"),HasAction(ACEGameAction::ResetTrade));
-        Session.CachedC2SPackets.Reset(); NativeClick(TEXT("TradeSelfTradeButton"));
-        TestTrue(TEXT("Authored Trade button sends AcceptTrade"),HasAction(ACEGameAction::AcceptTrade));
-        Session.TradeAcceptedByGuid=Player.Guid; Gameplay->RefreshTradeOverlays();
-        Session.CachedC2SPackets.Reset(); NativeClick(TEXT("TradeSelfTradeButton"));
-        TestTrue(TEXT("Accepted trade button cancels confirmation"),HasAction(ACEGameAction::DeclineTrade));
-        Gameplay->HandleTradeStateChanged(ACEGameEvent::DeclineTrade);
+        CheckTradeAcceptance(*this,Client,Manager,
+            [&](uint32 Event,uint32 Source){FACEBinaryWriter W;W.WriteUInt32(Player.Guid);W.WriteUInt32(1);W.WriteUInt32(Event);W.WriteUInt32(Source);FACEBinaryReader R(W.GetData());Session.HandleGameEvent(R);Gameplay->HandleTradeStateChanged(Event);},
+            NativeClick,[&](){Session.CachedC2SPackets.Reset();},HasAction);
         TestTrue(TEXT("Declining confirmation keeps offers open"),Gameplay->bTradeOpen);
-        Session.TradeAcceptedByGuid=Partner.Guid; Gameplay->RefreshTradeOverlays();
-        TestTrue(TEXT("Partner acceptance lights authored indicator"),Manager->FindElementByName(TEXT("TradeOtherTradeIndicator"))->bVisible);
+        CaptureScreen(TEXT("GameplayTradePartnerAccepted"));
         Session.TradeSelfItems.Init(Device.Guid,24); Gameplay->RefreshTradeOverlays();
         CaptureScreen(TEXT("GameplayTradeOverflow"));
         const auto TradeBar=Manager->FindElementByName(TEXT("TradeSelf_ItemListScroll"));

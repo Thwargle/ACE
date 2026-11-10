@@ -61,8 +61,10 @@ bool FACEDatDatabase::Open(const FString& InFilePath)
 		return false;
 	}
 
-	if (!ReadDirectoryTree(Handle.Get(), BTreeRoot))
+	TSet<uint32> VisitedDirectories;
+	if (!ReadDirectoryTree(Handle.Get(), BTreeRoot, VisitedDirectories))
 	{
+		Files.Reset(); // A failed index must not expose partially discovered resources.
 		UE_LOG(LogTemp, Error, TEXT("ACEDat: failed to index B-tree in %s"), *FilePath);
 		return false;
 	}
@@ -110,7 +112,8 @@ uint64 FACEDatDatabase::GetSourceFingerprint() const
 
 bool FACEDatDatabase::ReadHeader(IFileHandle* Handle)
 {
-	if (!Handle || !Handle->Seek(HeaderOffset))
+	constexpr int64 HeaderSize = 16 * sizeof(uint32) + 16;
+	if (!Handle || Handle->Size() < int64(HeaderOffset) + HeaderSize || !Handle->Seek(HeaderOffset))
 	{
 		return false;
 	}
@@ -160,27 +163,38 @@ bool FACEDatDatabase::ReadHeader(IFileHandle* Handle)
 	return true;
 }
 
-uint32 FACEDatDatabase::ReadNextAddress(IFileHandle* Handle)
-{
-	uint32 Next = 0;
-	Handle->Read(reinterpret_cast<uint8*>(&Next), sizeof(uint32));
-	return Next;
-}
-
 bool FACEDatDatabase::ReadSectorChain(IFileHandle* Handle, uint32 Offset, uint32 Size, TArray<uint8>& OutBuffer) const
 {
+	OutBuffer.Reset();
+	// Validate before converting an untrusted uint32 length to an array count.
+	// An incomplete/corrupt installation must fail rather than allocate gigabytes.
+	if (!Handle || Size > MAX_int32 || int64(Size) > Handle->Size()) return false;
 	OutBuffer.SetNumUninitialized(static_cast<int32>(Size));
 	if (Size == 0)
 	{
 		return true;
 	}
 
-	if (!Handle->Seek(Offset))
+	const int64 FileSize = Handle->Size();
+	uint32 NextAddress = 0;
+	// Packaged Windows' buffered reader asserts when seeking beyond EOF rather
+	// than returning false. Validate every sector and read before calling it.
+	auto SeekSector = [&](uint32 Address)
+	{
+		return int64(Address) + int64(sizeof(uint32)) <= FileSize && Handle->Seek(Address)
+			&& Handle->Read(reinterpret_cast<uint8*>(&NextAddress), sizeof(uint32));
+	};
+	auto ReadBytes = [&](uint8* Destination, uint32 Count)
+	{
+		const int64 Position = Handle->Tell();
+		return Position >= 0 && Position <= FileSize && int64(Count) <= FileSize - Position
+			&& Handle->Read(Destination, Count);
+	};
+	if (!SeekSector(Offset))
 	{
 		return false;
 	}
 
-	uint32 NextAddress = ReadNextAddress(Handle);
 	int32 BufferOffset = 0;
 	uint32 Remaining = Size;
 	const uint32 Chunk = BlockSize > 4 ? (BlockSize - 4) : 0;
@@ -203,7 +217,7 @@ bool FACEDatDatabase::ReadSectorChain(IFileHandle* Handle, uint32 Offset, uint32
 
 		if (NextAddress == 0)
 		{
-			if (!Handle->Read(OutBuffer.GetData() + BufferOffset, static_cast<int64>(Remaining)))
+			if (!ReadBytes(OutBuffer.GetData() + BufferOffset, Remaining))
 			{
 				return false;
 			}
@@ -216,16 +230,15 @@ bool FACEDatDatabase::ReadSectorChain(IFileHandle* Handle, uint32 Offset, uint32
 				UE_LOG(LogTemp, Error, TEXT("ACEDat: sector chain truncated (Remaining=%u Chunk=%u)"), Remaining, Chunk);
 				return false;
 			}
-			if (!Handle->Read(OutBuffer.GetData() + BufferOffset, static_cast<int32>(Chunk)))
+			if (!ReadBytes(OutBuffer.GetData() + BufferOffset, Chunk))
 			{
 				return false;
 			}
 			BufferOffset += static_cast<int32>(Chunk);
-			if (!Handle->Seek(NextAddress))
+			if (!SeekSector(NextAddress))
 			{
 				return false;
 			}
-			NextAddress = ReadNextAddress(Handle);
 			Remaining -= Chunk;
 		}
 	}
@@ -233,8 +246,17 @@ bool FACEDatDatabase::ReadSectorChain(IFileHandle* Handle, uint32 Offset, uint32
 	return true;
 }
 
-bool FACEDatDatabase::ReadDirectoryTree(IFileHandle* Handle, uint32 RootSectorOffset)
+bool FACEDatDatabase::ReadDirectoryTree(IFileHandle* Handle, uint32 RootSectorOffset, TSet<uint32>& Visited, int32 Depth)
 {
+	// Directory pointers come from the user's DATs. Cycles previously recursed
+	// until stack exhaustion on the startup worker; very deep damaged trees did
+	// the same. A 32-bit-addressed B-tree cannot legitimately need this depth.
+	if (Depth >= 64 || RootSectorOffset == 0 || Visited.Contains(RootSectorOffset))
+	{
+		UE_LOG(LogTemp, Error, TEXT("ACEDat: invalid directory graph at %08X (depth=%d) in %s"), RootSectorOffset, Depth, *FilePath);
+		return false;
+	}
+	Visited.Add(RootSectorOffset);
 	// DatDirectoryHeader.ObjectSize = (uint*0x3E) + uint + (DatFile*0x3D)
 	constexpr int32 BranchCount = 0x3E;
 	constexpr uint32 DatFileObjectSize = sizeof(uint32) * 6;
@@ -282,7 +304,7 @@ bool FACEDatDatabase::ReadDirectoryTree(IFileHandle* Handle, uint32 RootSectorOf
 	{
 		for (uint32 i = 0; i < EntryCount + 1; ++i)
 		{
-			if (!ReadDirectoryTree(Handle, Branches[i]))
+			if (!ReadDirectoryTree(Handle, Branches[i], Visited, Depth + 1))
 			{
 				return false;
 			}

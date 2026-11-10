@@ -65,6 +65,9 @@ bool FACEUCMFailureIsolationTest::RunTest(const FString&)
             S->SetNumberField(TEXT("time"),100+16*Attempt);
             TestEqual(TEXT("Recovery attempts remain bounded"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("use_item")));
             S->SetNumberField(TEXT("time"),101+16*Attempt);S->SetNumberField(TEXT("action_serial"),Attempt+1);S->SetNumberField(TEXT("action_error"),1);
+            auto Receipt=ParseUCM(TEXT(R"({"type":"use","source":51,"error":1})"));
+            Receipt->SetNumberField(TEXT("action_serial"),Attempt+1);Receipt->SetNumberField(TEXT("requested_at"),100+16*Attempt);
+            S->SetArrayField(TEXT("action_events"),{MakeShared<FJsonValueObject>(Receipt)});
             auto I=Step(VM,S,P);
             TestEqual(TEXT("Failed supply yields to combat during that method's cooldown"),I->GetStringField(TEXT("action")),FString(TEXT("attack")));
         }

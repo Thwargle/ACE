@@ -69,6 +69,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEDungeonInterfacesTest;
 	friend class FACEDesktopHighlightTest;
 	friend class FACEPvPCombatParityTest;
+	friend class FACEAttackerIdentityTest;
 	friend class FACECharacterInfoParityTest;
 	friend class FACEVRRigTest;
 	friend class FACEVRProtocolTest;
@@ -92,6 +93,8 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEUIWorkloadTest;
 	friend class FACESalvageTest;
 	friend class FACEHousingTest;
+	friend class FACEServerDialogsTest;
+	friend class FACEBookWritingTest;
 	friend class FACEChessTest;
 	friend class FACEBarberTest;
 	friend class FACEItemPresentationTest;
@@ -948,6 +951,12 @@ private:
 	UPROPERTY() TArray<TObjectPtr<UTextBlock>> ServerConfirmLabels;
 	void RefreshServerConfirmation();
 	void FinishServerConfirmation(bool bAccept);
+	uint64 ServerPopupId = 0;
+	FString ServerPopupPrompt;
+	TSharedPtr<FACEUIElement> ServerPopupRoot;
+	UPROPERTY() TArray<TObjectPtr<UTextBlock>> ServerPopupLabels;
+	void RefreshServerPopup();
+	void FinishServerPopup(uint64 Id);
 	int32 ManaStoneConfirmTarget = 0;
 	TSharedPtr<FACEUIElement> ManaStoneConfirmRoot;
 	UPROPERTY() TArray<TObjectPtr<UTextBlock>> ManaStoneConfirmLabels;
@@ -1177,6 +1186,7 @@ private:
 	int32 SelectedContractId = 0;
 	int32 QuestScrollOffset = 0;
 	bool bQuestSortByStatus = false;
+	bool bQuestReverseSort = false;
 	/** World panel (map / housing): active page, tab captions, and map overlays. */
 	FString ActiveWorldTab;
 	UPROPERTY()
@@ -1211,6 +1221,9 @@ private:
 	TObjectPtr<UTextBlock> BookPageTextLabel;
 	UPROPERTY()
 	TObjectPtr<UScrollBox> BookScroll;
+	UPROPERTY() TObjectPtr<UACERetailTextEntry> BookPageEditor;
+	UFUNCTION() void HandleBookTextChanged(const FText& Text);
+	int32 EditedBookGuid = 0, EditedBookPage = INDEX_NONE;
 	int32 ScrolledBookGuid = 0, ScrolledBookPage = INDEX_NONE;
 	UPROPERTY()
 	TObjectPtr<UTextBlock> BookTitleLabel;

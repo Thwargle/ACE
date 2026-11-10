@@ -282,6 +282,7 @@ void UACEPluginSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 void UACEPluginSubsystem::Deinitialize()
 {
     SaveItemBuffTimers();
+    SaveEquipmentAppraisals();
     RestoreWorldRendering();
     UnbindCombatEvents();
     if(RouteMesh){RouteMesh->DestroyComponent();RouteMesh=nullptr;}
@@ -1320,7 +1321,7 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::Snapshot()
     O->SetArrayField(TEXT("spells"), CachedSpells);
     O->SetArrayField(TEXT("known_spells"),CachedKnownSpellValues);
     TArray<TSharedPtr<FJsonValue>> Enchantments,Harmful;auto Cooldowns=MakeShared<FJsonObject>();
-    for (const auto& E : C->GetActiveEnchantments())
+    for (const auto& E : C->GetActiveEnchantments(true))
     {
         if(E.bCooldown)Cooldowns->SetNumberField(FString::FromInt(uint32(E.SpellId)&0x7fff),E.Duration<0?1.e9:FMath::Max(0.,E.Duration+E.StartTime-(FPlatformTime::Seconds()-E.ReceivedAt)));
         if(!E.bCooldown&&!E.bBeneficial&&E.Duration>=0)

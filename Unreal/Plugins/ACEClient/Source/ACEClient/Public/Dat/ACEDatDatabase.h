@@ -45,9 +45,8 @@ private:
 	/** Serializes KeptHandle Seek/Read — concurrent ReadFile from workers is otherwise racy. */
 	mutable FCriticalSection IoMutex;
 	bool ReadHeader(IFileHandle* Handle);
-	bool ReadDirectoryTree(IFileHandle* Handle, uint32 RootSectorOffset);
+	bool ReadDirectoryTree(IFileHandle* Handle, uint32 RootSectorOffset, TSet<uint32>& Visited, int32 Depth = 0);
 	bool ReadSectorChain(IFileHandle* Handle, uint32 Offset, uint32 Size, TArray<uint8>& OutBuffer) const;
-	static uint32 ReadNextAddress(IFileHandle* Handle);
 
 	FString FilePath;
 	mutable TUniquePtr<IFileHandle> KeptHandle;

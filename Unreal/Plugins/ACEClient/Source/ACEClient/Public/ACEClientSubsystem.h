@@ -67,6 +67,7 @@ class ACECLIENT_API UACEClientSubsystem : public UGameInstanceSubsystem, public 
 	friend class FACEUIWorkloadTest;
 	friend class FACEPluginEquipmentTest;
 	friend class FACEPluginRequestsTest;
+	friend class FACEEquipmentAssessmentCacheTest;
 	friend class FACEUCMLootLatencyTest;
 	friend class FACEUCMLootNotificationTest;
     friend class FACEPluginCompanionTest;
@@ -81,6 +82,8 @@ class ACECLIENT_API UACEClientSubsystem : public UGameInstanceSubsystem, public 
 	friend class FACEVRRigTest;
 	friend class FACESalvageTest;
 	friend class FACEHousingTest;
+	friend class FACEServerDialogsTest;
+	friend class FACEBookWritingTest;
 	friend class FACEChessTest;
 	friend class FACEBarberTest;
 	friend class FACEItemPresentationTest;
@@ -463,6 +466,8 @@ public:
 	UFUNCTION(BlueprintPure, Category = "ACE|Trade")
 	int32 GetTradePartnerGuid() const;
 	int32 GetTradeAcceptedGuid() const;
+	bool HasAcceptedTrade() const;
+	bool HasPartnerAcceptedTrade() const;
 
 	/** Item guids currently offered on our side of the trade window. */
 	UFUNCTION(BlueprintPure, Category = "ACE|Trade")
@@ -649,7 +654,7 @@ public:
 	bool TryGetPlayerEncumbrance(int32& OutEncumbrance) const;
 
 	UFUNCTION(BlueprintPure, Category = "ACE|Magic")
-	TArray<FACEActiveEnchantment> GetActiveEnchantments() const;
+	TArray<FACEActiveEnchantment> GetActiveEnchantments(bool bIncludeCooldowns = false) const;
 
 	UFUNCTION(BlueprintPure, Category = "ACE|Magic")
 	bool TryGetVitaeMultiplier(float& OutMultiplier) const;

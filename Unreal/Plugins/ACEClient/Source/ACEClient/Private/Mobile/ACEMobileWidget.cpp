@@ -129,10 +129,11 @@ void UACEMobileWidget::ResolveConfirmation(bool Accept)
 {
     if(auto* B=PC?PC->GetActionDeckBinder():nullptr)
     {
-        if(B->ManaStoneConfirmSource)B->FinishManaStoneConfirmation(Accept);
+        if(ConfirmationPopupId)B->FinishServerPopup(ConfirmationPopupId);
+        else if(B->ManaStoneConfirmSource)B->FinishManaStoneConfirmation(Accept);
         else B->FinishServerConfirmation(Accept);
     }
-    ConfirmationText.Reset();ClosePanel();
+    ConfirmationPopupId=0;ConfirmationText.Reset();ClosePanel();
 }
 void UACEMobileWidget::RefreshChat()
 {
@@ -346,7 +347,7 @@ void UACEMobileWidget::UpdateMobile()
     if(LastSession!=int32(State))
     {
         LastSession=int32(State);CancelTouches();bWheel=bEditing=false;ClosePanel();
-        Creation.Reset();ReleaseCharacterPreview();ConfirmationText.Reset();bBookDirty=false;
+        Creation.Reset();ReleaseCharacterPreview();ConfirmationText.Reset();ConfirmationPopupId=0;bBookDirty=false;
         if(State!=EACESessionState::InWorld && Menu){Menu->NativeDestruct();Menu=nullptr;SelectedSpell=0;}
         if(State==EACESessionState::CharacterSelect)OpenPanel("Characters");
         LastVendor=LastContainer=LastTrade=0;
@@ -371,14 +372,16 @@ void UACEMobileWidget::UpdateMobile()
     if(auto* B=PC->GetActionDeckBinder())
     {
         FString Prompt=B->ServerConfirmPrompt;
+        uint64 PopupId=0;
         if(B->ManaStoneConfirmSource)
         {
             FACEWorldObject Target;Client->GetWorldObject(B->ManaStoneConfirmTarget,Target);
             Prompt=FString::Printf(TEXT("Destroy %s and drain its mana into this stone?"),*Target.Name);
         }
-        if(!Prompt.IsEmpty() && (Panel!="Confirmation" || Prompt!=ConfirmationText))
-        {ConfirmationText=Prompt;OpenPanel("Confirmation");}
-        else if(Prompt.IsEmpty() && Panel=="Confirmation"){ConfirmationText.Reset();ClosePanel();}
+        if(Prompt.IsEmpty()){Prompt=B->ServerPopupPrompt;PopupId=B->ServerPopupId;}
+        if(!Prompt.IsEmpty() && (Panel!="Confirmation" || Prompt!=ConfirmationText || PopupId!=ConfirmationPopupId))
+        {ConfirmationText=Prompt;ConfirmationPopupId=PopupId;OpenPanel("Confirmation");}
+        else if(Prompt.IsEmpty() && Panel=="Confirmation"){ConfirmationText.Reset();ConfirmationPopupId=0;ClosePanel();}
     }
     if(Menu && !Panel.IsNone())Menu->RefreshIfDirty();
     if(Panel=="Chat")RefreshChat();
@@ -398,6 +401,7 @@ void UACEMobileWidget::BuildPanel()
         Content->AddSlot().AutoHeight().Padding(4)[Button(WantsHUDPlugin(Id)?TEXT("On screen — hide panel"):TEXT("Show this plugin on screen"),[this,Id](){ToggleHUDPlugin(Id);BuildPanel();})];
     }
     FString Title=Page.ToString();
+    if(Page=="Confirmation" && ConfirmationPopupId)Title=TEXT("Message");
     if(Title.StartsWith(TEXT("Plugin:")))if(auto* Host=GetGameInstance()->GetSubsystem<UACEPluginSubsystem>())
         for(const auto& Plugin:Host->Plugins)if(Plugin->Id==Title.Mid(7)){Title=Plugin->DisplayTitle();break;}
     Content->AddSlot().AutoHeight().Padding(6)[SNew(SHorizontalBox)
@@ -448,8 +452,8 @@ void UACEMobileWidget::BuildPanel()
     else if(Page=="Confirmation")
     {
         Body->AddSlot().AutoHeight().Padding(16)[Text(ConfirmationText,26)];
-        Body->AddSlot().AutoHeight().Padding(8)[Button(TEXT("Yes"),[this](){ResolveConfirmation(true);})];
-        Body->AddSlot().AutoHeight().Padding(8)[Button(TEXT("No"),[this](){ResolveConfirmation(false);})];
+        Body->AddSlot().AutoHeight().Padding(8)[Button(ConfirmationPopupId?TEXT("OK"):TEXT("Yes"),[this](){ResolveConfirmation(true);})];
+        if(!ConfirmationPopupId)Body->AddSlot().AutoHeight().Padding(8)[Button(TEXT("No"),[this](){ResolveConfirmation(false);})];
     }
     else if(Page=="Book")
     {
@@ -462,7 +466,9 @@ void UACEMobileWidget::BuildPanel()
         Pages->AddSlot().FillWidth(1).Padding(4)[Button(TEXT("Next page"),[this,Id=Book.BookGuid,P=Book.CurrentPage](){Client->SendBookPageData(Id,P+1);},Book.CurrentPage+1<Total)];
         Body->AddSlot().AutoHeight()[Pages];
         const FString PageText=Book.Pages.IsValidIndex(Book.CurrentPage)?Book.Pages[Book.CurrentPage]:FString();
-        Body->AddSlot().AutoHeight().Padding(12)[Text(!PageText.IsEmpty()?PageText:Book.CurrentPage==0 && !Book.Inscription.IsEmpty()?Book.Inscription:TEXT("Waiting for page..."),24)];
+        Body->AddSlot().AutoHeight().Padding(12)[Text(Book.HasPageText(Book.CurrentPage)?PageText:
+            Book.CurrentPage==0 && !Book.Inscription.IsEmpty()?Book.Inscription:
+            Book.Pages.IsEmpty()?TEXT("(Blank book)"):TEXT("Waiting for page..."),24)];
     }
     else if(Page=="Combat settings")
     {

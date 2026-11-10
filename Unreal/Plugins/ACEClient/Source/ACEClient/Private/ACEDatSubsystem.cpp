@@ -8966,10 +8966,11 @@ bool UACEDatSubsystem::EnsureContractTableLoaded()
 		Info.DescriptionProgress = ReadAlignedPString();
 		Info.NameNPCStart = ReadAlignedPString();
 		Info.NameNPCEnd = ReadAlignedPString();
-		for (int32 Flag = 0; Flag < 6; ++Flag)
+		for (int32 Flag = 0; Flag < 5; ++Flag)
 		{
-			ReadAlignedPString(); // questflag stamped/started/finished/progress/timer/repeat
+			ReadAlignedPString(); // questflag stamped/started/finished/progress/timer
 		}
+		Info.QuestFlagRepeatTime = ReadAlignedPString();
 		uint32 EndCell = 0;
 		FVector3f EndOrigin = FVector3f::ZeroVector;
 		bOk = bOk && ReadPosition(Info.CellNPCStart, Info.OriginNPCStart)

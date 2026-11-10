@@ -9,6 +9,8 @@ namespace ACEVTProfile
     inline constexpr int32 MaxLootConditions=64;
     TSharedPtr<FJsonObject> ConvertFile(const FString& Path,TArray<FString>& Issues);
     TSharedPtr<FJsonObject> CompileCommand(const FString& Text,TArray<FString>& Issues);
+    // Plain text remains a prefix rule. Operators opt into bounded VT mob expressions.
+    bool SetMonsterMatch(const TSharedPtr<FJsonObject>& Rule,const FString& Text,FString& Error);
     FString NativeCommand(const FString& Text);
     // ICU-compatible patterns with explicit text, work and stack limits.
     bool IsSupportedPattern(const FString& Pattern);

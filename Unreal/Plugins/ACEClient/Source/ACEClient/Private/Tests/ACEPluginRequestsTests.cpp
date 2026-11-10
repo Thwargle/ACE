@@ -68,6 +68,34 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         }
         Session.WorldObjects.Remove(Door.Guid);
     }
+    {
+        FACEWorldObject Wand; Wand.Guid = int32(0xF06A016A); Wand.Name = TEXT("Live metadata wand");
+        Wand.ItemType = ACEItemType::Caster; Wand.ContainerId = Session.PlayerGuid;
+        Wand.IconId = 0x06001234; Wand.IconOverlayId = 0x06001235; Wand.IconUnderlayId = 0x06001236; Wand.SpellDID = 1;
+        Session.UpsertWorldObject(Wand);
+        FACEAppraisalInfo A; A.ObjectGuid = Wand.Guid; A.bSuccess = true;
+        H->ObserveAppraisal(A);
+        auto Snapshot = MakeShared<FJsonObject>(); H->ExtendInventorySnapshot(Snapshot);
+        const auto First = Snapshot->GetArrayField(TEXT("inventory"));
+        if (!TestEqual(TEXT("Metadata fixture starts with one owned item"), First.Num(), 1)) return false;
+        TestEqual(TEXT("Initial innate spell reaches Lua"), First[0]->AsObject()->GetNumberField(TEXT("spell")), 1.);
+        for (uint32 Key : {8u, 28u, 50u, 52u})
+        {
+            FACEBinaryWriter W; W.WriteUInt32(0x2D8); W.WriteUInt8(1);
+            W.WriteUInt32(Wand.Guid); W.WriteUInt32(Key); W.WriteUInt32(0);
+            Session.ReceiveGameMessage(W.GetData());
+        }
+        H->ExtendInventorySnapshot(Snapshot);
+        const auto Updated = Snapshot->GetArrayField(TEXT("inventory"));
+        if (!TestEqual(TEXT("Metadata update does not duplicate inventory rows"), Updated.Num(), 1)) return false;
+        for (const TCHAR* Field : {TEXT("icon"), TEXT("icon_overlay"), TEXT("icon_underlay"), TEXT("spell")})
+            TestEqual(TEXT("Cached Lua inventory observes cleared DataID"), Updated[0]->AsObject()->GetNumberField(Field), 0.);
+        TestTrue(TEXT("Cosmetic updates retain a successful appraisal"), Updated[0]->AsObject()->GetBoolField(TEXT("identified")));
+        H->ExtendInventorySnapshot(Snapshot);
+        TestTrue(TEXT("Unchanged metadata reuses immutable Lua row"), Snapshot->GetArrayField(TEXT("inventory"))[0] == Updated[0]);
+        TestEqual(TEXT("Previous published snapshot stays immutable"), First[0]->AsObject()->GetNumberField(TEXT("spell")), 1.);
+        H->Appraisals.Remove(Wand.Guid); Session.WorldObjects.Remove(Wand.Guid); ++Session.InventoryDataRevision;
+    }
     auto ConfirmPut=[&](int32 Item,int32 Container)
     {
         FACEBinaryWriter W;W.WriteUInt32(Item);W.WriteUInt32(Container);W.WriteInt32(0);W.WriteInt32(0);
@@ -115,6 +143,26 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         TestEqual(TEXT("Another player's update cannot contaminate self qualities"),Session.PlayerVitals.QualityDoubles.FindRef(9002),0.75);
         FACEBinaryWriter Short;Short.WriteUInt32(ACEOpcode::PrivateUpdatePropertyString);Short.WriteUInt8(1);Short.WriteUInt32(9003);Short.Align();Short.WriteUInt16(50);Session.HandleGameMessage(Short.GetData());
         TestEqual(TEXT("Truncated string preserves last valid value"),Session.PlayerVitals.QualityStrings.FindRef(9003),FString(TEXT("Public")));
+        FACEBinaryWriter Exemption;Exemption.WriteUInt32(0x2D1);Exemption.WriteUInt8(2);Exemption.WriteUInt32(68);Exemption.WriteUInt32(0);
+        Session.ReceiveGameMessage(Exemption.GetData());H->ExtendSnapshot(Snapshot);
+        TestFalse(TEXT("Explicit component exemption reaches automation"),Snapshot->GetBoolField(TEXT("components_required")));
+        struct RemovedQuality {uint32 Opcode,Key;const TCHAR* Field;};
+        for(const RemovedQuality Q : {
+            RemovedQuality{0x1D2,25,TEXT("char_ints")},
+            RemovedQuality{0x2B9,2,TEXT("char_quads")},
+            RemovedQuality{0x1D4,9001,TEXT("char_bools")},
+            RemovedQuality{0x1D6,9002,TEXT("char_doubles")},
+            RemovedQuality{0x1D8,9003,TEXT("char_strings")},
+            RemovedQuality{0x1D4,68,TEXT("char_bools")}})
+        {
+            FACEBinaryWriter Remove;Remove.WriteUInt32(Q.Opcode);Remove.WriteUInt8(3);
+            Remove.WriteUInt32(Session.PlayerGuid);Remove.WriteUInt32(Q.Key);
+            Session.ReceiveGameMessage(Remove.GetData());H->ExtendSnapshot(Snapshot);
+            TestFalse(TEXT("Server deletion removes the key from the next Lua snapshot"),
+                Snapshot->GetObjectField(Q.Field)->HasField(FString::FromInt(Q.Key)));
+        }
+        TestTrue(TEXT("Deleting exemption restores required components for UCM"),Snapshot->GetBoolField(TEXT("components_required")));
+        TestEqual(TEXT("Deleted level cannot leave a stale top-level Lua value"),Snapshot->GetNumberField(TEXT("level")),0.);
         FACEBinaryWriter Relog;Relog.WriteUInt32(0);Relog.WriteUInt32(1);for(int I=0;I<8;++I)Relog.WriteUInt32(0);
         FACEBinaryReader RR(Relog.GetData());Session.HandlePlayerDescription(RR);
         TestTrue(TEXT("Relog cannot retain previous character qualities"),Session.PlayerVitals.QualityStrings.IsEmpty()&&Session.PlayerVitals.QualityDoubles.IsEmpty()&&Session.PlayerVitals.QualityBools.IsEmpty()&&Session.PlayerVitals.QualityInt64s.IsEmpty());
@@ -406,6 +454,8 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         TestTrue(TEXT("Permanent server failure marks target immediately unhittable"),H->CombatOutcomes.Last()->AsObject()->GetBoolField(TEXT("unhittable")));
         Cast();Session.OnChatMessage.Broadcast(TEXT("Critical hit! You burn Wasp for 100 points with Flame Bolt VII."),TEXT(""),ACEChatMessageType::Magic);
         TestTrue(TEXT("Magic damage success resets miss count after UseDone"),H->OffensiveCasts.IsEmpty()&&H->CombatOutcomes.Last()->AsObject()->GetBoolField(TEXT("hit")));
+        TestEqual(TEXT("Correlated spell hit retains actual damage for VT streak finishing"),H->CombatOutcomes.Last()->AsObject()->GetNumberField(TEXT("damage")),100.);
+        TestTrue(TEXT("Damage outcome identifies its spell rather than a generic use completion"),H->CombatOutcomes.Last()->AsObject()->GetNumberField(TEXT("spell"))>0);
         Cast();Session.WorldObjects.Remove(900);H->ExpireOffensiveCasts(FPlatformTime::Seconds()+10);
         TestTrue(TEXT("Released target cannot acquire a timeout for a reused GUID"),H->OffensiveCasts.IsEmpty());
         H->CombatOutcomes.Empty();H->PendingSpell=H->PendingSpellTarget=0;Session.SelectedObject.Guid=0;Session.WorldObjects.Remove(Player.Guid);

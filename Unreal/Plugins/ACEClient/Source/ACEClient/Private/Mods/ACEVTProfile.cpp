@@ -199,6 +199,26 @@ FString NativeCommand(const FString& Text)
 #include "ACEVTMeta.inl"
 #include "ACEVTSettings.inl"
 J CompileCommand(const FString& Text,TArray<FString>& Issues){return VTCommand(Text,Issues);}
+bool SetMonsterMatch(const J& Rule,const FString& Text,FString& Error)
+{
+    Error.Empty();const FString Name=Text.TrimStartAndEnd();
+    if(!Rule||Name.IsEmpty()||Name.Len()>256){Error=TEXT("Enter a mob name or expression (maximum 256 characters).");return false;}
+    J Expression;
+    if(Name.Contains(TEXT("=="))||Name.Contains(TEXT("!="))||Name.Contains(TEXT("#"))
+        ||Name.Contains(TEXT("<"))||Name.Contains(TEXT(">"))||Name.Contains(TEXT("&&"))||Name.Contains(TEXT("||")))
+    {
+        VTExpression Parser{Name};Expression=Parser.Expr(1,0);Parser.Space();TArray<FString> Issues;
+        // Native snapshots include live species/max-health and DAT species names.
+        // Imported profile validation still requires its historical catalog.
+        if(!Expression||!Parser.Error.IsEmpty()||Parser.At!=Name.Len())
+        {Error=Parser.Error.IsEmpty()?TEXT("Invalid mob expression."):Parser.Error;return false;}
+        if(!VTMonsterExpression(Expression,Issues,true))
+        {Error=FString::Join(Issues,TEXT("; "));return false;}
+    }
+    Rule->SetStringField(TEXT("name"),Name);
+    if(Expression)Rule->SetObjectField(TEXT("expression"),Expression);else Rule->RemoveField(TEXT("expression"));
+    return true;
+}
 J Convert(const J& D,TArray<FString>& Issues)
 {
     Issues.Reset();auto Out=MakeShared<FJsonObject>();if(!D){Issues.Add(TEXT("No parsed profile"));return Out;}
