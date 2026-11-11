@@ -81,6 +81,8 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEVRChatTest;
 	friend class AACEPlayerController;
 	friend class FACEChatParityTest;
+	friend class FACEArenaRecallTest;
+	friend class FACERetailCommandAuditTest;
 	friend struct FACEChatUIFixture;
 	friend class FACEPluginPublicAPITest;
 	friend class FACEEmoteTest;
@@ -1427,6 +1429,9 @@ private:
 	void SyncChatJumpIndicator(int32 Window = 0);
 	/** Parse @/ slash commands (@ls, @tell, @e, …). Returns true if handled (do not Talk). */
 	bool TryDispatchMiscCommand(const FString& Cmd, const FString& Args);
+	bool TryDispatchRetailUtilityCommand(const FString& Cmd, const FString& Args);
+	uint32 PendingChatConfirmation = 0;
+	int32 ChatConfirmationStage = 0;
 	bool TryDispatchUILayoutCommand(const FString& Cmd, const FString& Args);
 	void UpdateAutoUILayout();
 	bool GetAutoUILayoutPath(FString& Path) const;

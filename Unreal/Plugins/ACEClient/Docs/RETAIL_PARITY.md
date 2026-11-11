@@ -8,6 +8,79 @@ button exists, its opcode has a constant, or a focused regression test passes.
 This is the working acceptance record, most recently reviewed on 2026-10-13. The client
 is **not yet a feature-complete retail replacement**.
 
+## Public retail chat command audit: 2026-11-11
+
+Compared all 130 registered names in retail
+`ClientCommunicationSystem::InitializeCommands` and `StartupTurbineChatSystem`:
+123 executable names (including aliases) and seven help-only topics. The local
+help catalog has no missing or extra names relative to those registries. This
+covers public retail client commands, not every server-specific or privileged
+debug command. Unknown commands still reach the server through Talk.
+
+- Implement `/consent on|off|who|clear|remove` and `/permit add|remove` with
+  retail character-option IDs, action opcodes, string payloads and queues.
+- Implement `/corpse` / `/cor`. Retain the login position-quality table and
+  ordered private/public position-quality updates, including last outdoor death
+  position 14. Keep these separate from player movement, reject incomplete and
+  stale updates, and clear them on logout. Coordinates follow retail's outdoor
+  cell conversion rather than the current character's position.
+- Implement `/render fov 10-160` and `/render radius 5-25` with saved settings,
+  numeric validation and incremental terrain streaming. Preserve native Android's
+  terrain memory cap and disabled login-background streaming.
+- Restore `/all` and `/o`, the legacy `/friends old` request, house boot/remove
+  aliases, storage permission shortcuts and guest/storage `show`/`list` commands.
+  Validate housing types instead of silently requesting cottages. `/house` alone
+  displays help rather than recalling the character.
+- Make `/afk on` and `/afk off` idempotent, with authoritative AFK-state updates;
+  match retail's AFK message limit/reset behavior. Accept whitespace-separated
+  subcommands and quoted multiword names in housing, friends and allegiance
+  commands. Correct recall argument handling and age/birth query payloads.
+- Require the retail confirmation for `/die` and both confirmations for
+  `/house abandon`. Cancellation sends no destructive action.
+- Provide local syntax/help for every public retail name and all seven help
+  topics. Retain detailed AC:Unreal-specific help and server-defined commands.
+
+`ACE.RetailParity.ChatCommandRegistry` checks the complete name fixture, local
+help/dispatch, actual serialized action packets, confirmation/cancellation,
+position-quality login and update handling, and render preferences. The audit
+also exercises existing chat, arena recall, transport, player options, housing,
+social, UI-layout and character-quality suites. Development Editor build and
+all 11 regression suites passed; Quest and Android source synchronization checks
+passed. The expanded UI test caught an options-array ordering dependency;
+controls now resolve settings by name, preserving brightness, contrast and light
+controls when new options are added. Build/test evidence and the independent
+registry comparison are in `TestOutput/ChatCommandAudit-Nov11/`.
+These are local/offline tests; live-server execution and native-device rendering
+remain unverified. No packaged release was made for this audit.
+
+## PK and PK Lite arena recall commands: 2026-11-10
+
+Compared retail `ClientCommunicationSystem::DoPKArena` / `DoPKLArena`, their
+registered `pka` / `pla` aliases, `ACCWeenieObject::IsPK` / `IsPKLite`, and
+`CM_Character::Event_TeleToPKArena` / `Event_TeleToPKLArena`. ACE confirms the
+same empty action payloads in `GameActionTeleToPkArena` / `GameActionTeleToPklArena`.
+
+- `/pkarena` / `/pka` send action `0x0027`; `/pklarena` / `/pla` send `0x0026`
+  on the reliable weenie queue. Previously these unrecognized client commands
+  fell through to ordinary Talk, so the server never received a recall request.
+- Accept both `/` and `@`, case-insensitively, through typed chat and Action Deck.
+  Reject arguments with the retail usage notice and provide help for all aliases.
+- Match retail's player-descriptor eligibility check, including rejecting Free PK
+  as a substitute for PK/PK Lite. If the player object is unavailable, defer to
+  the server. Busy state, PK timers, recall animation and teleport remain server-owned.
+- Add `ACE.RetailParity.ArenaRecallCommands` covering actual command submission,
+  serialized queue/opcode/empty payload, alias/case handling, eligibility, arguments,
+  local help, Action Deck draft preservation, and disconnected-session rejection.
+
+Validation: Development Editor build and `ArenaRecallCommands`,
+`ChatInputAndCommands`, `PkStatus`, `EquipmentAssessmentCache`, and
+`QualityRemoval` passed. The build also exposed existing anonymous-namespace
+helper collisions in equipment-cache code and the quality-removal fixture;
+isolated those helpers in named namespaces without changing behavior. Quest
+and mobile source synchronization passed. Evidence is in
+`TestOutput/ArenaRecall-Nov10/`. These are offline command/protocol tests;
+no live-server arena teleport or new packaged release was performed.
+
 ## Character quality removal and live panel values: 2026-11-10
 
 Compared retail `CM_Qualities` private/public remove dispatchers,

@@ -16059,8 +16059,8 @@ void UACEUIGameplayBinder::RefreshServerConfirmation()
 {
 	const auto Session = Client ? Client->GetSession() : nullptr;
 	if (!Session || Session->GetState()!=EACESessionState::InWorld)
-	{ PendingAllegianceAction.Reset(); PendingAllegiancePrompt.Reset(); PendingAllegianceGuid=0; bHousePaymentConfirm=false; bChessQuitConfirm=false; }
-	if (!Session || Session->GetState()!=EACESessionState::InWorld || (Session->GetConfirmations().IsEmpty() && !PendingAllegianceGuid && !bHousePaymentConfirm && !bChessQuitConfirm))
+	{ PendingAllegianceAction.Reset(); PendingAllegiancePrompt.Reset(); PendingAllegianceGuid=0; bHousePaymentConfirm=false; bChessQuitConfirm=false; PendingChatConfirmation=0;ChatConfirmationStage=0; }
+	if (!Session || Session->GetState()!=EACESessionState::InWorld || (Session->GetConfirmations().IsEmpty() && !PendingAllegianceGuid && !bHousePaymentConfirm && !bChessQuitConfirm && !PendingChatConfirmation))
 	{
 		if (ServerConfirmRoot) ServerConfirmRoot->bVisible = false;
 		for (UTextBlock* Label : ServerConfirmLabels) if (Label) Label->SetVisibility(ESlateVisibility::Collapsed);
@@ -16091,10 +16091,15 @@ void UACEUIGameplayBinder::RefreshServerConfirmation()
 			ServerConfirmLabels.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
 	}
 
-	const bool bLocal=PendingAllegianceGuid!=0 || bHousePaymentConfirm || bChessQuitConfirm;
+	const bool bLocal=PendingAllegianceGuid!=0 || bHousePaymentConfirm || bChessQuitConfirm || PendingChatConfirmation;
 	const uint32 PendingType=bLocal ? 0 : Session->GetConfirmations()[0].Type;
 	const uint32 PendingContext=bLocal ? uint32(bChessQuitConfirm?ChessBoardGuid:(bHousePaymentConfirm?OpenHouseLord:PendingAllegianceGuid)) : Session->GetConfirmations()[0].Context;
-	const FString PendingPrompt=bLocal ? (bChessQuitConfirm?FString(TEXT("Are you sure you want to resign this game?")):(bHousePaymentConfirm?HouseConfirmPrompt:PendingAllegiancePrompt)) : Session->GetConfirmations()[0].Prompt;
+	const FString ChatPrompt=PendingChatConfirmation==ACEGameAction::Suicide
+		? TEXT("Do you really want to kill your character? You may drop items and accrue a vitae penalty.")
+		: ChatConfirmationStage==1
+		? TEXT("Do you really want to abandon your house? Items on hooks or in storage will stay with the house, and you will lose access to them.")
+		: TEXT("Are you absolutely certain you wish to abandon your house? Click Yes only if you are sure.");
+	const FString PendingPrompt=PendingChatConfirmation ? ChatPrompt : bLocal ? (bChessQuitConfirm?FString(TEXT("Are you sure you want to resign this game?")):(bHousePaymentConfirm?HouseConfirmPrompt:PendingAllegiancePrompt)) : Session->GetConfirmations()[0].Prompt;
 	if (!ServerConfirmRoot->bVisible || ServerConfirmType != PendingType || ServerConfirmContext != PendingContext || ServerConfirmPrompt != PendingPrompt)
 	{
 		ServerConfirmType = PendingType; ServerConfirmContext = PendingContext; ServerConfirmPrompt = PendingPrompt;
@@ -16129,7 +16134,17 @@ void UACEUIGameplayBinder::RefreshServerConfirmation()
 
 void UACEUIGameplayBinder::FinishServerConfirmation(bool bAccept)
 {
-	if (bChessQuitConfirm)
+	if (PendingChatConfirmation)
+	{
+		if (bAccept && PendingChatConfirmation==ACEGameAction::AbandonHouse && ChatConfirmationStage==1)
+		{
+			ChatConfirmationStage=2; RefreshServerConfirmation(); return;
+		}
+		const uint32 Action=PendingChatConfirmation;
+		PendingChatConfirmation=0;ChatConfirmationStage=0;
+		if (bAccept && Client) if (auto S=Client->GetSession()) S->SendSimpleGameAction(Action);
+	}
+	else if (bChessQuitConfirm)
 	{
 		bChessQuitConfirm=false;
 		if (bAccept && Client && bChessActive && !bChessQuitRequested)

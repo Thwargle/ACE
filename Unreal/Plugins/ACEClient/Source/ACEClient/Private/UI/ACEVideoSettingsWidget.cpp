@@ -92,7 +92,13 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  FCheckBoxStyle RoundToggle;
  RoundToggle.SetUncheckedImage(Brush(0x06004D15,FVector2D(13,13))).SetUncheckedHoveredImage(RoundToggle.UncheckedImage).SetUncheckedPressedImage(Brush(0x06004D16,FVector2D(13,13)))
   .SetCheckedImage(Brush(0x06004D17,FVector2D(13,13))).SetCheckedHoveredImage(RoundToggle.CheckedImage).SetCheckedPressedImage(Brush(0x06004D18,FVector2D(13,13)));
- auto AddValue = [&](const ACERuntimeOptions::FOption& O) {
+ auto AddValue = [&](const TCHAR* Key) {
+  // Resolve by key: adding a command-only option must not shift UI controls.
+  const ACERuntimeOptions::FOption* Option=nullptr;
+  for (const auto& Candidate:ACERuntimeOptions::Values)
+   if (FCString::Strcmp(Candidate.Key,Key)==0) {Option=&Candidate;break;}
+  if (!ensureMsgf(Option,TEXT("Unknown presentation option: %s"),Key)) return;
+  const auto& O=*Option;
   auto* V=WidgetTree->ConstructWidget<USlider>(USlider::StaticClass(),O.Key); V->SetWidgetStyle(RuntimeSlider); V->SetMinValue(O.Min); V->SetMaxValue(O.Max); V->SetStepSize(.01f);
   V->SetValue(ACERuntimeOptions::Get(O.Key)); ValueSliders.Add(O.Key,V); Row(O.Label,V);
   if (FCString::Strcmp(O.Key,TEXT("FieldOfViewDegrees"))==0)
@@ -103,10 +109,10 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
   }
  };
  Section(TEXT("Sound Options"));
- for (int32 I=0;I<3;++I) AddValue(ACERuntimeOptions::Values[I]);
+ for (const TCHAR* Key:{TEXT("MasterVolume"),TEXT("EffectsVolume"),TEXT("AmbientVolume")}) AddValue(Key);
  ActiveSoundOnly=WidgetTree->ConstructWidget<UCheckBox>(); ActiveSoundOnly->SetWidgetStyle(RoundToggle); ActiveSoundOnly->SetContent(Label(TEXT("Play Sounds Only When Active"))); Box->AddChild(Fixed(ActiveSoundOnly,272,20));
  Section(TEXT("Camera Options"));
- for (int32 I=4;I<7;++I) AddValue(ACERuntimeOptions::Values[I]);
+ for (const TCHAR* Key:{TEXT("CameraStiffness"),TEXT("CameraAdjustment"),TEXT("FieldOfViewDegrees")}) AddValue(Key);
  CameraAlignToSlope=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("CameraAlignToSlope"));
  CameraAlignToSlope->SetWidgetStyle(RoundToggle); CameraAlignToSlope->SetContent(Label(TEXT("Align camera to slope"))); Box->AddChild(Fixed(CameraAlignToSlope,272,20));
  Section(TEXT("Graphics Options"));
@@ -141,13 +147,13 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
   .SetCheckedHoveredImage(Brush(0x06004D17,FVector2D(13,13))).SetCheckedPressedImage(Brush(0x06004D18,FVector2D(13,13)))
   .SetPadding(FMargin(3,0));
  VSync->SetWidgetStyle(Toggle); VSync->SetContent(Label(TEXT("Sync with Refresh Rate"))); Box->AddChild(Fixed(VSync,272,20));
- AddValue(ACERuntimeOptions::Values[7]);
+ AddValue(TEXT("ScreenBrightness"));
  auto* Brightness=ValueSliders[TEXT("ScreenBrightness")].Get();
  Brightness->OnValueChanged.AddDynamic(this,&UACEVideoSettingsWidget::ChangeScreenBrightness);
  ScreenBrightnessLabel=Label(TEXT(""),7); ScreenBrightnessLabel->SetJustification(ETextJustify::Right);
  Box->AddChild(Fixed(ScreenBrightnessLabel,250,14));
  UACEHoverTooltipWidget::SetWidgetTooltip(Brightness,FText::FromString(TEXT("Dims or brightens the world, including glowing effects. 100% is neutral. Changes save immediately.")));
- AddValue(ACERuntimeOptions::Values[8]);
+ AddValue(TEXT("Contrast"));
  auto* Contrast=ValueSliders[TEXT("Contrast")].Get();
  Contrast->OnValueChanged.AddDynamic(this,&UACEVideoSettingsWidget::ChangeScreenContrast);
  ScreenContrastLabel=Label(TEXT(""),7); ScreenContrastLabel->SetJustification(ETextJustify::Right);
@@ -177,7 +183,7 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  for(const TCHAR* V:{TEXT("Off"),TEXT("Low"),TEXT("Full")}) DynamicLighting->AddOption(V);
  UACEHoverTooltipWidget::SetWidgetTooltip(DynamicLighting,FText::FromString(TEXT("Off removes light cast by spells, weapons and doorways. Low keeps up to two nearby effect lights. Particles, sunlight and ambient room illumination remain visible. Saved with Apply.")));
  Box->AddChild(Fixed(Label(TEXT("Older hardware: turn shadows and dynamic lights off."),7),272,18));
- AddValue(ACERuntimeOptions::Values[UE_ARRAY_COUNT(ACERuntimeOptions::Values)-1]);
+ AddValue(TEXT("EffectLightLimit"));
  auto* LightLimit=ValueSliders[TEXT("EffectLightLimit")].Get();
  LightLimit->SetStepSize(1.f); LightLimit->MouseUsesStep=true;
  LightLimit->OnValueChanged.AddDynamic(this,&UACEVideoSettingsWidget::ChangeEffectLightLimit);

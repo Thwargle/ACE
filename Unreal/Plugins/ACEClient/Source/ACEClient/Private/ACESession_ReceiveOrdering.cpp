@@ -85,6 +85,8 @@ bool FACESession::AcceptPropertyStamp(const TArray<uint8>& Message)
 	case ACEOpcode::PublicUpdatePropertyDataID: Public = true; Family = ACEOpcode::PrivateUpdatePropertyDataID; break;
 	case ACEOpcode::PublicUpdateInstanceId: Public = true; Family = ACEOpcode::PrivateUpdateInstanceId; break;
 	case ACEOpcode::PrivateUpdateInstanceId: break;
+	case ACEOpcode::PublicUpdatePosition: Public=true; Family=ACEOpcode::PrivateUpdatePosition; ValueBytes=32; break;
+	case ACEOpcode::PrivateUpdatePosition: ValueBytes=32; break;
 	case ACEOpcode::PublicUpdatePropertyInt64: Public = true; Family = ACEOpcode::PrivateUpdatePropertyInt64; ValueBytes = 8; break;
 	case ACEOpcode::PublicUpdatePropertyFloat: Public = true; Family = ACEOpcode::PrivateUpdatePropertyFloat; ValueBytes = 8; break;
 	case ACEOpcode::PublicUpdatePropertyString: Public = String = true; Family = ACEOpcode::PrivateUpdatePropertyString; ValueBytes = 0; break;

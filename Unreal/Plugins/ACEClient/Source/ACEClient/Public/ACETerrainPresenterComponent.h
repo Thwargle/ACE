@@ -192,6 +192,8 @@ public:
 
 	/** Re-enable procedural landblock streaming after login hold (non-WC maps only). */
 	void RestoreProceduralStreamingAfterLogin(int32 InLoadRadius = 5, int32 InUnloadRadius = 6);
+	/** Change residency through the existing staged loader; keep mobile memory limits. */
+	void ApplyLandscapeDrawRadius(int32 Radius);
 
 	/** Retail get_block_orient full-res radius, clamped to the current LoadRadius. */
 	int32 GetFullDetailRadius() const { return FMath::Clamp(FullDetailRadius, 0, FMath::Max(0, LoadRadius)); }

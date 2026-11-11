@@ -1,4 +1,12 @@
 #include "ACESession.h"
+#include "ACERetailCommandSyntax.h"
+
+void FACESession::SendLegacyFriendsRequest()
+{
+    if (State!=EACESessionState::InWorld) return;
+    FACEBinaryWriter Payload;Payload.WriteUInt32(0);Payload.WriteString16L(FString());
+    SendGameMessage(0xF7CD,Payload.GetData(),ACEQueue::ControlQueue);
+}
 
 void FACESession::SendSocialCommand(const FString& Command,const FString& Arguments,FString& OutError)
 {
@@ -6,20 +14,21 @@ void FACESession::SendSocialCommand(const FString& Command,const FString& Argume
     FString Rest=Arguments.TrimStartAndEnd();
     auto Take=[&]()
     {
-        FString Word,Tail;
-        if (!Rest.Split(TEXT(" "),&Word,&Tail)) Word=Rest;
-        Rest=Tail.TrimStartAndEnd();return Word.ToLower();
+        return ACERetailCommandSyntax::Take(Rest);
     };
     const FString Topic=Command==TEXT("motd") ? TEXT("motd") : Take();
     FACEBinaryWriter Payload;uint32 Action=0;
     auto Name=[&]()
     {
-        FString Value=Rest;
-        if (Value.StartsWith(TEXT("\"")) && Value.EndsWith(TEXT("\""))) Value=Value.Mid(1,Value.Len()-2);
+        FString Value=ACERetailCommandSyntax::Name(Rest);
         if (Value.IsEmpty()) OutError=TEXT("Please specify a name or message.");
         Payload.WriteString16L(Value);
     };
-    if (Topic==TEXT("hometown") || Topic==TEXT("ho")) Action=ACEGameAction::RecallAllegianceHometown;
+    if (Topic==TEXT("hometown") || Topic==TEXT("ho"))
+    {
+        if (!Rest.IsEmpty()) OutError=TEXT("This command takes no arguments.");
+        else Action=ACEGameAction::RecallAllegianceHometown;
+    }
     else if (Topic==TEXT("broadcast") || Topic==TEXT("br"))
     {
         if (!Rest.IsEmpty()) SendChatChannel(ACEChatChannel::AllegianceBroadcast,Rest);
@@ -29,7 +38,7 @@ void FACESession::SendSocialCommand(const FString& Command,const FString& Argume
     else if (Topic==TEXT("info")) {Action=0x027B;Name();}
     else if (Topic==TEXT("boot"))
     {
-        const bool Account=Rest.StartsWith(TEXT("-account"),ESearchCase::IgnoreCase);
+        FString Probe=Rest; const bool Account=ACERetailCommandSyntax::Take(Probe)==TEXT("-account");
         if (Account) Take();
         Action=0x0277;Name();Payload.WriteUInt32(Account ? 1u : 0u);
     }
@@ -87,6 +96,7 @@ void FACESession::SendSocialCommand(const FString& Command,const FString& Argume
     else if (Topic==TEXT("chat") || Topic==TEXT("ch"))
     {
         const FString Verb=Take();
+        if (Verb==TEXT("on") || Verb==TEXT("off")) {SendSetSingleCharacterOption(0x1B,Verb==TEXT("on"));return;}
         if (Verb==TEXT("gag") || Verb==TEXT("ungag")) {Action=0x0041;Name();Payload.WriteUInt32(Verb==TEXT("gag") ? 1u : 0u);}
         else if (Verb==TEXT("kick"))
         {

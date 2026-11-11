@@ -5,6 +5,7 @@
 #include "Engine/UserInterfaceSettings.h"
 #include "Engine/World.h"
 #include "ACEEnvCellActor.h"
+#include "ACETerrainPresenterComponent.h"
 #include "Dat/ACEWorldTextureMipProvider.h"
 #include "UObject/UObjectIterator.h"
 namespace ACERuntimeOptions
@@ -59,6 +60,9 @@ void Apply()
  SoundSettingsFrame=MAX_uint64;
  PluginTextSettingsFrame=MAX_uint64;
  UACEWorldTextureMipProvider::RefreshQuality();
+ for (TObjectIterator<UACETerrainPresenterComponent> It;It;++It)
+  if (IsValid(*It) && It->GetWorld() && It->GetWorld()->IsGameWorld())
+   It->ApplyLandscapeDrawRadius(FMath::RoundToInt(Get(TEXT("LandscapeRadius"))));
  const int32 LightingQuality=FMath::RoundToInt(Get(TEXT("DynamicLightingQuality")));
  if (auto* C=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.FXLightBudget")))
   C->Set(FMath::RoundToInt(Get(TEXT("EffectLightLimit"))),ECVF_SetByGameSetting);

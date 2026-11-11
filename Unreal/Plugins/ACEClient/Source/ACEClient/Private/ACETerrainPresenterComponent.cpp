@@ -3,6 +3,7 @@
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "ACELandblockActor.h"
+#include "ACERuntimeOptions.h"
 #include "ACETerrainChunkActor.h"
 #include "ACEEnvCellActor.h"
 #include "ACERegionSceneryActor.h"
@@ -486,8 +487,8 @@ UACETerrainPresenterComponent::UACETerrainPresenterComponent()
 	LandblockClass = AACELandblockActor::StaticClass();
 	TerrainChunkClass = AACETerrainChunkActor::StaticClass();
 	EnvCellClass = AACEEnvCellActor::StaticClass();
-	LoadRadius = ACEStreamingBudget::TerrainRadius(5);
-	UnloadRadius = ACEStreamingBudget::TerrainRadius(6);
+	LoadRadius = ACEStreamingBudget::TerrainRadius(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("LandscapeRadius"))));
+	UnloadRadius = ACEStreamingBudget::TerrainRadius(LoadRadius+1);
 	FullDetailRadius = 1; // get_block_orient Chebyshev ≤ 1 → side_cell_count 8.
 	StagedLoadRadius = 0;
 	StagedExpandAccum = 0.f;
@@ -1077,8 +1078,8 @@ void UACETerrainPresenterComponent::RestoreProceduralStreamingAfterLogin(int32 I
 		return;
 	}
 	bWcBakedTerrainMode = false;
-	LoadRadius = ACEStreamingBudget::TerrainRadius(InLoadRadius);
-	UnloadRadius = FMath::Max(LoadRadius, ACEStreamingBudget::TerrainRadius(InUnloadRadius));
+	LoadRadius = ACEStreamingBudget::TerrainRadius(InLoadRadius==5 ? FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("LandscapeRadius"))) : InLoadRadius);
+	UnloadRadius = FMath::Max(LoadRadius, ACEStreamingBudget::TerrainRadius(FMath::Max(LoadRadius+1,InUnloadRadius)));
 	if (StagedLoadRadius > LoadRadius)
 	{
 		StagedLoadRadius = LoadRadius;
@@ -1086,6 +1087,20 @@ void UACETerrainPresenterComponent::RestoreProceduralStreamingAfterLogin(int32 I
 	SetComponentTickEnabled(true);
 	UE_LOG(LogTemp, Warning, TEXT("ACE: TerrainPresenter procedural streaming restored (LoadRadius=%d staged=%d)"),
 		LoadRadius, StagedLoadRadius);
+}
+
+void UACETerrainPresenterComponent::ApplyLandscapeDrawRadius(int32 Radius)
+{
+	// Login backgrounds and baked terrain have separate residency policies.
+	if (LoadRadius<=0 || bWcBakedTerrainMode) return;
+	const int32 Wanted=ACEStreamingBudget::TerrainRadius(FMath::Clamp(Radius,5,25));
+	if (Wanted==LoadRadius) return;
+	LoadRadius=Wanted;
+	UnloadRadius=FMath::Max(Wanted,ACEStreamingBudget::TerrainRadius(Wanted+1));
+	StagedLoadRadius=FMath::Min(StagedLoadRadius,LoadRadius);
+	bLastSyncComplete=false;
+	// RetrySyncIfNeeded grows the radius on its usual cadence; do not synchronously
+	// construct a 51x51 landscape in response to a chat command.
 }
 
 void UACETerrainPresenterComponent::RestoreWcBakedCollisionStreaming(int32 InLoadRadius, int32 InUnloadRadius)

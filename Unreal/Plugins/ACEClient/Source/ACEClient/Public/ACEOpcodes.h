@@ -40,6 +40,8 @@ namespace ACEOpcode
 	constexpr uint32 PublicUpdatePropertyDataID     = 0x02D8;
 	constexpr uint32 PrivateUpdateInstanceId        = 0x02D9;
 	constexpr uint32 PublicUpdateInstanceId         = 0x02DA;
+	constexpr uint32 PrivateUpdatePosition          = 0x02DB;
+	constexpr uint32 PublicUpdatePosition           = 0x02DC;
 	constexpr uint32 PrivateUpdateSkill             = 0x02DD;
 	constexpr uint32 PrivateUpdateSkillLevel        = 0x02DF;
 	constexpr uint32 PrivateUpdateSkillAC           = 0x02E1;
@@ -267,11 +269,18 @@ namespace ACEGameAction
 	constexpr uint32 QueryAge = 0x01C2;
 	constexpr uint32 QueryBirth = 0x01C4;
 	constexpr uint32 EnterPkLite = 0x028F;
+	constexpr uint32 TeleToPkLiteArena = 0x0026;
+	constexpr uint32 TeleToPkArena = 0x0027;
 	constexpr uint32 LoginComplete         = 0x00A1;
 	constexpr uint32 SetAfkMode            = 0x000F;
 	constexpr uint32 SetAfkMessage         = 0x0010;
 	constexpr uint32 Talk                  = 0x0015;
 	constexpr uint32 RemoveAllFriends      = 0x0025;
+	constexpr uint32 ClearPlayerConsentList = 0x0216;
+	constexpr uint32 DisplayPlayerConsentList = 0x0217;
+	constexpr uint32 RemoveFromPlayerConsentList = 0x0218;
+	constexpr uint32 AddPlayerPermission = 0x0219;
+	constexpr uint32 RemovePlayerPermission = 0x021A;
 	constexpr uint32 TalkDirect            = 0x0032;
 	constexpr uint32 Tell                  = 0x005D;
 	constexpr uint32 TeleToLifestone       = 0x0063;

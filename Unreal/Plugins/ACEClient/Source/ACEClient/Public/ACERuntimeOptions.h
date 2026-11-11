@@ -24,7 +24,8 @@ inline constexpr FOption Values[] = {
  {TEXT("ConstrainUIWindows"),TEXT("Keep UI windows on screen"),1,0,1},
  {TEXT("DynamicLightingQuality"),TEXT("Dynamic lights"),2,0,2},
  {TEXT("CameraAlignToSlope"),TEXT("Align camera to slope"),1,0,1},
- {TEXT("EffectLightLimit"),TEXT("Effect light limit"),8,0,64}
+ {TEXT("EffectLightLimit"),TEXT("Effect light limit"),8,0,64},
+ {TEXT("LandscapeRadius"),TEXT("Landscape Radius"),5,5,25}
 };
 ACECLIENT_API float Get(const TCHAR* Key);
 ACECLIENT_API void Set(const TCHAR* Key, float Value);

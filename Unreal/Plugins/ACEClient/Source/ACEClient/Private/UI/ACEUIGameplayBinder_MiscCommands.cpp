@@ -209,7 +209,7 @@ bool UACEUIGameplayBinder::TryDispatchMiscCommand(const FString& Cmd, const FStr
         else if (auto S=Client->GetSession(); S.IsValid())
         {
             if (Cmd==TEXT("age") || Cmd==TEXT("birth"))
-                S->SendGameActionString(Cmd==TEXT("age") ? ACEGameAction::QueryAge : ACEGameAction::QueryBirth,FString());
+                S->SendGameActionU32(Cmd==TEXT("age") ? ACEGameAction::QueryAge : ACEGameAction::QueryBirth,0);
             else S->SendSimpleGameAction(ACEGameAction::EnterPkLite);
         }
         return true;
@@ -222,6 +222,7 @@ bool UACEUIGameplayBinder::TryDispatchMiscCommand(const FString& Cmd, const FStr
     }
     if (Cmd==TEXT("fps") || Cmd==TEXT("framerate"))
     {
+        if (!Args.IsEmpty()) { Error(TEXT("Usage: /framerate")); return true; }
         ACERuntimeOptions::Set(TEXT("ShowFrameRate"),ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f ? 0.f : 1.f);
         ACERuntimeOptions::Apply();
         if (auto* Video=Cast<UACEVideoSettingsWidget>(VideoSettings)) Video->RefreshFrameRateOption();

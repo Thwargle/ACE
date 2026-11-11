@@ -18,6 +18,7 @@
 #include "UI/ACEVideoSettingsWidget.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/CheckBox.h"
+#include "Components/Slider.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUILayoutCommandsTest, "ACE.RetailParity.UILayoutCommands",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -28,6 +29,14 @@ bool FACEUILayoutCommandsTest::RunTest(const FString&)
     FConfigFile Preferences; Preferences.NoSave = true; GConfig->SetFile(GGameUserSettingsIni, &Preferences);
     {
         auto* Video=NewObject<UACEVideoSettingsWidget>();Video->Initialize();auto Slate=Video->TakeWidget();
+        for (const auto& Option:ACERuntimeOptions::Values)
+        {
+            if (FCString::Strcmp(Option.Key,TEXT("ScreenBrightness")) && FCString::Strcmp(Option.Key,TEXT("Contrast"))
+                && FCString::Strcmp(Option.Key,TEXT("EffectLightLimit"))) continue;
+            auto* Slider=Cast<USlider>(Video->WidgetTree->FindWidget(Option.Key));
+            if (TestNotNull(*FString::Printf(TEXT("Options retains %s control"),Option.Key),Slider))
+            {TestEqual(TEXT("Correct option minimum"),Slider->GetMinValue(),Option.Min);TestEqual(TEXT("Correct option maximum"),Slider->GetMaxValue(),Option.Max);}
+        }
         auto* Bounds=Cast<UCheckBox>(Video->WidgetTree->FindWidget(TEXT("ConstrainUIWindows")));
         if(TestNotNull(TEXT("Options exposes shared game/plugin window bounds"),Bounds))
         {

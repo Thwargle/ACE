@@ -130,6 +130,8 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
     friend class FACERetailCursorTest;
 	friend class FACEWorldLootPlacementTest;
 	friend class FACEChatParityTest;
+	friend class FACEArenaRecallTest;
+	friend class FACERetailCommandAuditTest;
 	friend class FACECombatChatTest;
 	friend class FACEPlayerModuleParityTest;
 	friend class FACEUILayoutCommandsTest;
@@ -310,6 +312,8 @@ public:
 	void SetPreferredCharacterId(int32 Id) { PreferredCharacterId = Id; }
 	int32 GetPlayerGuid() const { return PlayerGuid; }
 	const FACEPosition& GetPlayerPosition() const { return PlayerPosition; }
+	/** Server position qualities, including retail LastOutsideDeath (14). */
+	const FACEPosition* GetPlayerPositionQuality(uint32 Key) const { return PlayerPositionQualities.Find(Key); }
 	uint16 GetTeleportSeq() const { return TeleportSeq; }
 	uint16 GetForcePositionSeq() const { return ForcePositionSeq; }
 	const FString& GetAccountName() const { return AccountName; }
@@ -416,6 +420,7 @@ public:
 	uint32 GetInventoryFailureError() const { return InventoryFailureError; }
 	FString GetPlayerName() const;
 	bool IsAfk() const { return bAfkMode; }
+	void SendLegacyFriendsRequest();
 	void SetAfkLocal(bool bAfk) { bAfkMode = bAfk; }
 	/** Last player who sent us a tell (for @r / @reply). */
 	int32 GetLastTellSenderGuid() const { return LastTellSenderGuid; }
@@ -791,6 +796,7 @@ private:
 	friend class FACERetailCharacterCreationTest;
 	friend class FACERetailCharacterCreationScreenTest;
 	void HandleUpdatePosition(FACEBinaryReader& Reader);
+	void HandlePositionQuality(FACEBinaryReader& Reader, bool bPublic);
 	void HandleUpdateMotion(FACEBinaryReader& Reader);
 	void HandleVectorUpdate(FACEBinaryReader& Reader);
 	void HandleSetState(FACEBinaryReader& Reader);
@@ -1190,6 +1196,7 @@ private:
 	FString ServerName;
 	int32 PlayerGuid = 0;
 	FACEPosition PlayerPosition;
+	TMap<uint32, FACEPosition> PlayerPositionQualities;
 	FACEPlayerVitals PlayerVitals;
 	FACESelectedObject SelectedObject;
 	int32 ManualAppraisalGuid = 0;

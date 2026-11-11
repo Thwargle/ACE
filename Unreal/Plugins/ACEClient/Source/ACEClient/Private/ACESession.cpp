@@ -129,6 +129,8 @@ void FACESession::Disconnect()
 	ResetReceivedMessages();
 	ChessBoardGuid = 0; ChessJoinPendingUntil = 0.0;
 	WorldObjects.Reset();
+	PlayerPositionQualities.Reset();
+	bAfkMode=false;
 	EquipmentRemovalEvidence.Reset();
 	ObjectVisibilityDeadlines.Reset();
 	ClosedContainerItemDeadlines.Reset();
@@ -306,6 +308,8 @@ void FACESession::ClearWorldState()
 	}
 	ChessBoardGuid = 0; ChessJoinPendingUntil = 0.0;
 	WorldObjects.Reset();
+	PlayerPositionQualities.Reset();
+	bAfkMode=false;
 	EquipmentRemovalEvidence.Reset();
 	ContainerContents.Reset();
 	LoginEquipment.Reset();
@@ -1917,6 +1921,10 @@ void FACESession::HandleGameMessage(const TArray<uint8>& MessageBytes)
 	case ACEOpcode::PublicUpdateInstanceId:
 		HandlePublicUpdateInstanceId(Reader);
 		break;
+	case ACEOpcode::PrivateUpdatePosition:
+		HandlePositionQuality(Reader,false); break;
+	case ACEOpcode::PublicUpdatePosition:
+		HandlePositionQuality(Reader,true); break;
 	case ACEOpcode::PrivateUpdateInstanceId:
 		HandlePrivateUpdateInstanceId(Reader);
 		break;
@@ -3404,6 +3412,7 @@ void FACESession::HandleTell(FACEBinaryReader& Reader)
 
 void FACESession::HandlePlayerDescription(FACEBinaryReader& Reader)
 {
+	TMap<uint32,FACEPosition> PositionQualities;
 	// Mirrors ACE GameEventPlayerDescription.WriteEventBody (CACQualities + attribute cache).
 	constexpr uint32 FlagPropertyInt32  = 0x0001;
 	constexpr uint32 FlagPropertyBool   = 0x0002;
@@ -3624,10 +3633,17 @@ void FACESession::HandlePlayerDescription(FACEBinaryReader& Reader)
 	if (PropertyFlags & FlagPosition)
 	{
 		const int32 Count = ReadTableHeader();
-		// key u32 + landblock u32 + xyz 3*f32 + quat 4*f32 = 36 bytes per entry
-		for (int32 i = 0; i < Count && Reader.CanRead(36); ++i)
+		// key u32 + landblock u32 + xyz 3*f32 + quat 4*f32 = 36 bytes per entry.
+		// Keep position qualities separate from the physical player position.
+		if (Count<0 || !Reader.CanRead(Count*36)) return;
+		for (int32 i=0;i<Count;++i)
 		{
-			Reader.Skip(36);
+			const uint32 Key=Reader.ReadUInt32();
+			FACEPosition P; P.CellId=Reader.ReadUInt32();
+			P.Location.X=Reader.ReadFloat();P.Location.Y=Reader.ReadFloat();P.Location.Z=Reader.ReadFloat();
+			P.RotationW=Reader.ReadFloat();
+			P.RotationXYZ.X=Reader.ReadFloat();P.RotationXYZ.Y=Reader.ReadFloat();P.RotationXYZ.Z=Reader.ReadFloat();
+			PositionQualities.Add(Key,P);
 		}
 	}
 
@@ -3997,6 +4013,8 @@ void FACESession::HandlePlayerDescription(FACEBinaryReader& Reader)
 	Vitals.bValid = true;
 	Vitals.bHasLuminanceBalance = true;
 	PlayerVitals = Vitals;
+	bAfkMode=Vitals.QualityBools.FindRef(110);
+	PlayerPositionQualities=MoveTemp(PositionQualities);
 	LastAttackerGuid = DescriptionAttackerGuid;
 	LastAttackerTimeSeconds = 0.0; // A login snapshot is not a new hit.
 	Log(FString::Printf(TEXT("PlayerDescription: L%d H%d/%d S%d/%d M%d/%d run=%d skills=%d spells=%d"),
@@ -4279,6 +4297,19 @@ void FACESession::HandlePrivateUpdateAttribute2ndLevel(FACEBinaryReader& Reader)
 	PlayerVitals.MaxMana = FMath::Max(PlayerVitals.MaxMana, PlayerVitals.Mana);
 	PlayerVitals.bValid = true;
 	NotifyVitalsChanged();
+}
+
+void FACESession::HandlePositionQuality(FACEBinaryReader& Reader, bool bPublic)
+{
+	if (!Reader.CanRead(bPublic?41:37)) return;
+	Reader.ReadUInt8(); // accepted by the shared property sequence gate
+	const int32 Guid=bPublic?Reader.ReadInt32():PlayerGuid;
+	const uint32 Key=Reader.ReadUInt32();
+	FACEPosition P;P.CellId=Reader.ReadUInt32();
+	P.Location.X=Reader.ReadFloat();P.Location.Y=Reader.ReadFloat();P.Location.Z=Reader.ReadFloat();
+	P.RotationW=Reader.ReadFloat();
+	P.RotationXYZ.X=Reader.ReadFloat();P.RotationXYZ.Y=Reader.ReadFloat();P.RotationXYZ.Z=Reader.ReadFloat();
+	if (Guid==PlayerGuid) PlayerPositionQualities.Add(Key,P);
 }
 
 void FACESession::HandlePrivateUpdatePropertyInt(FACEBinaryReader& Reader)
@@ -7835,6 +7866,7 @@ void FACESession::HandleUpdatePropertyBool(FACEBinaryReader& Reader, bool bPubli
 	if (Guid == PlayerGuid)
 	{
 		PlayerVitals.QualityBools.Add(static_cast<int32>(Property), Value);
+		if (Property==110) bAfkMode=Value;
 		NotifyVitalsChanged();
 	}
 	FACEWorldObject* Object = WorldObjects.Find(Guid);

@@ -7,7 +7,7 @@
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
 
-namespace
+namespace ACEQualityRemovalFixture
 {
 struct FQualityWire
 {
@@ -39,6 +39,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEQualityRemovalTest, "ACE.Network.QualityRem
 
 bool FACEQualityRemovalTest::RunTest(const FString&)
 {
+	using namespace ACEQualityRemovalFixture;
 	FACESession Session;
 	Session.PlayerGuid = 0x50001234;
 	int32 Notices = 0;
