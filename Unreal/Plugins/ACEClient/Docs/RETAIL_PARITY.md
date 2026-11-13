@@ -8,6 +8,77 @@ button exists, its opcode has a constant, or a focused regression test passes.
 This is the working acceptance record, most recently reviewed on 2026-10-13. The client
 is **not yet a feature-complete retail replacement**.
 
+## Equipment mana while UCM is stopped: 2026-11-12
+
+An Encrusted Bloodstone Jewel could run empty despite a 33% equipment threshold.
+Two client paths can explain missed recharges: the general one-ID-per-second
+scan revisited the first eligible inventory entries every 120 seconds, starving
+later items in large inventories; a stopped-service stance timeout also latched
+`IdleManaFailed` until a restart or profile change.
+
+- Refresh worn mana before general inventory appraisals, starting with the
+  lowest known percentage, with a 30-second per-item retry/refresh interval and
+  the existing global request budget. Include jewelry and parent-attached gear.
+  General inventory refreshes now select the oldest request. Known carried
+  supplies retain the general cadence because their mana does not drain.
+- After a successful mana use, prioritize fresh equipped-mana readings without
+  discarding equipment appraisals. Confirm an actual mana increase before another
+  refill; do not mistake `UseDone` alone for a full suit. Refresh source/target
+  resources after manual use as well as UCM/Action Deck use.
+- Pass stopped-service operational failures back to the restricted recharge
+  policy for its bounded cooldown. Keep UCM stopped, respect inventory action
+  locks, and reserve the permanent failure latch for script/load errors.
+- Cover 33% jewelry thresholds, an empty jewel, repeated recharge cycles, mana
+  stones/charges/custom ManaStone-category supplies, player-targeted suit use,
+  large inventories, manual recharge and recovery from a stance timeout.
+
+References: ACE `Player.ManaConsumersTick` updates server mana without sending
+an ordinary item property for every drain. VT `ev.cs` refreshes worn appraisals,
+compares each item's mana percentage and targets the player for suit recharging;
+`cLogic.InitializeDefaultLogicRules` enables `RefillWieldedMana` while stopped
+through `ManaChargesWhenOff`. The user's precise supply and failure sequence are
+unknown; these are reproduced client failure paths, not a live-server replay.
+
+Validation: editor build, resource-maintenance/recovery policy tests, actual
+stopped-service dispatch and packet tests, equipment assessment-cache tests and
+the 512-item idle workload passed. The affected host/cache/workload suites were
+rerun after adding manual recharge handling. Quest/Android shared-source checks
+passed. Release v156 carries this change across the supported platforms; its
+packaging and regression evidence is recorded in the release receipt. The
+reporting character's exact setup has not been verified live.
+
+## GDLE combat stance and UCM buffing: 2026-11-12
+
+Reefcull reports `Combat stance was not confirmed; action deferred` when UCM
+attempts to buff. UCM required a new `CombatMode` integer quality (40) before
+dispatching the spell. GDLE's `ChangeCombatMode(mode, playerRequested=true)`
+intentionally omits that quality on success; it only publishes a correction or
+a server-initiated change. It can also omit the motion update when the requested
+stance is already active, so waiting for motion is not a reliable substitute.
+
+- Match retail's immediate requested-mode state for GDLE. Send the stance and
+  subsequent spell through the same reliable, ordered weenie action queue.
+- Retain the actual received quality rather than inventing a server update.
+  Explicit server corrections remain authoritative, including rejection to
+  peace. ACE continues to require its normal stance acknowledgment.
+- Cover magic, melee, missile and peace transitions, repeated silent requests,
+  correction handling, and consecutive UCM buffs with packet-order assertions.
+
+Evidence: retail `ClientCombatSystem::SetCombatMode` (`0x0056BE30`) updates its
+mode and sends `CM_Combat::Event_ChangeCombatMode` without a success acknowledgment;
+`OnQualityChanged` applies server corrections. Public GDLE reference:
+[`CMonsterWeenie::ChangeCombatMode`](https://github.com/esoterick/gdle-linux/blob/542a209d89e13d6fbb5df3f3e77fd72d10a4b647/Source/Monster.cpp#L2044)
+and its `CClientEvents::ChangeCombatMode` caller. The regression tests reproduce
+GDLE's silent-success contract locally; Reefcull's deployed source and a live
+session have not been verified.
+
+Validation: Windows editor build and all ten selected automation suites passed,
+including `ACE.Network.GDLEInteractionTransport`,
+`ACE.Plugins.RouteAndTellRequests`, buffing/recovery, Action Deck, AutoCraft and
+network/quality regressions. Quest and Android shared-source synchronization
+checks passed. Release v156 includes this fix; see its release receipt for
+packaged-platform validation. Live Reefcull acceptance remains unverified.
+
 ## Public retail chat command audit: 2026-11-11
 
 Compared all 130 registered names in retail

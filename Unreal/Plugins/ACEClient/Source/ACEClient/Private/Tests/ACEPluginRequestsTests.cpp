@@ -361,6 +361,61 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         TestTrue(TEXT("Selected enemies still receive background appraisal"),H->AppraisalRequests.Contains(Player.Guid));
     }
     {
+        const auto Objects=Session.WorldObjects;const auto Appraisals=H->Appraisals;
+        const auto Requests=H->AppraisalRequests,Times=H->TargetAppraisalTimes;
+        const auto Profile=P->Profile;const bool Running=P->Running;
+        ON_SCOPE_EXIT {Session.WorldObjects=Objects;H->Appraisals=Appraisals;H->AppraisalRequests=Requests;
+            H->TargetAppraisalTimes=Times;P->Profile=Profile;P->Running=Running;H->InventoryRevision=MAX_uint64;};
+        Session.WorldObjects.Empty();H->Appraisals.Empty();H->AppraisalRequests.Empty();H->TargetAppraisalTimes.Empty();
+        P->Running=false;P->Profile=MakeShared<FJsonObject>();P->Profile->SetBoolField(TEXT("mana_charges_when_off"),true);
+        const double Now=FPlatformTime::Seconds();
+        // More items than the old 120-second, one-request-per-second scan can
+        // service. Worn jewelry comes after the generic inventory entries.
+        for(int32 Id=9300;Id<9500;++Id)
+        {
+            FACEWorldObject O;O.Guid=Id;O.ItemType=ACEItemType::Armor;O.ContainerId=Session.PlayerGuid;
+            Session.WorldObjects.Add(Id,O);FACEAppraisalInfo A;A.ObjectGuid=Id;A.bSuccess=true;H->Appraisals.Add(Id,A);
+            H->AppraisalRequests.Add(Id,Now-200);H->TargetAppraisalTimes.Add(Id,Now-200);
+        }
+        for(int32 Id:{9500,9501})
+        {
+            FACEWorldObject O;O.Guid=Id;O.ItemType=ACEItemType::Jewelry;O.WielderId=Session.PlayerGuid;
+            if(Id==9501){O.WielderId=0;O.ParentGuid=Session.PlayerGuid;O.CurrentWieldedLocation=1;}
+            O.Name=Id==9501?TEXT("Encrusted Bloodstone Jewel"):TEXT("Full ring");Session.WorldObjects.Add(Id,O);
+            FACEAppraisalInfo A;A.ObjectGuid=Id;A.bSuccess=true;A.IntProperties={{107,Id==9501?34:100},{108,100}};
+            H->Appraisals.Add(Id,A);H->AppraisalRequests.Add(Id,Now-31);H->TargetAppraisalTimes.Add(Id,Now-31);
+        }
+        auto Scan=[&](){H->LastAppraisalRequest=FPlatformTime::Seconds()-2;H->NextAppraisalScan=0;H->RefreshAutomationData();};
+        Scan();
+        TestTrue(TEXT("Stopped UCM refreshes the lowest worn mana before a full inventory scan"),H->AppraisalRequests.FindRef(9501)>=Now);
+        TestEqual(TEXT("General inventory does not displace the jewel refresh"),H->AppraisalRequests.FindRef(9300),Now-200);
+        const double Sent=H->AppraisalRequests.FindRef(9501);H->RefreshAutomationData();
+        TestEqual(TEXT("Recharge polling preserves the one-request-per-second budget"),H->AppraisalRequests.FindRef(9501),Sent);
+        auto Low=H->Appraisals.FindChecked(9501);Low.IntProperties[107]=32;H->ObserveAppraisal(Low);
+        TestEqual(TEXT("Fresh jewel mana reaches the policy"),H->PluginItemSnapshot(Session.WorldObjects[9501])->AsObject()->GetNumberField(TEXT("mana")),32.);
+        H->PendingManaRefresh=true;H->PendingResourceRefresh.Empty();H->CompletePendingAction(0);
+        TestTrue(TEXT("Mana use preserves equipped item appraisal while refreshing resources"),H->Appraisals.Contains(9501));
+        Scan();
+        TestTrue(TEXT("Post-use confirmation starts with the lowest-mana item"),H->AppraisalRequests.Contains(9501)&&!H->AppraisalRequests.Contains(9500));
+        Low.IntProperties[107]=100;H->ObserveAppraisal(Low);
+        TestEqual(TEXT("Confirmed recharge reaches the next decision"),H->PluginItemSnapshot(Session.WorldObjects[9501])->AsObject()->GetNumberField(TEXT("mana")),100.);
+        FACEWorldObject Charge;Charge.Guid=9502;Charge.ItemType=ACEItemType::ManaStone;Charge.ContainerId=Session.PlayerGuid;
+        Charge.Name=TEXT("Titan Mana Charge");Session.WorldObjects.Add(Charge.Guid,Charge);
+        FACEAppraisalInfo ChargeInfo;ChargeInfo.ObjectGuid=Charge.Guid;ChargeInfo.bSuccess=true;ChargeInfo.IntProperties={{107,5000},{108,5000}};
+        H->ObserveAppraisal(ChargeInfo);
+        H->ObserveItemUse(Charge.Guid,Session.PlayerGuid);
+        TestTrue(TEXT("Manual charge use requests the same mana refresh as UCM"),H->PendingManaRefresh&&H->PendingResourceRefresh.Contains(Charge.Guid));
+        H->CompletePendingAction(0);
+        TestFalse(TEXT("Manual charge cannot reuse stale contents after success"),H->Appraisals.Contains(Charge.Guid));
+        TestTrue(TEXT("Manual charge refresh preserves the jewel's equipment appraisal"),H->Appraisals.Contains(9501));
+        Session.WorldObjects.Remove(Charge.Guid);H->AppraisalRequests.Remove(Charge.Guid);
+        P->Profile->SetBoolField(TEXT("mana_charges_when_off"),false);
+        H->AppraisalRequests.Add(9300,Now-121);H->AppraisalRequests.Add(9499,Now-400);
+        // Keep worn objects recent so this checks fairness of the general lane.
+        H->AppraisalRequests.Add(9500,Now);H->AppraisalRequests.Add(9501,Now);
+        Scan();TestTrue(TEXT("Oldest inventory appraisal cannot starve behind repeated earlier entries"),H->AppraisalRequests.FindRef(9499)>=Now);
+    }
+    {
         TestTrue(TEXT("Native vitals view uses session storage"),&C->GetPlayerVitalsView()==&Session.GetPlayerVitals());
         H->DrawRoute();TestNull(TEXT("No route does not allocate a world actor"),H->RouteActor.Get());
         // A fully appraised inventory previously rescanned at render frequency.
@@ -1776,6 +1831,45 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             H->Execute(*P,Intent(Focus));const int32 BeforeStop=CastCount();H->Stop(P->Id);
             ModeReply(8);H->UpdateCombatTransition(*P);
             TestTrue(TEXT("Stop discards queued combat action"),!P->CombatTransitionIntent&&CastCount()==BeforeStop);
+            {
+                // GDLE accepts a player-requested mode silently. Exercise the
+                // full buff dispatch without an ACE-only CombatMode response.
+                Session.Creds.bGDLE=true;ON_SCOPE_EXIT{Session.Creds.bGDLE=false;};
+                P->Running=true;P->NextAction=0;P->WaitAction.Empty();P->ActivityFailure.Reset();
+                H->ConfirmedBuffAckAt=0;H->DeferredBuffIntent.Reset();H->BuffRetryAt=0;
+                H->PendingSpell=0;H->PhysicalAttackOwner.Empty();Session.bUseBusy=false;
+                Session.bServerAttackInProgress=false;Session.PendingCombatMode=0;ModeReply(1);
+                const uint32 FirstAction=Session.NextGameActionSequence;
+                const int32 BeforeGDLECast=CastCount();
+                H->Execute(*P,Intent(Focus));
+                TestEqual(TEXT("GDLE can buff without an unsolicited combat-mode property"),CastCount(),BeforeGDLECast+1);
+                TestFalse(TEXT("GDLE buff does not retain a doomed stance wait"),P->CombatTransitionIntent.IsValid());
+                TArray<TPair<uint32,uint32>> Sent;
+                for(const auto& Packet:Session.CachedC2SPackets)
+                {
+                    FACEBinaryReader R(Packet.Value.Payload);R.Skip(20);
+                    if(!R.CanRead(8))continue;
+                    const uint32 Sequence=R.ReadUInt32(),Opcode=R.ReadUInt32();
+                    if(Sequence>=FirstAction)Sent.Emplace(Sequence,Opcode);
+                }
+                Sent.Sort([](const auto& A,const auto& B){return A.Key<B.Key;});
+                if(TestTrue(TEXT("GDLE buff sends its mode and spell actions"),Sent.Num()>=2))
+                {
+                    TestEqual(TEXT("GDLE changes mode before casting"),Sent[0].Value,ACEGameAction::ChangeCombatMode);
+                    TestEqual(TEXT("GDLE cast follows the mode in server action order"),Sent[1].Value,ACEGameAction::CastTargetedSpell);
+                }
+                Ack(0);P->NextAction=0;
+                const int32 BeforeSecond=CastCount(),BeforeSecondMode=Count(ACEGameAction::ChangeCombatMode);
+                H->Execute(*P,Intent(Self));
+                TestEqual(TEXT("Next GDLE buff uses the already-active magic stance"),CastCount(),BeforeSecond+1);
+                TestEqual(TEXT("GDLE does not repeat stance requests between buffs"),Count(ACEGameAction::ChangeCombatMode),BeforeSecondMode);
+                Ack(0);P->NextAction=0;
+                ModeReply(1); // Explicit GDLE correction remains authoritative.
+                const int32 BeforeCorrectedMode=Count(ACEGameAction::ChangeCombatMode);
+                H->Execute(*P,Intent(Focus));
+                TestEqual(TEXT("A server peace correction requires magic again"),Count(ACEGameAction::ChangeCombatMode),BeforeCorrectedMode+1);
+                Ack(0);P->NextAction=0;P->Running=false;
+            }
             // ManaChargesWhenOff has its own restricted VM and session identity.
             // It must retain the same transition safety without requiring Start.
             FACEWorldObject Stone;Stone.Guid=974;Stone.ContainerId=Session.PlayerGuid;
@@ -1788,6 +1882,37 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             TestTrue(TEXT("Idle recharge can wait for peace without starting UCM"),P->CombatTransitionIntent.IsValid()&&!P->Running);
             ModeReply(1);H->UpdateCombatTransition(*P);
             TestEqual(TEXT("Idle recharge uses its stone after confirmed stance"),Count(ACEGameAction::Use),BeforeUse+1);
+            Ack(0);Session.bUseBusy=false;P->WaitAction.Empty();P->NextAction=0;
+            Session.WorldObjects[974].ItemUseable=0x00100008;
+            const int32 BeforeTargetedCharge=Count(ACEGameAction::UseWithTarget);
+            H->Execute(*P,Recharge);
+            TestEqual(TEXT("Targeted mana charges also work while UCM is stopped"),Count(ACEGameAction::UseWithTarget),BeforeTargetedCharge+1);
+            bool PlayerTarget=false;
+            for(const auto& Packet:Session.CachedC2SPackets)
+            {
+                FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);
+                if(R.CanRead(12)&&R.ReadUInt32()==ACEGameAction::UseWithTarget&&R.ReadUInt32()==974)
+                    PlayerTarget=R.ReadUInt32()==uint32(Session.PlayerGuid);
+            }
+            TestTrue(TEXT("Suit recharge targets the player, not one armor item"),PlayerTarget);
+            Ack(0);Session.bUseBusy=false;P->WaitAction.Empty();P->NextAction=0;
+            Session.WorldObjects[974].ItemUseable=8;
+            ModeReply(8);Recharge->SetStringField(TEXT("activity"),TEXT("item_mana"));
+            H->Execute(*P,Recharge);P->CombatTransitionStarted=FPlatformTime::Seconds()-16;
+            H->UpdateCombatTransition(*P);
+            TestFalse(TEXT("Temporary stopped-service stance failure does not permanently disable mana recharge"),H->IdleManaFailed);
+            TestTrue(TEXT("Stopped recharge retains a bounded activity failure"),P->ActivityFailure.IsValid());
+            // The actual idle dispatcher must deliver the host failure to its
+            // restricted stock policy, even for an API 2 plugin that is stopped.
+            const int32 OldApi=P->Api;P->Api=2;const auto OldVitals=Session.PlayerVitals;
+            Session.PlayerVitals.Health=Session.PlayerVitals.MaxHealth=100;
+            H->IdleManaVM.Reset();H->IdleManaProfileHash=0;H->NextIdleManaDecision=0;
+            H->TickIdleEquipmentMana();
+            TestFalse(TEXT("Stopped dispatcher consumes the failure notification"),P->ActivityFailure.IsValid());
+            TestTrue(TEXT("Stopped dispatcher shows the mana retry status"),P->Status.Contains(TEXT("Equipment mana paused")));
+            TestTrue(TEXT("Recharge failure does not start combat, buffing or navigation"),!P->Running&&!P->CombatTransitionIntent);
+            P->Api=OldApi;Session.PlayerVitals=OldVitals;H->IdleManaVM.Reset();H->IdleManaFailed=false;
+            H->PendingManaRefresh=false;H->PendingResourceRefresh.Empty();Session.PendingCombatMode=0;ModeReply(1);
             P->Profile->RemoveField(TEXT("mana_charges_when_off"));Session.bUseBusy=false;P->WaitAction.Empty();
         }
     }

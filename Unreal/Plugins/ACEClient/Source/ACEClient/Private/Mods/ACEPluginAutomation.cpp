@@ -361,9 +361,15 @@ void UACEPluginSubsystem::CompletePendingAction(uint32 Error)
     {
         auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
         if(auto Session=Client->GetSession())for(const auto& Pair:Session->GetWorldObjects())
-            if(Pair.Value.WielderId==Client->GetPlayerGuid())
-            {Appraisals.Remove(Pair.Key);AppraisalRequests.Remove(Pair.Key);DirtyInventoryAppraisals.Add(Pair.Key);}
-        ++DataRevision;
+            if(Pair.Value.WielderId==Client->GetPlayerGuid()
+                ||(Pair.Value.CurrentWieldedLocation&&Pair.Value.ParentGuid==Client->GetPlayerGuid()))
+            {
+                // Keep the previous reading until the reply arrives: Lua must
+                // confirm an increase, and equipment eligibility must not vanish.
+                // Missing timestamps prioritize a fresh reading of the lowest
+                // mana piece ahead of the general inventory scan.
+                AppraisalRequests.Remove(Pair.Key);TargetAppraisalTimes.Remove(Pair.Key);
+            }
     }
     PendingManaRefresh=false;
     // Stone contents and essence charges change after use as well as equipped mana.
@@ -597,11 +603,43 @@ void UACEPluginSubsystem::RefreshAutomationData()
         const double* Last=AppraisalRequests.Find(Id);const auto* A=Appraisals.Find(Id);
         return !Last||Now-*Last>(!A||!A->bSuccess?30:120);
     };
+    // Mana drains without ordinary property updates. A first-match scan of a
+    // large inventory can perpetually revisit its first 120 entries and never
+    // reach the worn jewel. Give worn mana and supplies a bounded refresh lane,
+    // shared by running and stopped UCM, within the existing one-ID/sec budget.
+    const bool Recharge=B(UCM->Profile,TEXT("item_mana"),true)
+        &&(UCM->Running||B(UCM->Profile,TEXT("mana_charges_when_off")));
+    if(Recharge)
+    {
+        double BestFraction=MAX_dbl,Oldest=MAX_dbl;
+        for(const auto& Pair:Session->GetWorldObjects())
+        {
+            const auto& O=Pair.Value;if(!IsOwnedPluginItem(O))continue;
+            const bool Worn=O.WielderId==C->GetPlayerGuid()||(O.CurrentWieldedLocation&&O.ParentGuid==C->GetPlayerGuid());
+            if(!Worn&&!(O.ItemType&ACEItemType::ManaStone))continue;
+            const auto* A=Appraisals.Find(O.Guid);
+            if(Worn&&A&&A->bSuccess&&A->IntProperties.FindRef(108)<=0)continue;
+            // Carried supplies do not drain. Refresh unknown/used supplies here;
+            // known ones keep the general cadence so a bag of stones cannot
+            // occupy every request slot ahead of opponent appraisals.
+            if(!Worn&&A&&A->bSuccess)continue;
+            const double* Last=AppraisalRequests.Find(O.Guid);
+            const double* Received=TargetAppraisalTimes.Find(O.Guid);
+            // Also bounds retries when a server ignores or rejects appraisal.
+            if((Last&&Now-*Last<30)||(Received&&Now-*Received<30))continue;
+            const double Fraction=Worn&&A&&A->bSuccess&&A->IntProperties.FindRef(108)>0
+                ?double(A->IntProperties.FindRef(107))/A->IntProperties.FindRef(108):2.;
+            const double Age=Last?*Last:-MAX_dbl;
+            if(Fraction<BestFraction||(Fraction==BestFraction&&(Age<Oldest
+                ||(Age==Oldest&&(!Request||uint32(O.Guid)<uint32(Request))))))
+            {Request=O.Guid;BestFraction=Fraction;Oldest=Age;}
+        }
+    }
     const auto Sel=C->GetSelectedObject();
     // Selection alone is not a request to assess another player. In particular,
     // fellowship recovery/buffing can select a deceptive player repeatedly.
     FACEWorldObject Selected;
-    if(UCM->Running && Sel.Guid && C->GetWorldObject(Sel.Guid,Selected)
+    if(!Request && UCM->Running && Sel.Guid && C->GetWorldObject(Sel.Guid,Selected)
         && Selected.IsAttackable() && (Selected.ItemType&ACEItemType::Creature)
         && !Selected.bIsPlayer && !Selected.PetOwnerId && !Selected.bDying
         && !DefeatedTargets.Contains(Sel.Guid) && Need(Sel.Guid))Request=Sel.Guid;
@@ -622,10 +660,16 @@ void UACEPluginSubsystem::RefreshAutomationData()
             if(Distance<Nearest||(Distance==Nearest&&(!Request||uint32(O.Guid)<uint32(Request)))){Nearest=Distance;Request=O.Guid;}
         }
     }
-    if(!Request)for(const auto& Pair:Session->GetWorldObjects())
+    if(!Request)
     {
-        const auto& O=Pair.Value;if(IsOwnedPluginItem(O)&&Need(O.Guid)
-            && !(O.ItemType&(ACEItemType::SpellComponents|ACEItemType::Money|ACEItemType::Container))) {Request=O.Guid;break;}
+        double Oldest=MAX_dbl;
+        for(const auto& Pair:Session->GetWorldObjects())
+        {
+            const auto& O=Pair.Value;if(!IsOwnedPluginItem(O)||!Need(O.Guid)
+                ||(O.ItemType&(ACEItemType::SpellComponents|ACEItemType::Money|ACEItemType::Container)))continue;
+            const double* Last=AppraisalRequests.Find(O.Guid);const double Age=Last?*Last:-MAX_dbl;
+            if(Age<Oldest||(Age==Oldest&&(!Request||uint32(O.Guid)<uint32(Request)))){Request=O.Guid;Oldest=Age;}
+        }
     }
     if(Request){LastAppraisalRequest=Now;AppraisalRequests.Add(Request,Now);C->RequestBackgroundAppraisal(Request);}
 }
@@ -1146,7 +1190,6 @@ void UACEPluginSubsystem::UpdateCombatTransition(FACEClientPlugin& P)
     if(Now-P.CombatTransitionStarted>=15)
     {
         auto I=P.CombatTransitionIntent;P.CombatTransitionIntent.Reset();P.NextAction=0;P.NextDecision=0;
-        if(IdleMana)IdleManaFailed=true;
         ReportActivityFailure(P,I,P.WaitingAttackCancel?TEXT("Attack cancellation was not confirmed; equipment left unchanged")
             :TEXT("Combat stance was not confirmed; action deferred"));return;
     }
@@ -1840,7 +1883,20 @@ void UACEPluginSubsystem::ObserveItemUse(int32 Source,int32 Target)
     Event->SetStringField(TEXT("type"),TEXT("use"));Event->SetStringField(TEXT("stage"),TEXT("requested"));
     Event->SetNumberField(TEXT("source"),uint32(Source));Event->SetNumberField(TEXT("target"),uint32(Target?Target:Source));
     FACEWorldObject Item;auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
-    if(C->GetWorldObject(Source,Item))Event->SetNumberField(TEXT("wcid"),Item.WeenieClassId);
+    if(C->GetWorldObject(Source,Item))
+    {
+        Event->SetNumberField(TEXT("wcid"),Item.WeenieClassId);
+        if((Item.ItemType&ACEItemType::ManaStone)&&IsOwnedPluginItem(Item))
+        {
+            // Manual use, Action Deck and UCM must refresh the same resource
+            // data. A charge's depleted/destroyed state is not a new appraisal.
+            PendingResourceRefresh.Add(Source);
+            PendingManaRefresh=true;
+            FACEWorldObject Recipient;
+            if(Target!=C->GetPlayerGuid()&&C->GetWorldObject(Target,Recipient)&&IsOwnedPluginItem(Recipient))
+                PendingResourceRefresh.Add(Target);
+        }
+    }
     if(Target&&C->GetWorldObject(Target,Item))Event->SetNumberField(TEXT("target_wcid"),Item.WeenieClassId);
     EmitPluginAction(Event);
 }

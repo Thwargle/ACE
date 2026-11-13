@@ -1482,29 +1482,9 @@ bool UACEPluginSubsystem::InventoryInteractionPending() const
     auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
     return (PC&&PC->IsInventoryInteractionActive())||(C->GetSession()&&C->GetSession()->IsInventoryTransferPending());
 }
-bool UACEPluginSubsystem::Tick(float)
+void UACEPluginSubsystem::TickIdleEquipmentMana()
 {
-    ACE_PROFILE_SCOPE(Plugins);
-    TickLocalServices();
-    if(FPlatformTime::Seconds()>=NextUCMLogSave){NextUCMLogSave=FPlatformTime::Seconds()+10;FlushUCMLog();}
-    UpdateWorldRendering();
-    // VT cLogic.SchedulePoke wakes on cast completion instead of waiting for
-    // the idle poll. Keep expensive presentation/background scans at their
-    // original cadence when several actions finish between periodic ticks.
-    if(FPlatformTime::Seconds()>=NextMaintenanceAt)
-    {
-        NextMaintenanceAt=FPlatformTime::Seconds()+.5;
-        UpdateLedgers();UpdateDesktopDock();RefreshAutomationData();DrawRoute();
-        TickLootNotifications();
-    }
-    auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
-    UpdateItemToolsCharacter();
-    TickAutoCraft();
-    UpdateBuffDispatch();
-    CheckPendingSpellTimeout();
-    FCompanionReadBatch Batch;
-    TGuardValue<FCompanionReadBatch*> ReadGuard(CompanionReadBatch,&Batch);
-    TickCompanions();
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     // VT ManaChargesWhenOff is deliberately independent of Start/Stop. Use a
     // separate VM restricted to equipment recharge; no meta/combat/nav can run.
     TSharedPtr<FACEClientPlugin> IdlePolicy;
@@ -1532,16 +1512,20 @@ bool UACEPluginSubsystem::Tick(float)
                     else if(!FFileHelper::LoadFileToString(Source,*(P->Directory/TEXT("main.lua")))||!IdleManaVM->Load(Source,Error))IdleManaFailed=true;
                 }
                 if(!IdleManaFailed&&P->CombatTransitionIntent)UpdateCombatTransition(*P);
-                else if(!IdleManaFailed)
+                else if(!IdleManaFailed&&!InventoryInteractionPending())
                 {
                     auto Profile=MakeShared<FJsonObject>(*P->Profile);Profile->RemoveField(TEXT("vt_library"));Profile->SetBoolField(TEXT("ucm_mana_only"),true);
+                    // Operational failures use the same bounded activity retry
+                    // as running UCM; only a VM error disables this service.
+                    if(P->ActivityFailure){Profile->SetObjectField(TEXT("ucm_activity_failure"),P->ActivityFailure);P->ActivityFailure.Reset();}
                     TSharedPtr<FJsonObject> Intent;
                     if(!IdleManaVM->Step(Snapshot(),Profile,Intent,Error))IdleManaFailed=true;
                     else if(Intent)
                     {
                         const FString Action=String(Intent,TEXT("action"));
                         if(Action==TEXT("stop")){IdleManaFailed=true;P->Status=String(Intent,TEXT("status"));}
-                        else if(Action==TEXT("use_item")||Action==TEXT("apply_item"))Execute(*P,Intent);
+                        else if(Action==TEXT("use_item")||Action==TEXT("apply_item")||Action==TEXT("activity_failed"))Execute(*P,Intent);
+                        else if(!String(Intent,TEXT("status")).IsEmpty())P->Status=String(Intent,TEXT("status"));
                     }
                 }
                 if(!Error.IsEmpty())P->Status=TEXT("Idle mana recharge stopped: ")+Error;
@@ -1550,6 +1534,31 @@ bool UACEPluginSubsystem::Tick(float)
         else if(!Enabled){P->CombatTransitionIntent.Reset();IdleManaVM.Reset();IdleManaFailed=false;}
     }
     else if(!IdlePolicy){if(auto Previous=Find(IdleManaOwner))Previous->CombatTransitionIntent.Reset();IdleManaOwner.Empty();IdleManaVM.Reset();IdleManaFailed=false;}
+}
+bool UACEPluginSubsystem::Tick(float)
+{
+    ACE_PROFILE_SCOPE(Plugins);
+    TickLocalServices();
+    if(FPlatformTime::Seconds()>=NextUCMLogSave){NextUCMLogSave=FPlatformTime::Seconds()+10;FlushUCMLog();}
+    UpdateWorldRendering();
+    // VT cLogic.SchedulePoke wakes on cast completion instead of waiting for
+    // the idle poll. Keep expensive presentation/background scans at their
+    // original cadence when several actions finish between periodic ticks.
+    if(FPlatformTime::Seconds()>=NextMaintenanceAt)
+    {
+        NextMaintenanceAt=FPlatformTime::Seconds()+.5;
+        UpdateLedgers();UpdateDesktopDock();RefreshAutomationData();DrawRoute();
+        TickLootNotifications();
+    }
+    auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    UpdateItemToolsCharacter();
+    TickAutoCraft();
+    UpdateBuffDispatch();
+    CheckPendingSpellTimeout();
+    FCompanionReadBatch Batch;
+    TGuardValue<FCompanionReadBatch*> ReadGuard(CompanionReadBatch,&Batch);
+    TickCompanions();
+    TickIdleEquipmentMana();
     for (const auto& P : Plugins) if (P->Running && !P->LocalService && !P->Companion && P->Id!=TEXT("autocraft"))
     {
         if (C->GetSessionState() != EACESessionState::InWorld || C->GetPlayerGuid() != P->Player || C->GetServerName() != P->Server || (C->GetPlayerVitalsView().Health <= 0 && !P->Profile->HasField(TEXT("vt_meta"))))

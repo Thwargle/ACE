@@ -493,6 +493,33 @@ bool FACEUCMResourcesTest::RunTest(const FString&)
     auto Snapshot=[](){return RecoveryJson(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"combat_mode":1,"ready":true,"busy":false,"action_serial":0,"action_error":0,"spells":[],"enchantments":[],"targets":[],"inventory":[{"id":20,"wcid":20,"name":"Essence","type":128,"identified":true,"usable":true,"structure":2,"max_structure":50,"int_properties":{"280":213}},{"id":21,"wcid":49485,"name":"Encapsulated Spirit","type":128,"usable":true},{"id":30,"wcid":30,"name":"Mana Stone","type":524288,"identified":true,"usable":true,"mana_empty":true,"mana":0},{"id":31,"wcid":31,"name":"Loot Ring","type":8,"identified":true,"mana":5000,"max_mana":5000},{"id":32,"wcid":31,"name":"Keep Ring","type":8,"identified":true,"mana":5000,"max_mana":5000},{"id":33,"wcid":33,"name":"Armor","type":2,"identified":true,"equipped":true,"mana":10,"max_mana":100}]})"));};
     auto Profile=[](){return RecoveryJson(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","looting":false,"refill_summons":true,"summon_refill_charges":5,"weapon_items":[20],"item_mana":false,"fill_mana_stones":false,"mana_source_items":[31]})"));};
     auto Step=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject>I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
+    for(const TCHAR* Supply:{TEXT("Mana Stone"),TEXT("Titan Mana Charge"),TEXT("Custom Mana Reservoir")})
+    {
+        FACEPluginVM VM;TestTrue(TEXT("Stopped recharge policy loads"),VM.Load(Source,Error));
+        auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("ucm_mana_only"),true);P->SetBoolField(TEXT("item_mana"),true);
+        P->SetNumberField(TEXT("item_mana_threshold"),33);
+        auto Inv=S->GetArrayField(TEXT("inventory"));auto Charge=Inv[2]->AsObject(),Jewel=Inv[5]->AsObject();
+        Charge->SetStringField(TEXT("name"),Supply);Charge->SetNumberField(TEXT("mana"),5000);Charge->SetBoolField(TEXT("mana_empty"),false);
+        Jewel->SetStringField(TEXT("name"),TEXT("Encrusted Bloodstone Jewel"));Jewel->SetNumberField(TEXT("type"),8);Jewel->SetNumberField(TEXT("mana"),34);
+        TestFalse(TEXT("Stopped service waits while every worn item exceeds 33 percent"),Step(VM,S,P)->HasField(TEXT("action")));
+        Jewel->SetNumberField(TEXT("mana"),32);S->SetNumberField(TEXT("time"),102);
+        auto I=Step(VM,S,P);TestEqual(TEXT("Any worn jewelry crossing the threshold recharges with each supported supply"),I->GetStringField(TEXT("action")),FString(TEXT("use_item")));
+        TestEqual(TEXT("Selected recharge supply is used"),I->GetNumberField(TEXT("item")),30.);
+        S->SetNumberField(TEXT("time"),104);S->SetNumberField(TEXT("action_serial"),1);
+        TestFalse(TEXT("UseDone alone cannot trigger another charge"),Step(VM,S,P)->HasField(TEXT("action")));
+        Jewel->SetNumberField(TEXT("mana"),100);Charge->SetNumberField(TEXT("mana"),0);
+        S->SetNumberField(TEXT("time"),106);TestFalse(TEXT("Fresh full suit stops further use"),Step(VM,S,P)->HasField(TEXT("action")));
+        // A replacement supply and another drain cycle work without restarting.
+        Charge->SetNumberField(TEXT("mana"),5000);Jewel->SetNumberField(TEXT("mana"),0);S->SetNumberField(TEXT("time"),140);
+        TestEqual(TEXT("Empty jewel triggers recharge again while UCM remains stopped"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("use_item")));
+        auto Failure=RecoveryJson(TEXT(R"({"activity":"item_mana","status":"Temporary server rejection"})"));
+        P->SetObjectField(TEXT("ucm_activity_failure"),Failure);S->SetNumberField(TEXT("time"),142);
+        TestEqual(TEXT("Idle failure uses a bounded activity pause"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
+        P->RemoveField(TEXT("ucm_activity_failure"));S->SetNumberField(TEXT("time"),144);
+        TestFalse(TEXT("Idle retry pause does not hammer supplies"),Step(VM,S,P)->HasField(TEXT("action")));
+        S->SetNumberField(TEXT("time"),174);
+        TestEqual(TEXT("Stopped recharge resumes after the failure cooldown"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("use_item")));
+    }
     {
         FACEPluginVM VM;TestTrue(TEXT("Resource maintenance policy loads"),VM.Load(Source,Error));auto S=Snapshot(),P=Profile();
         auto I=Step(VM,S,P);TestEqual(TEXT("Low essence gets a spirit independently of automatic combat/summoning"),I->GetStringField(TEXT("action")),FString(TEXT("apply_item")));

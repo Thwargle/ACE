@@ -593,8 +593,9 @@ public:
 	uint64 GetInventoryDataRevision() const { return InventoryDataRevision; }
 	bool IsServerAttackInProgress() const { return bServerAttackInProgress; }
 	uint32 GetLastAttackError() const { return LastAttackError; }
-	/** Automation must not mistake the optimistic UI stance for a server acknowledgment. */
-	bool IsCombatModeConfirmed(int32 Mode) const { return PendingCombatMode == 0 && PlayerVitals.CombatMode == Mode && PlayerVitals.StatQualityInts.FindRef(40) == Mode; }
+	/** Automation waits for ACE's mode quality; GDLE accepts ordered player requests
+	 *  silently and publishes the quality only for corrections, so its raw value can be stale. */
+	bool IsCombatModeConfirmed(int32 Mode) const { return PendingCombatMode == 0 && PlayerVitals.CombatMode == Mode && (Creds.bGDLE || PlayerVitals.StatQualityInts.FindRef(40) == Mode); }
 	uint32 GetCombatModeRevision() const { return CombatModeRevision; }
 
 	/** Owned character titles (from GameEvent CharacterTitle / UpdateTitle). */

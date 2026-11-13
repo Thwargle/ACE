@@ -480,6 +480,7 @@ private:
     TWeakObjectPtr<UGameViewportClient> SuspendedWorldViewport;
     bool PreviousWorldRenderingDisabled=false;
     bool Tick(float DeltaTime);
+    void TickIdleEquipmentMana();
     void Execute(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Intent);
     void ReportActivityFailure(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Intent, const FString& Reason, bool NotifyPolicy = true);
     void CheckPendingSpellTimeout();

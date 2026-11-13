@@ -9099,7 +9099,7 @@ void FACESession::SendChangeCombatMode(uint32 CombatMode)
 	// overwrite CurrentStance / wipe Magic before PropertyInt.CombatMode arrives.
 	PlayerVitals.CombatMode = static_cast<int32>(CombatMode);
 	DeferredServerCombatMode = INDEX_NONE;
-	if (CombatMode == ACECombatMode::NonCombat)
+	if (Creds.bGDLE || CombatMode == ACECombatMode::NonCombat)
 	{
 		PendingCombatMode = 0;
 		PendingCombatModeUntil = 0.0;
@@ -9109,6 +9109,12 @@ void FACESession::SendChangeCombatMode(uint32 CombatMode)
 		PendingCombatMode = CombatMode;
 		PendingCombatModeUntil = FPlatformTime::Seconds() + 5.0;
 	}
+	// GDLE ChangeCombatMode(mode, playerRequested=true) omits CombatMode on
+	// success, and may omit motion too when already in that stance. Retail uses
+	// the requested mode immediately; the following action shares this reliable,
+	// ordered weenie queue. Preserve the received quality and honor subsequent
+	// corrections normally, including an immediate server rejection to peace.
+	if (Creds.bGDLE) ++CombatModeRevision;
 	TArray<FACEWorldObject> Equipped;
 	GetEquippedItems(Equipped);
 	const uint32 Stance = ACECombatStance::ResolveForCombatMode(Equipped, CombatMode);
