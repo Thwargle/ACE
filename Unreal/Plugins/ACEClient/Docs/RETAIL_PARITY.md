@@ -1,12 +1,78 @@
 # Retail client replacement: acceptance and evidence
 
+Vendor affordability follow-up (2026-11-13): normal vendor single-item, cart-row
+and Buy All actions now check the full retail purchase price before sending Buy.
+The pyreal purse comes from player `CoinValue` (int quality 20), as in retail
+`gmVendorUI::UpdateTotalValue` (004C48E0); `BuySingleItem` (004C2820) and the Buy All
+handler reject insufficient funds before `CM_Vendor::Event_Buy`. Rejection keeps
+the cart and selection and displays "You don't have enough money" without starting
+the hourglass. Mobile/VR vendor menus share the same check. Alternate-currency
+shops retain the existing live owned-currency count; currency identity uses its
+advertised WCID, not the display name. Item Tools' explicit server-bank opt-in
+remains separate from normal vendor UI. Packet, UI and Item Tools regressions
+cover insufficient/exact funds, cart totals, balance updates, price rounding,
+trade-note premiums and alternate currencies. This is local source and fixture
+verification; the reported custom server has not been tested live.
+Validation: Win64 Development Editor build and all seven suites in
+`TestOutput/UCMKnownGaps-Nov12/vendor-affordability-tests/index.json` passed
+(vendor transactions, three Item Tools suites, retail UI screens, mobile menus
+and VR menus). The large retail screen fixture was split into vendor helpers to
+stay within MSVC optimizer limits without disabling checks or optimizations.
+
+UCM follow-up (2026-11-13) adds learned/wand/physical-proc/grenade debuff selection,
+idle helper buffs, optional casting movement, server-scoped recipe imports and
+Classic expression/regex compatibility. Physical proc weapons use actual attacks
+and confirmed effects, thrown weapons now support configured offhands, and regex
+`x`/`n` options plus mixed capture backreferences follow .NET semantics. The final
+conditional/balancing regex implementation now includes capture restoration on
+backtracking, assertion conditions and case-sensitive caches/capture names.
+The known in-scope UCM implementation register is closed; external integrations
+are excluded by user request. This is local source/fixture validation, not live
+server or packaged-device acceptance. See the current
+[gap register](Plugins/VirindiCompatibility.md) for evidence and external-data
+requirements that remain.
+
+Automatic fellowship management and UCM-integrated crafting are now implemented
+(2026-11-13). The optional manager includes nearby tell recruitment, FIFO
+reservations, membership-confirmed operations and member votes. Crafting uses
+verified catalog recipes, imported stock targets and inventory-confirmed jobs,
+with recovery taking priority between actions. See the current
+[Virindi gap register](Plugins/VirindiCompatibility.md) for configuration,
+intentional differences and remaining custom-recipe limitations.
+
 The target is the complete retail 1802 client reproduced in Unreal: gameplay,
 network behavior, controls, DAT content, and interface design. Graphical fidelity
 work follows feature completion. A feature is not complete merely because its
 button exists, its opcode has a constant, or a focused regression test passes.
 
-This is the working acceptance record, most recently reviewed on 2026-10-13. The client
+This is the working acceptance record, most recently reviewed on 2026-11-13. The client
 is **not yet a feature-complete retail replacement**.
+
+## UCM known-gap review: 2026-11-13
+
+Reconciled the historical VT gap lists against current runtime and source.
+Closed additional receipt/scheduler races across metas, assistance, components,
+pets and loot maintenance; added innate recovery-implement activation and
+configured lockpicking for route doors. API metadata, permissions and selective
+snapshot support are documented. Native profile replacement also preserves
+damage-format metadata across repeated saves and reloads. The follow-up adds
+server-observed fellowship command sequencing and Lua dismiss/leader operations,
+and isolates AutoCraft errors by ingredient/request identity. See the
+[current comparison and remaining feature categories](Plugins/VirindiCompatibility.md#known-gap-audit-and-interaction-follow-up-2026-11-13).
+This is local source/policy/packet verification, not complete VT parity or live
+ACE/GDLE acceptance. No release was published by this review.
+
+## UCM buff/mana receipt follow-up: 2026-11-12
+
+Compared VT's buff and worn-mana rules with ACE and pinned GDLE mana-stone
+handling. Fixed blocking recharge appraisal waits, lost/misattributed buff and
+mana outcomes, unavailable supply selection, and consumable buff retry stalls.
+GDLE's public item-mana updates now reach Lua instead of being discarded; ACE
+still refreshes from full appraisals. Missing/removed mana remains absent in
+integer property maps, so resource recovery cannot change loot-rule semantics.
+See [the comparison and coverage record](Plugins/VirindiCompatibility.md#buff-receipts-and-equipment-mana-follow-up-2026-11-12).
+Live-server timing remains an acceptance check; this is not a claim of full VT
+or retail parity.
 
 ## Equipment mana while UCM is stopped: 2026-11-12
 

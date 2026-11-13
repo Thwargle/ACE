@@ -183,6 +183,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEWalkingStepTest;
 	friend class FACERetailPkStatusTest;
 	friend class FACERetailScreenTest;
+	friend struct FACERetailVendorUIFixture;
 	friend class FACECharacterInfoParityTest;
 	friend class FACECameraEdgeTest;
 	friend class FACERetailParticleTimingTest;
@@ -536,7 +537,9 @@ public:
 	float GetVendorSellRate() const { return VendorSellRate; }
 	FString GetVendorCurrencyName() const { return VendorCurrencyName; }
 	int32 GetVendorCurrencyCount() const;
-	bool VendorUsesPyreals() const { return VendorCurrencyWeenie == 0 && VendorCurrencyName.IsEmpty(); }
+	bool VendorUsesPyreals() const { return VendorCurrencyWeenie == 0; }
+	/** Retail UI reads CoinValue (20), not custom bank qualities or inferred coin stacks. */
+	int32 GetVendorPurchaseFunds() const { return VendorUsesPyreals() ? FMath::Max(0, PlayerVitals.StatQualityInts.FindRef(20)) : GetVendorCurrencyCount(); }
 	bool CanVendorBuyItem(const FACEWorldObject& Item) const;
 
 	/** GameAction AddSpellFavorite (0x01E3) — place SpellId at BarIndex slot SlotIndex. Local bars update immediately. */
