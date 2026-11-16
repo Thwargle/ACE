@@ -11,6 +11,9 @@ inline constexpr FOption Values[] = {
  {TEXT("CameraStiffness"),TEXT("Camera Stiffness"),1,.25f,3},
  {TEXT("CameraAdjustment"),TEXT("Camera Adjustment Speed"),1,.25f,3},
  {TEXT("FieldOfViewDegrees"),TEXT("Field of View"),90,10,160},
+ {TEXT("PersonalCameraHeight"),TEXT("Camera Height"),1.5f,1.5f,5}, // personal: camera
+ {TEXT("PersonalCameraSave"),TEXT("Save Camera Position"),0,0,1}, // personal: camera
+ {TEXT("PersonalCameraFree"),TEXT("Free Camera Restriction"),0,0,1}, // personal: camera
  {TEXT("ScreenBrightness"),TEXT("Screen Brightness"),1.f,.2f,2.f},
  {TEXT("Contrast"),TEXT("Screen Contrast"),1.f,.5f,2.f},
  {TEXT("Anisotropy"),TEXT("Texture Filtering"),16,1,16},
@@ -26,6 +29,14 @@ inline constexpr FOption Values[] = {
  {TEXT("DynamicLightingQuality"),TEXT("Dynamic lights"),2,0,2},
  {TEXT("CameraAlignToSlope"),TEXT("Align camera to slope"),1,0,1},
  {TEXT("EffectLightLimit"),TEXT("Effect light limit"),8,0,64},
+ {TEXT("PersonalFarTerrain"),TEXT("Far Terrain"),0,0,1}, // personal: far-terrain
+ {TEXT("PersonalFarTerrainRadius"),TEXT("Far Terrain Radius"),43,43,96}, // personal: far-terrain
+ {TEXT("PersonalFarScenery"),TEXT("Far Terrain Objects"),0,0,1}, // personal: far-scenery
+ {TEXT("PersonalFarSceneryRadius"),TEXT("Far Terrain Objects Radius"),6,3,8}, // personal: far-scenery
+ {TEXT("PersonalFarTerrainTextures"),TEXT("Far Terrain Textures"),0,0,1}, // personal: far-textures
+ {TEXT("PersonalSkyHorizon"),TEXT("Far Terrain Horizon"),0,0,1}, // personal: sky-horizon
+ {TEXT("PersonalFarSceneryFog"),TEXT("Hide Far Terrain with Fog"),0,0,1}, // personal: far-scenery
+ {TEXT("PersonalFarWindows"),TEXT("Far Terrain Rooms"),0,0,1}, // personal: far-windows
  {TEXT("LandscapeRadius"),TEXT("Landscape Radius"),5,5,25}
 };
 ACECLIENT_API float Get(const TCHAR* Key);
