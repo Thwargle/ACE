@@ -27,6 +27,8 @@
 #include "GameFramework/GameUserSettings.h"
 #include "Styling/CoreStyle.h"
 #include "Misc/ConfigCacheIni.h"
+#include "Personal/PersonalOptionCheckBox.h" // personal: far-textures
+#include "Personal/PersonalSliderLabel.h" // personal: far-scenery
 
 TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
 {
@@ -112,7 +114,9 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  for (const TCHAR* Key:{TEXT("MasterVolume"),TEXT("EffectsVolume"),TEXT("AmbientVolume")}) AddValue(Key);
  ActiveSoundOnly=WidgetTree->ConstructWidget<UCheckBox>(); ActiveSoundOnly->SetWidgetStyle(RoundToggle); ActiveSoundOnly->SetContent(Label(TEXT("Play Sounds Only When Active"))); Box->AddChild(Fixed(ActiveSoundOnly,272,20));
  Section(TEXT("Camera Options"));
- for (const TCHAR* Key:{TEXT("CameraStiffness"),TEXT("CameraAdjustment"),TEXT("FieldOfViewDegrees")}) AddValue(Key);
+ for (const TCHAR* Key:{TEXT("CameraStiffness"),TEXT("CameraAdjustment"),TEXT("PersonalCameraHeight"),TEXT("FieldOfViewDegrees")}) AddValue(Key); // personal: camera
+ Box->AddChild(Fixed(UPersonalOptionCheckBox::Make(WidgetTree,RoundToggle,Label(TEXT("Save Camera Position")),TEXT("PersonalCameraSave"),TEXT("Keep the camera distance and pitch between sessions. Changes apply and save immediately.")),272,20)); // personal: camera
+ Box->AddChild(Fixed(UPersonalOptionCheckBox::Make(WidgetTree,RoundToggle,Label(TEXT("Free Camera Restriction")),TEXT("PersonalCameraFree"),TEXT("Zoom out to the same distance at every camera angle. Off keeps the limit that depends on the camera angle. Changes apply and save immediately.")),272,20)); // personal: camera
  CameraAlignToSlope=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("CameraAlignToSlope"));
  CameraAlignToSlope->SetWidgetStyle(RoundToggle); CameraAlignToSlope->SetContent(Label(TEXT("Align camera to slope"))); Box->AddChild(Fixed(CameraAlignToSlope,272,20));
  Section(TEXT("Graphics Options"));
@@ -139,6 +143,16 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  UACEHoverTooltipWidget::SetWidgetTooltip(UniformDungeonLighting,FText::FromString(TEXT("Light enclosed dungeon rooms, objects, and characters evenly. Turn off for torchlight and shadows. Changes apply and save immediately.")));
  ShowFrameRate=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("ShowFrameRate"));
  ShowFrameRate->SetWidgetStyle(RoundToggle);ShowFrameRate->SetContent(Label(TEXT("Show FPS overlay")));Box->AddChild(Fixed(ShowFrameRate,272,20));
+ Box->AddChild(Fixed(UPersonalOptionCheckBox::Make(WidgetTree,RoundToggle,Label(TEXT("Far Terrain")),TEXT("PersonalFarTerrain"),TEXT("Draw low-detail terrain past the loaded landblocks, out to Far Terrain Radius. Off also turns off the other Far Terrain options. Changes apply and save immediately.")),272,20)); // personal: far-terrain
+ AddValue(TEXT("PersonalFarTerrainRadius")); ValueSliders[TEXT("PersonalFarTerrainRadius")]->SetStepSize(1.f); // personal: far-terrain
+ Box->AddChild(Fixed(UPersonalSliderLabel::Make(WidgetTree,ValueSliders[TEXT("PersonalFarTerrainRadius")],Label(TEXT(""),7),TEXT("landblocks")),250,14)); // personal: far-terrain
+ Box->AddChild(Fixed(UPersonalOptionCheckBox::Make(WidgetTree,RoundToggle,Label(TEXT("Far Terrain Objects")),TEXT("PersonalFarScenery"),TEXT("Draw trees, rocks, buildings and other objects past the landblocks where they are drawn today, out to Far Terrain Objects Radius. Needs Far Terrain. Changes apply and save immediately.")),272,20)); // personal: far-scenery
+ AddValue(TEXT("PersonalFarSceneryRadius")); ValueSliders[TEXT("PersonalFarSceneryRadius")]->SetStepSize(1.f); // personal: far-scenery
+ Box->AddChild(Fixed(UPersonalSliderLabel::Make(WidgetTree,ValueSliders[TEXT("PersonalFarSceneryRadius")],Label(TEXT(""),7),TEXT("landblocks")),250,14)); // personal: far-scenery
+ Box->AddChild(Fixed(UPersonalOptionCheckBox::Make(WidgetTree,RoundToggle,Label(TEXT("Hide Far Terrain with Fog")),TEXT("PersonalFarSceneryFog"),TEXT("Draw no far terrain objects past the fog end. Off keeps them as a skyline in fog and at night. Changes apply and save immediately.")),272,20)); // personal: far-scenery
+ Box->AddChild(Fixed(UPersonalOptionCheckBox::Make(WidgetTree,RoundToggle,Label(TEXT("Far Terrain Rooms")),TEXT("PersonalFarWindows"),TEXT("Show the rooms behind the windows and other openings of far buildings, with their lights at night, and close far doors with dark panels. Needs Far Terrain Objects. Changes apply and save immediately.")),272,20)); // personal: far-windows
+ Box->AddChild(Fixed(UPersonalOptionCheckBox::Make(WidgetTree,RoundToggle,Label(TEXT("Far Terrain Textures")),TEXT("PersonalFarTerrainTextures"),TEXT("Draw the far terrain within about 2.7 km with the terrain textures. Off leaves it at flat colors. Needs Far Terrain. Changes apply and save immediately.")),272,20)); // personal: far-textures
+ Box->AddChild(Fixed(UPersonalOptionCheckBox::Make(WidgetTree,RoundToggle,Label(TEXT("Far Terrain Horizon")),TEXT("PersonalSkyHorizon"),TEXT("Continue the night sky below eye level, down to the far terrain. Removes the bright strip at the horizon from sunset to dawn. Needs Far Terrain. Changes apply and save immediately.")),272,20)); // personal: sky-horizon
  Resolution=Combo(TEXT("Resolution")); Resolution->Rename(TEXT("DisplayResolution"));
  Resolution->OnOpening.AddDynamic(this,&UACEVideoSettingsWidget::RefreshResolutions);
  UACEHoverTooltipWidget::SetWidgetTooltip(Resolution,FText::FromString(TEXT("Resolution for fullscreen and windowed modes. Borderless fills the desktop at its native resolution.")));
