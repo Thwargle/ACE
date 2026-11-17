@@ -19,9 +19,11 @@ namespace
  float AmbientGain=1.f,EffectsGain=1.f;
  int32 AppliedDynamicLightingQuality=2;
  bool bUniformDungeonLighting=false;
+ bool bLegionsSky=false;
 }
 int32 DynamicLightingQuality() { return AppliedDynamicLightingQuality; }
 bool UniformDungeonLighting() { return bUniformDungeonLighting; }
+bool LegionsSky() { return bLegionsSky; }
 float Get(const TCHAR* Key)
 {
  for (const auto& O : Values) if (FCString::Strcmp(O.Key,Key)==0) {
@@ -60,6 +62,7 @@ void Set(const TCHAR* Key,float Value)
 }
 void Apply()
 {
+ bLegionsSky=Get(TEXT("LegionsSky"))>.5f;
  SoundSettingsFrame=MAX_uint64;
  PluginTextSettingsFrame=MAX_uint64;
  UACEWorldTextureMipProvider::RefreshQuality();

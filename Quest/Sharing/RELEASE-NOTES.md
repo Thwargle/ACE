@@ -1,19 +1,21 @@
-# AC:Unreal / AC:VR release 158
+# AC:Unreal / AC:VR release 159
 
-Windows desktop, PC VR, native Linux, standalone Quest, and the Android phone and tablet preview share version **2026.11.15.158**.
+Windows desktop, PC VR, native Linux, standalone Quest, and the Android phone and tablet preview share version **2026.11.17.159**.
 
-## Waypoint
+## Far terrain and scenery
 
-- Import a GoArrow `locations.xml` file from **NAV → Import locations**. Waypoint opens the searchable location list and reports how many entries it loaded. If an import fails, it shows the error and keeps the previous atlas.
-- Search by name or type, then **Point arrow** at a destination or choose **Find route** for walking and portal directions. Locations with the same name show their coordinates. Reimport atlases saved in v157 or earlier to include their portal exits.
-- The floating arrow respects its saved on/off setting across sessions and destination updates.
+- Thanks to **gvbz** for contributing far-distance terrain rendering and its camera and scenery controls.
+- Enable **Far Terrain** in the graphics options to see the landscape beyond the usual view range. The terrain radius reaches 96 landblocks. Distant scenery has its own radius of up to 24 landblocks, with separate options for rooms, textures, and the horizon.
+- Far terrain is off by default. Adjust its settings, then press **Apply** to update the world. This also lets you change several options in one pass.
+- Distant land now picks up cloud shadows and blends into the weather fog. The update also reduces speckling on distant scenery.
 
-## Dungeon lighting
+## Skies, storms, and lighting
 
-- Torches and other light fixtures illuminate nearby dungeon walls, floors, scenery, and characters. Turning in place keeps torch brightness stable, including when a torch behind the camera lights the floor ahead.
-- With **Dynamic lights** set to **Full** on desktop, dungeon fixtures have their own lights. **Low** and **Medium** shadows use two nearby shadow casters. **High** and **Cinematic** allow every fixture to cast shadows.
-- Enable **Uniform dungeon lighting** directly below **Custom object highlighting** for evenly lit interiors. The option applies immediately and saves across sessions. Torch lighting is the default.
+- The optional Legions sky follows the AC1 clock and weather, with the sun and moons following AC1 sky directions. Clear skies show the asteroid belt, while storms change the clouds, lighting, and visibility. Rain falls around the player.
+- On desktop, choose your own Legions installation or `portal.dat` in the graphics options and select **Import**. On Quest, use **Install-AC2-Sky.cmd** from the revision 11 installer on your PC and then import the sky in the headset's graphics settings. Each player supplies their own Legions data.
+- This release also updates dungeon fixture shadows on mobile renderers.
 
-## Server source
+## Verification
 
-- Merged ACEmulator upstream through `aadedb3d6`, including .NET package and server build metadata updates.
+- Automated render comparisons cover the AC1 and imported Legions skies at the same AC1 summit, including clear daylight and rain by day and night. The native Linux package passed its launch, weather, scenery, and updater regressions.
+- The Quest installer and sky-transfer checks used a simulated USB device. A physical headset playtest is still pending.

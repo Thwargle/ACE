@@ -1,6 +1,9 @@
 #include "VR/ACEVRWidget.h"
 #include "ACEClientBuild.h"
 #include "ACERuntimeOptions.h"
+#include "Sky/ACELegionsSky.h"
+#include "Async/Async.h"
+#include "HAL/FileManager.h"
 #include "VR/ACEVRComponent.h"
 #include "VR/ACEVRSettings.h"
 #include "VR/ACEVRInputLayout.h"
@@ -20,6 +23,46 @@
 
 namespace
 {
+#if PLATFORM_ANDROID
+	// Multiple menu instances can exist while a transfer is being imported.
+	struct FQuestSkyMenu
+	{
+		bool HasSource = false;
+		bool HasCache = false;
+		bool Importing = false;
+		bool NeedsWeather = false;
+		FString Message;
+
+		void Refresh()
+		{
+			HasSource = IFileManager::Get().FileExists(*ACELegionsSky::StagedPath(ACELegionsSky::CachePath()));
+			HasCache = ACELegionsSky::HasCache(&NeedsWeather);
+		}
+		void StartImport()
+		{
+			if (!HasSource || Importing) return;
+			Importing = true;
+			Message = TEXT("Importing your AC2 sky...");
+			Async(EAsyncExecution::ThreadPool, [this, Destination = ACELegionsSky::CachePath()]()
+			{
+				FString Error;
+				const bool Success = ACELegionsSky::ImportStaged(Destination, Error);
+				AsyncTask(ENamedThreads::GameThread, [this, Success, Error = MoveTemp(Error)]()
+				{
+					Importing = false;
+					Refresh();
+					Message = Success ? TEXT("AC2 sky installed.") : Error;
+					if (Success)
+					{
+						ACERuntimeOptions::Set(TEXT("LegionsSky"), 1.f);
+						ACERuntimeOptions::Apply();
+					}
+				});
+			});
+		}
+	};
+	FQuestSkyMenu QuestSky;
+#endif
 	const FLinearColor MenuGold(.66f, .44f, .16f);
 	const FLinearColor MenuText(.90f, .83f, .66f);
 	const FButtonStyle& RetailButtonStyle()
@@ -190,6 +233,32 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 		Scroll->AddSlot().Padding(0,6)[Button(TAttribute<FText>::CreateLambda([]()
 			{ return FText::FromString(ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f ? TEXT("FPS overlay: On") : TEXT("FPS overlay: Off")); }),
 			[](){ACERuntimeOptions::Set(TEXT("ShowFrameRate"),ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f ? 0.f : 1.f);ACERuntimeOptions::Apply();})];
+#if PLATFORM_ANDROID
+		QuestSky.Refresh();
+		auto SkyToggle = Button(TAttribute<FText>::CreateLambda([]()
+		{
+			return FText::FromString(ACERuntimeOptions::LegionsSky() ? TEXT("AC2 sky: On") : TEXT("AC2 sky: Off"));
+		}), []()
+		{
+			ACERuntimeOptions::Set(TEXT("LegionsSky"), ACERuntimeOptions::LegionsSky() ? 0.f : 1.f);
+			ACERuntimeOptions::Apply();
+		});
+		SkyToggle->SetEnabled(TAttribute<bool>::CreateLambda([](){ return QuestSky.HasCache && !QuestSky.Importing; }));
+		Scroll->AddSlot().Padding(0,6)[SkyToggle];
+		auto ImportSky = Button(Literal(TEXT("Import and use AC2 sky")), [](){ QuestSky.StartImport(); });
+		ImportSky->SetVisibility(TAttribute<EVisibility>::CreateLambda([](){ return QuestSky.HasSource ? EVisibility::Visible : EVisibility::Collapsed; }));
+		ImportSky->SetEnabled(TAttribute<bool>::CreateLambda([](){ return !QuestSky.Importing; }));
+		Scroll->AddSlot().Padding(0,4)[ImportSky];
+		Scroll->AddSlot()[Text(TAttribute<FText>::CreateLambda([]()
+		{
+			if (!QuestSky.Message.IsEmpty()) return FText::FromString(QuestSky.Message);
+			if (QuestSky.NeedsWeather && !QuestSky.HasSource)
+				return FText::FromString(TEXT("Transfer your Legions DAT again to add storm skies."));
+			if (!QuestSky.HasCache && !QuestSky.HasSource)
+				return FText::FromString(TEXT("On your PC, run Install-AC2-Sky.cmd to transfer your sky."));
+			return FText::GetEmpty();
+		}), 18)];
+#endif
 		Scroll=Sections[0];
 		Scroll->AddSlot().Padding(0, 6)[Button(TAttribute<FText>::CreateLambda([Rig]()
 			{ return FText::FromString(Rig.IsValid() && Rig->GetSettings()->bMatchCharacterHeight ? TEXT("Eye height: Character") : TEXT("Eye height: Physical")); }),
