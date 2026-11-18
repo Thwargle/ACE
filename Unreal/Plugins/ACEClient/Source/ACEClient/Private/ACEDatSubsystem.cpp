@@ -154,8 +154,8 @@ namespace
 	{
 		static TWeakObjectPtr<UMaterialParameterCollection> Cached;
 		if (Cached.IsValid()) return Cached.Get();
-		constexpr const TCHAR* PackageName = TEXT("/Game/ACE/RuntimeMaterials/MPC_ACEWorldFog_v1");
-		constexpr const TCHAR* ObjectPath = TEXT("/Game/ACE/RuntimeMaterials/MPC_ACEWorldFog_v1.MPC_ACEWorldFog_v1");
+		constexpr const TCHAR* PackageName = TEXT("/Game/ACE/RuntimeMaterials/MPC_ACEWorldFog_v2");
+		constexpr const TCHAR* ObjectPath = TEXT("/Game/ACE/RuntimeMaterials/MPC_ACEWorldFog_v2.MPC_ACEWorldFog_v2");
 		UMaterialParameterCollection* Collection = nullptr;
 #if WITH_EDITORONLY_DATA
 		if (FPackageName::DoesPackageExist(PackageName))
@@ -163,7 +163,7 @@ namespace
 		if (!Collection)
 		{
 			Collection = NewObject<UMaterialParameterCollection>(CreatePackage(PackageName),
-				TEXT("MPC_ACEWorldFog_v1"), RF_Public | RF_Standalone);
+				TEXT("MPC_ACEWorldFog_v2"), RF_Public | RF_Standalone);
 			for (const auto& Pair : { TPair<FName, float>(TEXT("FogStart"), 20000.f),
 				TPair<FName, float>(TEXT("FogEnd"), 90000.f), TPair<FName, float>(TEXT("FogAmount"), 1.f) })
 			{
@@ -174,6 +174,10 @@ namespace
 			auto& Color = Collection->VectorParameters.AddDefaulted_GetRef();
 			Color.ParameterName = TEXT("FogColor");
 			Color.DefaultValue = FLinearColor(0.55f, 0.62f, 0.78f, 1.f);
+			// Share the atmospheric uniforms: UE supports two collections per
+			// material and terrain also needs the portal visibility collection.
+			auto& Offset = Collection->VectorParameters.AddDefaulted_GetRef();
+			Offset.ParameterName = TEXT("CloudOffset"); Offset.DefaultValue = FLinearColor::Transparent;
 			Collection->PostEditChange();
 		}
 #else
@@ -2173,7 +2177,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
 #if WITH_EDITORONLY_DATA
 	// The aperture mask must run in the depth pass too. Clipping only BaseColor
 	// on an opaque material leaves invisible terrain depth occluding interiors.
-	UMaterial* Mat = NewObject<UMaterial>(GetTransientPackage(), TEXT("M_ACELandLit_v40"), RF_Public | RF_Transient);
+	UMaterial* Mat = NewObject<UMaterial>(GetTransientPackage(), TEXT("M_ACELandLit_v41"), RF_Public | RF_Transient);
 	if (!Mat)
 	{
 		return nullptr;
@@ -2261,7 +2265,10 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
 	auto* Motion = NewObject<UMaterialExpressionVectorParameter>(Mat);
 	Motion->ParameterName = TEXT("CloudMotion");
 	Motion->DefaultValue = FLinearColor::Transparent;
-	auto* GameTime = NewObject<UMaterialExpressionTime>(Mat);
+	auto* CloudOffset = NewObject<UMaterialExpressionCollectionParameter>(Mat);
+	CloudOffset->Collection = RuntimeFogCollection();
+	CloudOffset->ParameterName = TEXT("CloudOffset");
+	CloudOffset->ParameterId = CloudOffset->Collection->GetParameterId(CloudOffset->ParameterName);
 	auto* Shaded = NewObject<UMaterialExpressionCustom>(Mat);
 	Shaded->OutputType = CMOT_Float3;
 	auto Input = [Shaded](FName Name, UMaterialExpression* Expression)
@@ -2271,8 +2278,8 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
 		Pin.Input.Connect(0,Expression);
 	};
 	Input(TEXT("Land"),Sample); Input(TEXT("Position"),LandWorldPos); Input(TEXT("Motion"),Motion);
-	Input(TEXT("Seconds"),GameTime); Input(TEXT("Mask"),Mask);
-	Shaded->Code = TEXT("[branch] if (Motion.x <= 0) return Land; float2 uv=Position.xy*Motion.x+frac(Seconds*Motion.yz); return Land*Texture2DSample(Mask,MaskSampler,uv).rgb;");
+	Input(TEXT("Offset"),CloudOffset); Input(TEXT("Mask"),Mask);
+	Shaded->Code = TEXT("[branch] if (Motion.x <= 0) return Land; float2 uv=Position.xy*Motion.x+Offset.xy; return Land*Texture2DSample(Mask,MaskSampler,uv).rgb;");
 	auto* SkyTint = NewObject<UMaterialExpressionVectorParameter>(Mat);
 	SkyTint->ParameterName = TEXT("LandSkyTint");
 	SkyTint->DefaultValue = FLinearColor::White;
@@ -2281,7 +2288,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
 	AmbientLand->B.Connect(0,SkyTint);
 	LandBaseMul->A.Connect(0,Shaded);
 	Emis->A.Connect(0,AmbientLand);
-	for (UMaterialExpression* Expr : TArray<UMaterialExpression*>{Mask,Motion,GameTime,Shaded,SkyTint,AmbientLand})
+	for (UMaterialExpression* Expr : TArray<UMaterialExpression*>{Mask,Motion,CloudOffset,Shaded,SkyTint,AmbientLand})
 		EditorOnly->ExpressionCollection.AddExpression(Expr);
 	LandWorldPos->WorldPositionShaderOffset = WPT_ExcludeAllShaderOffsets;
 	LandWorldPos->MaterialExpressionEditorX = -450;
@@ -2491,7 +2498,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
 	UE_LOG(LogTemp, Log, TEXT("ACEDat: created Lit land material v35 (PortalList + indoor footprint clip)"));
 	return LandMaterialBase;
 #else
-	LandMaterialBase = LoadCookedAceMaterial(TEXT("M_ACELandLit_v40"));
+	LandMaterialBase = LoadCookedAceMaterial(TEXT("M_ACELandLit_v41"));
 	return LandMaterialBase;
 #endif
 }
@@ -2501,6 +2508,22 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceLandLookOutMaterialBase()
 	// The active portal-plane mask supports opaque depth rendering. The obsolete
 	// CustomStencil graph used SceneTexture in a masked material, which UE cannot compile.
 	return EnsureAceLandMaterialBase();
+}
+
+void UACEDatSubsystem::SetSkyAnimationTime(double Seconds)
+{
+	// One shared uniform update, independent of the number of terrain tiles.
+	if (auto* World = GetWorld())
+		if (auto* Collection = RuntimeFogCollection())
+			if (auto* Instance = World->GetParameterCollectionInstance(Collection))
+			{
+				auto Wrap = [Seconds](double Velocity)
+				{
+					const double Offset = FMath::Fmod(Seconds * Velocity, 1.);
+					return float(Offset < 0. ? Offset + 1. : Offset);
+				};
+				Instance->SetVectorParameterValue(TEXT("CloudOffset"),FLinearColor(Wrap(LandCloudMotion.G),Wrap(LandCloudMotion.B),0,0));
+			}
 }
 
 void UACEDatSubsystem::RegisterLandSky(UMaterialInstanceDynamic* Material)

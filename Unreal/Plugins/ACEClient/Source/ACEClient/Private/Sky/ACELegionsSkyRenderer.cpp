@@ -47,6 +47,7 @@ void FACELegionsSkyRenderer::Clear()
 			Mesh->DestroyComponent();
 		}
 	Meshes.Reset();
+	CloudBases.Reset();
 	CloudMask.Reset();
 	Sky = {};
 }
@@ -94,6 +95,9 @@ bool FACELegionsSkyRenderer::Build(AActor& Owner, ACELegionsSky::FBackdrop&& Imp
 	Sky = MoveTemp(Imported);
 	for (auto& L : Sky.Layers)
 	{
+		auto& Basis = CloudBases.AddDefaulted_GetRef();
+		if (L.Setup == CloudSheetSetup)
+			for (const auto& S : L.Sections) Basis.Consider(L.Vertices,L.UVs,S.Indices);
 		auto* Mesh = NewObject<UProceduralMeshComponent>(&Owner);
 		Owner.AddInstanceComponent(Mesh);
 		Mesh->SetupAttachment(Owner.GetRootComponent());
@@ -115,7 +119,8 @@ bool FACELegionsSkyRenderer::Build(AActor& Owner, ACELegionsSky::FBackdrop&& Imp
 			Mid->SetVectorParameterValue(TEXT("MaterialFactor"), S.Tint);
 			Mid->SetVectorParameterValue(TEXT("StageOps"), S.StageOps);
 			Mid->SetVectorParameterValue(TEXT("UVOffset"), FLinearColor(S.Offset[0].X,S.Offset[0].Y,S.Offset[1].X,S.Offset[1].Y));
-			Mid->SetVectorParameterValue(TEXT("UVVelocity"), FLinearColor(S.Velocity[0].X,S.Velocity[0].Y,S.Velocity[1].X,S.Velocity[1].Y));
+			// CPU supplies wrapped offsets from the synchronized sky clock.
+			Mid->SetVectorParameterValue(TEXT("UVVelocity"), FLinearColor::Transparent);
 			Mesh->SetMaterial(I, Mid);
 			S.Indices.Empty();
 		}
@@ -138,6 +143,13 @@ void FACELegionsSkyRenderer::SetVisible(bool Visible)
 
 FLinearColor FACELegionsSkyRenderer::Update(float Time, const FACELegionsSkyFrame& Frame)
 {
+	CloudMotion = Sky.CloudMotion;
+	if (!Frame.CloudDirection.IsNearlyZero())
+	{
+		const float Speed = FVector2D(Sky.CloudMotion.G,Sky.CloudMotion.B).Size();
+		CloudMotion.G = -Frame.CloudDirection.X * Speed;
+		CloudMotion.B = -Frame.CloudDirection.Y * Speed;
+	}
 	// Bracket the current time between native wet keys on the circular AC2
 	// day. AC1 controls storm strength independently of those original hours.
 	struct FRainAnchor
@@ -344,6 +356,17 @@ FLinearColor FACELegionsSkyRenderer::Update(float Time, const FACELegionsSkyFram
 		for (int32 J = 0; J < L.Sections.Num(); ++J)
 		{
 			auto* Mid = CastChecked<UMaterialInstanceDynamic>(Mesh->GetMaterial(J));
+			const auto& Section = L.Sections[J];
+			FVector2D Offset[2];
+			for (int32 Stage = 0; Stage < 2; ++Stage)
+			{
+				auto Velocity = Section.Velocity[Stage];
+				if (L.Setup == CloudSheetSetup && !Frame.CloudDirection.IsNearlyZero())
+					Velocity = CloudBases[I].Along(Rotation.UnrotateVector(Frame.CloudDirection),Velocity.Size());
+				Offset[Stage] = FVector2D(ACESkyMotion::Offset(Frame.Seconds,Velocity.X,Section.Offset[Stage].X),
+					ACESkyMotion::Offset(Frame.Seconds,Velocity.Y,Section.Offset[Stage].Y));
+			}
+			Mid->SetVectorParameterValue(TEXT("UVOffset"),FLinearColor(Offset[0].X,Offset[0].Y,Offset[1].X,Offset[1].Y));
 			Mid->SetVectorParameterValue(TEXT("SkyTint"), Tint);
 			if (L.Setup == SunSetup && L.Sections[J].Additive)
 				Mid->SetScalarParameterValue(TEXT("SunHorizonGlow"),

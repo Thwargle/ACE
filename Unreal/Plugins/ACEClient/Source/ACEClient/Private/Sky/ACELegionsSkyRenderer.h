@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Sky/ACELegionsSky.h"
+#include "Sky/ACESkyMotion.h"
 #include "UObject/StrongObjectPtr.h"
 
 class UProceduralMeshComponent;
@@ -16,6 +17,8 @@ struct FACELegionsSkyFrame
 		float Opacity = 0.f;
 	};
 	FBody Sun, Moon;
+	double Seconds = 0.;
+	FVector CloudDirection = FVector::ZeroVector;
 	FVector LightDirection = FVector::DownVector;
 	bool bClearForecast = false;
 	float CloudOpacity = 0.f;
@@ -53,4 +56,5 @@ struct FACELegionsSkyRenderer
 	TArray<TWeakObjectPtr<UProceduralMeshComponent>> Meshes;
 	FLinearColor Haze = FLinearColor::Transparent;
 	float RampCoverage = 0.f;
+	TArray<ACESkyMotion::FUVBasis> CloudBases;
 };

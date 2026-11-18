@@ -384,6 +384,18 @@ bool FACERetailWeatherTest::RunTest(const FString& Parameters)
                     for (const auto& Emitter:Sky->WeatherScripts->ActiveEmitters)
                         if (Emitter.AuthoredEmitterId==0x32000455)
                             TestEqual(TEXT("Long-lived sky clouds retain their DAT lifespan"),Emitter.Info.Lifespan,3300.0);
+					Sky->WeatherScripts->SetEnvironmentSkyTime(100.);
+					Sky->WeatherScripts->TickEmitters(.01f);
+					const auto* CloudEmitter=Sky->WeatherScripts->ActiveEmitters.FindByPredicate([](const auto& E){return E.AuthoredEmitterId==0x32000455;});
+					if (CloudEmitter)
+					{
+						const double Age=CloudEmitter->Age;
+						Sky->WeatherScripts->SetEnvironmentSkyTime(104.);
+						Sky->WeatherScripts->TickEmitters(.01f);
+						CloudEmitter=Sky->WeatherScripts->ActiveEmitters.FindByPredicate([](const auto& E){return E.AuthoredEmitterId==0x32000455;});
+						TestTrue(TEXT("Scripted sky clouds age by server time rather than frame time"),CloudEmitter && FMath::IsNearlyEqual(CloudEmitter->Age,Age+4.,.001));
+					}
+					Sky->WeatherScripts->EnvironmentSkyTime.Reset(); Sky->WeatherScripts->PreviousEnvironmentSkyTime.Reset();
                     const int32 Before=Sky->WeatherScripts->ActiveEmitters.Num();
                     Sky->SetWeatherEnabled(false);
                     TestEqual(TEXT("Disabling weather retains before-pass celestial particles"),Sky->WeatherScripts->ActiveEmitters.Num(),Before);

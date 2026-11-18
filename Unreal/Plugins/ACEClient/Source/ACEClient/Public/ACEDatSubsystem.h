@@ -310,6 +310,7 @@ public:
 	float GetWorldFogEndCm() const { return WorldFogEndCm; } // personal: far-scenery
 	void RegisterLandSky(UMaterialInstanceDynamic* Material);
 	void SetLandSky(UTexture2D* Mask, const FLinearColor& Motion, const FLinearColor& AmbientTint);
+	void SetSkyAnimationTime(double Seconds);
 
 	/** Retail linear distance fog (MinWorldFog→MaxWorldFog) on land/scenery materials. */
 	void SetWorldDistanceFog(float StartCm, float EndCm, const FLinearColor& Color, float Amount);

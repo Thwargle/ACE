@@ -124,6 +124,7 @@ protected:
 		bool bForceWeatherZ = false;
 		/** Local bearing of the AC1 sun or moon card. */
 		FVector LocalBodyDirection = FVector::ZeroVector;
+		FVector LocalCloudTravel = FVector::ZeroVector;
 	};
 
 	/** GetSky-resolved per-object state for one frame. */

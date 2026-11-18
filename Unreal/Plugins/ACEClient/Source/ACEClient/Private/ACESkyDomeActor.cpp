@@ -1,5 +1,6 @@
 #include "ACESkyDomeActor.h"
 #include "Sky/ACELegionsSkyRenderer.h"
+#include "Sky/ACESkyMotion.h"
 #include "ACERuntimeOptions.h"
 #include "ACETerrainPresenterComponent.h"
 #include "GameFramework/GameModeBase.h"
@@ -502,6 +503,7 @@ void AACESkyDomeActor::RebuildSlotMesh(FSkySlot& Slot, uint32 GfxId)
 	}
 
 	int32 SectionIndex = 0;
+	ACESkyMotion::FUVBasis CloudBasis;
 
 	for (const FACEBuiltSetupPart& Part : Built->Parts)
 	{
@@ -530,6 +532,8 @@ void AACESkyDomeActor::RebuildSlotMesh(FSkySlot& Slot, uint32 GfxId)
 				Norms[v] = Part.BindTransform.TransformVectorNoScale(Norms[v]).GetSafeNormal();
 			}
 			PersonalSkyHorizon::ExtendSection(GfxId, Verts, Triangles, Norms, UVs, Colors); // personal: sky-horizon
+			if (IsCloudDeck(Slot.Def) && UVs.Num() == Verts.Num())
+				CloudBasis.Consider(Verts, UVs, Triangles);
 
 			// GameSky draws the authored polygons in DAT order without depth writes.
 			// The shared builder already converts winding. Reversing it here exposes
@@ -686,6 +690,7 @@ void AACESkyDomeActor::RebuildSlotMesh(FSkySlot& Slot, uint32 GfxId)
 
 	Slot.Mesh = Mesh;
 	Slot.ActiveGfxId = GfxId;
+	Slot.LocalCloudTravel = CloudBasis.Travel(FVector2D(Slot.Def.TexVelocityX, Slot.Def.TexVelocityY));
 	if (Slot.Def.DefaultGfxObjectId == RetailSun || Slot.Def.DefaultGfxObjectId == RetailPrimaryMoon)
 		Slot.LocalBodyDirection = Mesh->CalcBounds(FTransform::Identity).Origin.GetSafeNormal();
 	SlotMeshes.Add(Mesh);
@@ -974,15 +979,15 @@ bool AACESkyDomeActor::UpdateImportedSky(float DayFraction, bool bEnabled)
 	}
 	if (Visible)
 	{
-		const double Now=GetWorld()->GetTimeSeconds();
-		if (Now >= LastImportedUpdate && Now-LastImportedUpdate < .1 && FMath::Abs(DayFraction-LastImportedTime)<.0005f)
-			return true;
-		LastImportedUpdate=Now;
+		LastImportedUpdate=GetWorld()->GetTimeSeconds();
 		LastImportedTime=DayFraction;
 		int32 A, B;
 		float Alpha;
 		BracketTimeOfDay(ActiveGroup.TimesOfDay,DayFraction,A,B,Alpha);
 		FACELegionsSkyFrame Frame;
+		Frame.Seconds = ClientSubsystem && ClientSubsystem->HasGameTime()
+			? ClientSubsystem->GetGameTimeTicks() : GetWorld()->GetTimeSeconds();
+		float WindOpacity = -1.f;
 		Frame.bClearForecast = ActiveGroup.DayName == TEXT("Clear") || ActiveGroup.DayName == TEXT("Sunny");
 		if (ActiveGroup.TimesOfDay.IsValidIndex(A) && ActiveGroup.TimesOfDay.IsValidIndex(B))
 		{
@@ -1014,6 +1019,13 @@ bool AACESkyDomeActor::UpdateImportedSky(float DayFraction, bool bEnabled)
 			}
 			else if (CloudDeck)
 			{
+				if (State.GfxId != Slot.ActiveGfxId) RebuildSlotMesh(Slot,State.GfxId);
+				if (Opacity > WindOpacity && !Slot.LocalCloudTravel.IsNearlyZero())
+				{
+					Frame.CloudDirection = CalcFrameQuat(State.HeadingDeg,State.RotationDeg)
+						.RotateVector(Slot.LocalCloudTravel).GetSafeNormal2D();
+					WindOpacity = Opacity;
+				}
 				if (State.GfxId == RetailOvercast) Frame.Overcast=Opacity;
 				else Frame.CloudOpacity=FMath::Max(Frame.CloudOpacity,Opacity);
 			}
@@ -1045,6 +1057,10 @@ bool AACESkyDomeActor::UpdateImportedSky(float DayFraction, bool bEnabled)
 void AACESkyDomeActor::UpdateSky(float DayFraction, float DeltaSeconds, bool bUseImported)
 {
 	const bool UseImported=UpdateImportedSky(DayFraction, bUseImported);
+	const double SkySeconds = ClientSubsystem && ClientSubsystem->HasGameTime()
+		? ClientSubsystem->GetGameTimeTicks() : GetWorld()->GetTimeSeconds();
+	if (WeatherScripts && ClientSubsystem && ClientSubsystem->HasGameTime())
+		WeatherScripts->SetEnvironmentSkyTime(SkySeconds);
 	const TArray<FACEDatSkyTimeOfDay>& Keys = ActiveGroup.TimesOfDay;
 	int32 IdxA = INDEX_NONE;
 	int32 IdxB = INDEX_NONE;
@@ -1072,6 +1088,7 @@ void AACESkyDomeActor::UpdateSky(float DayFraction, float DeltaSeconds, bool bUs
 		ACE_PROFILE_SCOPE(SkyLighting);
 		UpdateWorldLighting(Keys[IdxA], Keys[IdxB], Alpha, DayFraction);
 	}
+	if (DatSubsystem && UseImported) DatSubsystem->SetSkyAnimationTime(SkySeconds);
 
 	for (FSkySlot& Slot : Slots)
 	{
@@ -1139,16 +1156,11 @@ void AACESkyDomeActor::UpdateSky(float DayFraction, float DeltaSeconds, bool bUs
 			|| !FMath::IsNearlyZero(Slot.Def.TexVelocityY);
 		if (bScrolls)
 		{
-			Slot.UvOffset.X = FMath::Fmod(Slot.UvOffset.X + Slot.Def.TexVelocityX * DeltaSeconds, 1.f);
-			Slot.UvOffset.Y = FMath::Fmod(Slot.UvOffset.Y + Slot.Def.TexVelocityY * DeltaSeconds, 1.f);
-			if (Slot.UvOffset.X < 0.f)
-			{
-				Slot.UvOffset.X += 1.f;
-			}
-			if (Slot.UvOffset.Y < 0.f)
-			{
-				Slot.UvOffset.Y += 1.f;
-			}
+			// Rain falls at its authored speed; cloud movement follows the same
+			// synchronized clock as the sun, moons and day/night palette.
+			const double Seconds = Slot.bWeather ? DeltaSeconds : SkySeconds;
+			Slot.UvOffset.X = ACESkyMotion::Offset(Seconds, Slot.Def.TexVelocityX, Slot.bWeather ? Slot.UvOffset.X : 0.);
+			Slot.UvOffset.Y = ACESkyMotion::Offset(Seconds, Slot.Def.TexVelocityY, Slot.bWeather ? Slot.UvOffset.Y : 0.);
 		}
 
 		for (int32 MaterialIndex = 0; MaterialIndex < Slot.Mids.Num(); ++MaterialIndex)

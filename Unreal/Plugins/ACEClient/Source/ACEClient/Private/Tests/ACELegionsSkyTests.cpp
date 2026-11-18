@@ -826,8 +826,11 @@ bool FACELegionsSkyTest::RunTest(const FString&)
 		return Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
 	};
 	TArray<FColor> Clouded,Drifted,Clear;
+	Owner->DatSubsystem->SetSkyAnimationTime(Session->GetPortalYearTicks());
 	if (!TestTrue(TEXT("Capture terrain under imported clouds"),CaptureLand(Clouded))) return false;
-	for (int32 I=0; I<60; ++I) World->Tick(LEVELTICK_TimeOnly,.25f);
+	// Advance the sky clock while engine time is unchanged. Real time alone
+	// must no longer move the terrain mask independently of the sky.
+	Owner->DatSubsystem->SetSkyAnimationTime(Session->GetPortalYearTicks()+15.);
 	if (!TestTrue(TEXT("Capture terrain after cloud drift"),CaptureLand(Drifted))) return false;
 	Owner->DatSubsystem->SetLandSky(nullptr,FLinearColor::Transparent,Owner->ImportedSky->Current.AmbientColor);
 	if (!TestTrue(TEXT("Capture identical terrain without clouds"),CaptureLand(Clear))) return false;
@@ -910,6 +913,65 @@ bool FACELegionsSkyTest::RunTest(const FString&)
 	TestTrue(TEXT("Returning outdoors restores the AC2 sky"), Owner->UpdateImportedSky(.5f, true));
 	Owner->UpdateFog(Stock,Stock,0);
 	TestTrue(TEXT("Legions world fog resumes outdoors"),Owner->DatSubsystem->GetWorldFogEndCm() > 1000.f);
+	// Verify both imported texture stages travel in AC1's world direction.
+	SetClock(39762,.5);
+	Owner->ClearSky(true); Owner->TryBuild();
+	Retail->ClearSky(); Retail->TryBuild();
+	Owner->UpdateSky(.5f,0,true); Retail->UpdateSky(.5f,0,false);
+	const AACESkyDomeActor::FSkySlot* Wind = nullptr;
+	float WindOpacity = -1.f;
+	for (const auto& Slot : Retail->Slots)
+		if (!Slot.LocalCloudTravel.IsNearlyZero() && Slot.Mesh && Slot.Mesh->IsVisible())
+		{
+			float Opacity = Slot.Mids[0]->K2_GetScalarParameterValue(TEXT("OpacityMul"));
+			if (Opacity > WindOpacity) { Wind = &Slot; WindOpacity = Opacity; }
+		}
+	if (!TestNotNull(TEXT("AC1 cloud supplies world wind"),Wind)) return false;
+	const FVector WindDirection = Wind->Mesh->GetComponentQuat().RotateVector(Wind->LocalCloudTravel).GetSafeNormal2D();
+	TInlineComponentArray<UProceduralMeshComponent*> MovingParts(Owner);
+	UProceduralMeshComponent* CloudPart = nullptr;
+	for (auto* Part : MovingParts)
+		if (Part->IsVisible())
+			if (auto* Mid = Cast<UMaterialInstanceDynamic>(Part->GetMaterial(0)))
+				if (Mid->K2_GetVectorParameterValue(TEXT("StageOps")).A > .5f) CloudPart = Part;
+	if (!TestNotNull(TEXT("Imported two-stage cloud sheet is visible"),CloudPart)) return false;
+	auto* CloudMid = CastChecked<UMaterialInstanceDynamic>(CloudPart->GetMaterial(0));
+	ACESkyMotion::FUVBasis Basis;
+	const auto* Section = CloudPart->GetProcMeshSection(0);
+	TArray<FVector> Positions; TArray<FVector2D> Coordinates; TArray<int32> Indices;
+	for (const auto& Vertex : Section->ProcVertexBuffer) { Positions.Add(Vertex.Position); Coordinates.Add(Vertex.UV0); }
+	for (uint32 Index : Section->ProcIndexBuffer) Indices.Add(Index);
+	Basis.Consider(Positions,Coordinates,Indices);
+	const auto StartOffset = CloudMid->K2_GetVectorParameterValue(TEXT("UVOffset"));
+	SetClock(39762,.5+1./7620.); Owner->UpdateSky(.5f,0,true);
+	const auto EndOffset = CloudMid->K2_GetVectorParameterValue(TEXT("UVOffset"));
+	auto Delta = [](float A,float B) { double D=B-A; return D-FMath::RoundToDouble(D); };
+	for (const FVector2D Motion : {FVector2D(Delta(StartOffset.R,EndOffset.R),Delta(StartOffset.G,EndOffset.G)),
+		FVector2D(Delta(StartOffset.B,EndOffset.B),Delta(StartOffset.A,EndOffset.A))})
+	{
+		const FVector Travel = CloudPart->GetComponentQuat().RotateVector(Basis.Travel(Motion)).GetSafeNormal2D();
+		TestTrue(TEXT("Imported cloud stages move with AC1's clouds"),FVector::DotProduct(Travel,WindDirection)>.999);
+	}
+	const auto MaskMotion=Owner->ImportedSky->CloudMotion;
+	TestTrue(TEXT("Terrain cloud shadows travel with the clouds"),
+		FVector::DotProduct(FVector(-MaskMotion.G,-MaskMotion.B,0).GetSafeNormal2D(),WindDirection)>.999);
+	// Image evidence: a large sky-time step with no engine-time step must
+	// visibly animate the composed imported sky, not just its status output.
+	Floor->SetVisibility(false); Caster->SetVisibility(false);
+	Camera->PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_RenderScenePrimitives;
+	Camera->ClearShowOnlyComponents();
+	Camera->SetWorldLocation(Owner->GetActorLocation());
+	Camera->SetWorldRotation(FRotator(65,0,0));
+	TArray<FColor> MotionBefore,MotionAfter;
+	ReadView(MotionBefore);
+	SetClock(39762,.5+64./7620.); Owner->UpdateSky(.5f,0,true);
+	ReadView(MotionAfter);
+	int32 MotionPixels=0;
+	for (int32 I=0; I<MotionBefore.Num(); ++I)
+		MotionPixels += FMath::Abs(int32(MotionBefore[I].R)-MotionAfter[I].R)>3;
+	SaveView(MotionBefore,TEXT("timelapse-before.png")); SaveView(MotionAfter,TEXT("timelapse-64x-after.png"));
+	AddInfo(FString::Printf(TEXT("64x sky animation changes %d pixels with engine time fixed"),MotionPixels));
+	TestTrue(TEXT("Timelapse visibly moves the imported sky"),MotionPixels>MotionBefore.Num()/100);
 	{
 		const float SavedOption=ACERuntimeOptions::Get(TEXT("LegionsSky"));
 		ACERuntimeOptions::Set(TEXT("LegionsSky"),1);
