@@ -188,7 +188,7 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 			[SNew(SBorder).Padding(0,0,0,3).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
 			.BorderBackgroundColor_Lambda([this,I](){return SettingsCategory==I?MenuGold:FLinearColor::Transparent;})
 			[Button(Literal(CategoryNames[I]),[this,I](){SettingsCategory=I;},16)]];
-			auto Page=SNew(SScrollBox);Sections.Add(Page);Switcher->AddSlot()[Page];
+			auto Page=SNew(SScrollBox).Tag(FName(CategoryNames[I]));Sections.Add(Page);Switcher->AddSlot()[Page];
 		}
 		List->AddSlot().AutoHeight().Padding(0,8)[Categories];
 		auto Scroll=Sections[1];
@@ -266,7 +266,7 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 		Scroll->AddSlot().Padding(0, 6)[Button(TAttribute<FText>::CreateLambda([Rig]()
 			{ return FText::FromString(Rig.IsValid() && Rig->GetSettings()->bRun ? TEXT("Movement: Run") : TEXT("Movement: Walk")); }),
 			[Rig]() { if (Rig.IsValid()) Rig->ChangeSetting(TEXT("Run")); })];
-		for (FName Setting : {FName("Height"), FName("Panel"), FName("Distance"), FName("Vitals"), FName("CompassSize"), FName("OptionsSize"), FName("Chat"), FName("Wrist"), FName("Speed"), FName("ForwardAssist"), FName("TurnSpeed"), FName("Stability"), FName("HandPitch"), FName("Draw"), FName("BowAnchor")})
+		for (FName Setting : {FName("Height"), FName("Panel"), FName("Distance"), FName("MenuRecenter"), FName("Vitals"), FName("CompassSize"), FName("OptionsSize"), FName("Chat"), FName("Wrist"), FName("Speed"), FName("ForwardAssist"), FName("TurnSpeed"), FName("Stability"), FName("HandPitch"), FName("Draw"), FName("BowAnchor")})
 		{
 			Scroll=Sections[(Setting=="Height" || Setting=="Speed" || Setting=="ForwardAssist" || Setting=="TurnSpeed")?0:
 				(Setting=="HandPitch" || Setting=="Draw" || Setting=="BowAnchor" || Setting=="Stability")?2:1];
@@ -277,6 +277,7 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 					if (Setting == "Height") return FText::FromString(FString::Printf(TEXT("Eye height adjustment: %+.0f cm"), S->EyeHeightOffset));
 					if (Setting == "Panel") return FText::FromString(FString::Printf(TEXT("Menu scale: %.0f%%"), S->PanelScale / .11f * 100));
 					if (Setting == "Distance") return FText::FromString(FString::Printf(TEXT("Menu distance: %.0f cm"), S->PanelDistance));
+					if (Setting == "MenuRecenter") return FText::FromString(FString::Printf(TEXT("Inventory recenter radius: %.0f degrees minimum"), S->MenuRecenterDegrees));
 					if (Setting == "Wrist") return FText::FromString(FString::Printf(TEXT("Hotbar scale: %.0f%%"), S->WristScale / .06f * 100));
 					if (Setting == "CompassSize") return FText::FromString(FString::Printf(TEXT("Compass scale: %.0f%%"), S->CompassScale / .065f * 100));
 					if (Setting == "OptionsSize") return FText::FromString(FString::Printf(TEXT("VR options scale: %.0f%%"), S->OptionsScale / .1f * 100));
@@ -292,9 +293,13 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 				}), 22)]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0, 10)[SNew(SBox).HeightOverride(36)
 				[SNew(SSlider).Style(&MenuSliderStyle()).SliderBarColor(FLinearColor::White).SliderHandleColor(FLinearColor::White)
+				.Tag(Setting)
+				.IsEnabled_Lambda([Rig, Setting]() { return Rig.IsValid() && (Setting != "MenuRecenter" || Rig->GetSettings()->MenuAnchorMode == 1); })
 				.Value_Lambda([Rig, Setting]() { return Rig.IsValid() ? Rig->GetSliderSetting(Setting) : 0.f; })
 				.OnValueChanged_Lambda([Rig, Setting](float Value) { if (Rig.IsValid()) Rig->SetSliderSetting(Setting, Value); })
 				.OnMouseCaptureEnd_Lambda([Rig]() { if (Rig.IsValid()) Rig->GetSettings()->Persist(); })]]];
+			if (Setting == "MenuRecenter")
+				Scroll->AddSlot().Padding(10,0,10,8)[Text(FText::FromString(TEXT("Body anchor only. Higher values delay recentering. The radius expands to fit wider panels.")),18)];
 		}
 		for (FName Setting : {FName("PinMenu"), FName("ShowWrist"), FName("PinHotbar"), FName("Compass"), FName("CompassAnchor"), FName("CompassLock"), FName("MenuLock"), FName("OptionsLock"), FName("PinVitals"), FName("VitalsAnchor"), FName("VitalsLock"), FName("PinChat"), FName("Turn"), FName("Angle"), FName("Hand"), FName("Movement"), FName("Seated"), FName("Body"), FName("Haptics"), FName("Render")})
 		{
