@@ -52,6 +52,6 @@ ACECLIENT_API float SoundGain(bool bAmbient);
 ACECLIENT_API uint32 ChatFontId();
 /** Shared by plugin labels and editable controls; at most one config read per frame. */
 ACECLIENT_API float PluginTextScale();
-ACECLIENT_API float DesktopUIScale(FIntPoint ViewportSize, bool bVR);
-ACECLIENT_API void ApplyDesktopUIScale(FIntPoint ViewportSize, bool bVR);
+ACECLIENT_API float DesktopUIScale(FIntPoint ViewportSize, bool bVR, float WindowDPIScale = 1.f);
+ACECLIENT_API void ApplyDesktopUIScale(FIntPoint ViewportSize, bool bVR, float WindowDPIScale = 1.f);
 }
