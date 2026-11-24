@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: Thwargle/ACUnrealPlugins
-          ref: 097c788b4d154e18f792c63a3b1741931942f619
+          ref: 66b9d25f9bf6f13228aa40b03031d5e727d0e772
           path: catalog-tools
           persist-credentials: false
       - name: Publish verified packages for this plugin revision
