@@ -1,20 +1,17 @@
-# AC:Unreal / AC:VR release 165
+# AC:Unreal / AC:VR release 166
 
-Windows desktop, PC VR, native Linux, standalone Quest, and the Android phone and tablet preview share version **2026.11.23.165**.
+Windows desktop, PC VR, native Linux, standalone Quest, and the Android phone and tablet preview share version **2026.11.24.166**.
 
-## Waypoint
+## Plugin Manager
 
-- Search 5,066 locations and plan routes with the included atlas. An atlas you imported stays selected across updates that preserve your character settings.
-- **Find route** calculates directions. **Current directions** reopens the steps for your active route.
+- Open **Plugin Manager** on the account screen to browse official and community plugins, view the developer and repository, and install the ones you want. Update one plugin or use **Update all**.
+- Fresh installs start with an empty plugin list. Existing installations with a recognized previous profile can restore their previously bundled plugins. Uninstalling a managed plugin keeps its saved profiles.
+- Developers can register a GitHub repository once in [ACUnrealPlugins](https://github.com/Thwargle/ACUnrealPlugins). The catalog checks for new published packages hourly.
+- Pack-management plugins can move items between the main pack, side packs, and open external storage, including its accessible side packs. Plugins can choose a placement slot.
 
-## Combat and looting
+## Display and combat
 
-- Enable **Classic movement** in options for retail casting movement locks and animation breaks. The setting is optional.
-- Missile characters using UCM without a navigation route hold their ground when a target is out of range. A busy pickup can be retried while the corpse is open.
-- UCM counts Jack of All Trades when checking base-skill wield requirements.
-- Manual and UCM pickups respect stack capacity, including space reserved by earlier pickups. Excess items go into another stack.
-- Dragging a rare or enchanted item shows its icon overlay and visual effects. This restores the white emblem on the Pearl of Defending.
-
-## Plugins
-
-- Plugin panels have shorter instructions and clearer control labels. UCM’s idle equipment-mana checks process less character data, and spell lists are reused until they change.
+- Resize the Waypoint direction arrow by dragging its corner with the interface unlocked.
+- Desktop display options support 32:9 ultrawide screens.
+- Enable **Stand still to shoot** to require a stop before firing a missile weapon. Turning in place still works. ACE server operators can enforce this with the optional `missile_block_while_moving` property in the updated server.
+- Improve selection and combat sight for small creatures at the waterline, including Bog Moars. Movement releases during an interaction also reach the server when movement resumes.

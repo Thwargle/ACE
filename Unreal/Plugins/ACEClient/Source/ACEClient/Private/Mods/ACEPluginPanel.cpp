@@ -1,4 +1,6 @@
 #include "Mods/ACEPluginPanel.h"
+#include "Mods/ACEPluginCatalog.h"
+#include "ACEUpdateSubsystem.h"
 #include "Mods/ACEPluginPresentation.h"
 #include "Mods/ACEPluginStyle.h"
 #include "Mods/ACEPluginSubsystem.h"
@@ -86,7 +88,7 @@ namespace ACEPluginPanelPrivate
         TSharedPtr<SVerticalBox> SettingsBody;
         TSharedPtr<SEditableTextBox> Name;
         TSharedPtr<SMultiLineEditableTextBox> Json;
-        FString Id, Search, ManagerNotice;
+        FString Id, Search, ManagerNotice, UninstallId;
         bool PluginOnly = false;
         bool Scrollable=true;
         TSharedPtr<SScrollBox> Scroll;
@@ -202,6 +204,23 @@ namespace ACEPluginPanelPrivate
                     Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[SNew(SACEPluginButton).ContentPadding(FMargin(FACEPluginStyle::ButtonPadding)).Tag(FName(*(TEXT("PluginOpen.")+P->Id))).ButtonStyle(&PluginButtonStyle()).IsFocusable(false)
                         .IsEnabled_Lambda([P](){return P->Enabled;})
                         .OnClicked_Lambda([this,PluginId=P->Id](){Open(PluginId);return FReply::Handled();})[Label(TEXT("Open"),16)]];
+                    if(Host->GetGameInstance()->GetSubsystem<UACEUpdateSubsystem>()->CanUseLobby()&&
+                        (FPaths::IsUnderDirectory(P->Directory,Host->UserDirectory()/TEXT("Installed"))||FPaths::IsUnderDirectory(P->Directory,Host->UserDirectory()/TEXT("Catalog/Packages"))))
+                    {
+                        const bool Confirm=UninstallId==P->Id;
+                        Row->AddSlot().AutoWidth().Padding(4,0)[Button(Confirm?TEXT("Confirm uninstall"):TEXT("Uninstall"),[this,PluginId=P->Id,Confirm]()
+                        {
+                            if(Confirm)
+                            {
+                                FString Error;
+                                ManagerNotice=ACEPluginCatalog::Remove(*Host.Get(),PluginId,Error)?TEXT("Plugin uninstalled. Profiles kept."):Error;
+                                UninstallId.Reset();
+                            }
+                            else {UninstallId=PluginId;ManagerNotice=TEXT("Remove all installed copies of this plugin?");}
+                            Rebuild();
+                        })];
+                        if(Confirm)Row->AddSlot().AutoWidth()[Button(TEXT("Cancel"),[this]{UninstallId.Reset();ManagerNotice.Reset();Rebuild();})];
+                    }
                     RowsById.Add(P->Id,SNew(SACEPluginOrderTarget).Host(Host.Get()).Id(P->Id).LockId(TEXT("__manager")).Tag(FName(*(TEXT("PluginManagerOrder.")+P->Id)))
                         [SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.06f,.035f,.014f))
                         .Padding(12).ToolTip(FACEPluginStyle::Tooltip(TAttribute<FText>::CreateLambda([P]{return FText::FromString(P->DisplayTitle()+TEXT(" ")+P->Version);})))
@@ -228,7 +247,7 @@ namespace ACEPluginPanelPrivate
             if(UACEPluginSubsystem::IsLedger(P->Id)){Add(Host->MakeLedgerPanel(P->Id));return;}
             if(P->Id==TEXT("waypoint")){Add(SNew(SBox).HeightOverride(650)[Host->MakeWaypointPanel()]);return;}
             if(P->Id==TEXT("looteditor")){Add(SNew(SBox).HeightOverride(650)[Host->MakeUCMPanel(TEXT("Standalone loot"))]);return;}
-            if(P->Id==TEXT("ucmmicro")){Add(Host->MakeUCMMicroPanel());return;}
+            if(P->Id==TEXT("ucmmicro")||P->UsesCompactControls()){Add(Host->MakeUCMMicroPanel(P->Id));return;}
             if(P->Id==TEXT("actiondeck")){Add(Host->GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>()->MakePanel());return;}
             if(P->Id==TEXT("ucm")){Add(SNew(SBox).HeightOverride(650)[Host->MakeUCMPanel()]);return;}
             if(P->Id==TEXT("itemtools")){Add(SNew(SBox).HeightOverride(650)[Host->MakeItemToolsPanel()]);return;}
@@ -363,7 +382,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakePanel(const FString& PluginId)
     if(PluginId==TEXT("itemtools"))return MakeItemToolsPanel(false);
     if(PluginId==TEXT("autocraft"))return MakeAutoCraftPanel(false);
     if(PluginId==TEXT("ucm.log"))return MakeUCMLogPanel();
-    if(PluginId==TEXT("ucmmicro"))return MakeUCMMicroPanel();
+    if(auto P=Find(PluginId);P&&(PluginId==TEXT("ucmmicro")||P->UsesCompactControls()))return MakeUCMMicroPanel(PluginId);
     if(PluginId==TEXT("actiondeck"))return GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>()->MakePanel();
     if(PluginId==TEXT("waypoint")||PluginId==TEXT("waypoint.map"))return MakeWaypointPanel(PluginId.EndsWith(TEXT(".map")),false,false);
     if(PluginId==TEXT("waypoint.route"))return MakeWaypointRoutePanel();
@@ -398,6 +417,6 @@ void UACEPluginSubsystem::CloseDesktopPluginManager(bool Remember)
 }
 TSharedRef<SWidget> UACEPluginPanel::RebuildWidget()
 {
-    if(auto* GI=GetWorld()?GetWorld()->GetGameInstance():nullptr) if(auto* Host=GI->GetSubsystem<UACEPluginSubsystem>())return Host->MakePanel();
+    if(auto* GI=GetWorld()?GetWorld()->GetGameInstance():nullptr) if(auto* Host=GI->GetSubsystem<UACEPluginSubsystem>())return ACEPluginCatalog::MakeBrowser(Host);
     return SNew(SACEPluginText).Text(FText::FromString(TEXT("Plugin manager unavailable")));
 }

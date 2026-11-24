@@ -1138,17 +1138,16 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 
 	if (!bChatFocused && Client && Client->GetSessionState() == EACESessionState::InWorld)
 	{
+		// A movement press and an attack hotkey can arrive in the same frame.
+		if (bJumpAirborne || !FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R))
+			Client->GetSession()->SetLocalMissileTravel(true);
         if(DatGameplayBinder) DatGameplayBinder->PollKeyboardActions(this);
         else if(GameHUDWidget)for(int32 Slot=0;Slot<9;++Slot)
             if(ACEInputBindings::Pressed(this,ACEInputBindings::Shortcut(Slot)))GameHUDWidget->ActivateHotbarSlot(Slot);
 	}
 	// A hotkey above may have started an attack/cast after these axes were sampled.
 	if (MovementGeneration != FMath::Max(MovementSuppressionSequence, ReadingMovementSequence)) F=R=T=0.f;
-	if (!bVR && DatGameplayBinder)
-	{
-		DatGameplayBinder->SetCombatMovementBlocked(bJumpAirborne
-			|| (!bChatFocused && (!FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R))));
-	}
+	const bool bManualCombatTravel = bJumpAirborne || (!bChatFocused && (!FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R)));
 
 	// Retail pickup is distinct from Use: a portable pack can be opened or collected.
 	if (!bChatFocused && ACEInputBindings::Pressed(this, ACEInputBindings::Action(TEXT("Pickup"))) && Client
@@ -1629,9 +1628,12 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		ReclaimManualMovement();
 	}
 
+	const float PreviousForwardAxis = ForwardAxis;
 	ForwardAxis = F;
 	RightAxis = R;
 	TurnAxis = T;
+	// Headset tracking jitters even at rest. Count room-scale walking above 0.1 m/s.
+	const bool bRoomScaleTravel = VRRoomDelta.SizeSquared2D() > FMath::Square(0.1f * WorldScale * DeltaTime);
 
 	const bool bMouseTurnSend = bMouseFacing
 		&& FMath::Abs(PendingMouseTurnDegrees) > 0.01f;
@@ -1685,7 +1687,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			App->SetTurnInput(bVR || bJumpAirborne ? 0.f : bMouseFacing ? MouseTurnAnimationRate : ReportedTurn*(bRunning?1.5f:1.f));
 			if (!bJumpAirborne && !FMath::IsNearlyZero(F))
 			{
-				const bool bNewForward = FMath::Sign(F) != FMath::Sign(ForwardSent) || bForceMovementResend;
+				const bool bNewForward = FMath::Sign(F) != FMath::Sign(PreviousForwardAxis) || bForceMovementResend;
 				if (bNewForward || ACERuntimeOptions::ClassicMovement()) App->InterruptCastWithMovement();
 				if (bNewForward) App->FinishMissileMotion();
 			}
@@ -1741,6 +1743,12 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		}
 	}
 
+	const bool bTravel = bJumpAirborne || !FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R) || bRoomScaleTravel
+		|| (bWalkingTransitionThisFrame && !WalkingRootDelta.GetTranslation().IsNearlyZero())
+		|| !LandingWorldAceVelocity.IsNearlyZero();
+	Client->GetSession()->SetLocalMissileTravel(bTravel);
+	if (!bVR && DatGameplayBinder) DatGameplayBinder->SetCombatMovementBlocked(bManualCombatTravel);
+
 	const bool bMoving = !FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R) || !FMath::IsNearlyZero(T) || !VRRoomDelta.IsNearlyZero();
 	// Keep local prediction while Use approach is active, and for the full jump arc
 	// (otherwise SoftReconcile snaps idle airborne poses back to the ground).
@@ -1768,7 +1776,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	// leave a held axis whose release could be swallowed by this use freeze.
 	const bool bFreezeMoveToState = !bManualKeys && !bMouseTurnSend && !bMouseTurnSent && !bJumpAirborne && !bJumpCharging
 		&& !bManualMovementCommandSent
-		&& (bServerMoveToActive || bServerTurnActive || bAwaitingUseDone || ApproachUseSendCount > 0 || Client->IsUseBusy());
+		&& (bServerMoveToActive || bServerTurnActive || ReadingMovementSequence || bAwaitingUseDone || ApproachUseSendCount > 0 || Client->IsUseBusy());
 
 	if (bFreezeMoveToState)
 	{
@@ -1779,17 +1787,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		// Session's retail position cadence reports progress. Per-frame AutoPos
 		// here made a 240 Hz client send four times as often as a 60 Hz client.
 		Client->SetForcePositionReporting(true);
-		if (bChanged)
-		{
-			bForceMovementResend = false;
-			ForwardSent = F;
-			RightSent = R;
-			TurnSent = ReportedTurn;
-			bRunningSent = bRunning;
-			bWasMoving = bMoving;
-			bJumpChargeSent = bJumpCharging;
-			bJumpAirborneSent = bJumpAirborne;
-		}
+		// Only a transmitted MoveToState acknowledges an input change. At thaw,
+		// compare the latest axes with the last packet, including partial releases.
 	}
 	else if (bChanged)
 	{
@@ -8031,8 +8030,9 @@ void AACEPlayerController::HandleMotionUpdate(int32 ObjectGuid, const FACEObject
 		bServerControlledMotion=true;
 		ReadingMovementSequence=PreviousReadingSequence?PreviousReadingSequence:++MovementKeySequence;
 		bMouseForwardActive=false;
-		ForwardAxis=RightAxis=TurnAxis=ForwardSent=RightSent=TurnSent=0.f;
-		bWasMoving=bForceMovementResend=false;
+		// Suspend local input while reading. Keep the last transmitted commands
+		// so a release during the interaction can still reach the server.
+		ForwardAxis=RightAxis=TurnAxis=0.f;
 		if (GetPawn()) if (auto* App=GetPawn()->FindComponentByClass<UACECharacterAppearanceComponent>())
 		{
 			App->SetWalkingTransitionsEnabled(false);

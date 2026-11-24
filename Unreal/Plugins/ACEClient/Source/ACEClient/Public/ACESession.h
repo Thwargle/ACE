@@ -392,6 +392,7 @@ public:
 	void GetPlayerPackGuids(TArray<int32>& Out) const;
 	void GetContainerPackGuids(int32 ContainerGuid, TArray<int32>& Out) const;
 	int32 CountContainerSlots(int32 ContainerGuid, bool bPackSlots, int32 Exclude = 0) const;
+	bool HasRoomForInventoryMove(const FACEWorldObject& Item, const FACEWorldObject& Destination, int32 Amount) const;
 
 	/** GameAction Talk (0x0015) — local chat / @commands. */
 	void SendTalk(const FString& Message);
@@ -714,6 +715,8 @@ public:
 
 	/** GameAction TargetedMissileAttack (0x000A) — target, AttackHeight, accuracy 0..1. */
 	void SendTargetedMissileAttack(int32 TargetGuid, uint32 AttackHeight, float AccuracyLevel);
+	bool IsMissileMovementBlocked() const;
+	void SetLocalMissileTravel(bool bTravel) { bLocalMissileTravel = bTravel; }
 
 	/** Cast a known spell — targeted if TargetGuid != 0, else untargeted. */
 	void SendCastSpell(int32 SpellId, int32 TargetGuid = 0);
@@ -1214,6 +1217,8 @@ private:
 	int32 PendingEnterCharacterId = 0;
 	bool bLoginCompleteSent = false;
 	bool bMoving = false;
+	bool bReportedTranslation = false;
+	bool bLocalMissileTravel = false;
 	bool bForcePositionReporting = false;
 	/** Contact flag for periodic AutonomousPosition (0 while airborne). */
 	bool bAutoPosContact = true;

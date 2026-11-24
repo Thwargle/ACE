@@ -287,6 +287,9 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  ClassicMovement=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("ClassicMovement"));
  ClassicMovement->SetWidgetStyle(RoundToggle); ClassicMovement->SetContent(Label(TEXT("Classic movement"))); Box->AddChild(Fixed(ClassicMovement,272,20));
  UACEHoverTooltipWidget::SetWidgetTooltip(ClassicMovement,FText::FromString(TEXT("Use retail spellcasting movement. Forward and backward travel waits for the casting animation. You can strafe, turn, and jump when the gesture permits.")));
+ StationaryMissileAttacks=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("StationaryMissileAttacks"));
+ StationaryMissileAttacks->SetWidgetStyle(RoundToggle); StationaryMissileAttacks->SetContent(Label(TEXT("Stand still to shoot"))); Box->AddChild(Fixed(StationaryMissileAttacks,272,20));
+ UACEHoverTooltipWidget::SetWidgetTooltip(StationaryMissileAttacks,FText::FromString(TEXT("Stop walking, running or strafing and land before firing a missile weapon. You can turn to aim.")));
  InvertMouseX=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("InvertMouseX"));
  InvertMouseY=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("InvertMouseY"));
  InvertMouseX->SetWidgetStyle(RoundToggle);InvertMouseX->SetContent(Label(TEXT("Invert mouse X (horizontal look)")));Box->AddChild(Fixed(InvertMouseX,272,20));
@@ -353,7 +356,8 @@ void UACEVideoSettingsWidget::RefreshResolutions()
  if(!Resolution)return;
  const FString Selected=Resolution->GetSelectedOption();
  Resolution->ClearOptions();
- for(const auto& Size:FACEDesktopDisplay::GetAvailableResolutions(Cast<AACEPlayerController>(GetOwningPlayer())))
+ const auto Mode=EWindowMode::Type(FMath::Clamp(WindowMode->GetSelectedIndex(),0,2));
+ for(const auto& Size:FACEDesktopDisplay::GetAvailableResolutions(Cast<AACEPlayerController>(GetOwningPlayer()),Mode))
   Resolution->AddOption(FString::Printf(TEXT("%d x %d"),Size.X,Size.Y));
  // Refresh when reopening after moving between monitors or hotplugging one.
  // Keep the user's unapplied selection, including a custom window size.
@@ -367,10 +371,10 @@ void UACEVideoSettingsWidget::ResetVideo()
 {
  TGuardValue<bool> Loading(LoadingSettings,true);
  auto* S=UGameUserSettings::GetGameUserSettings();if(!S||!Resolution)return;
+ WindowMode->SetSelectedIndex(int32(S->GetFullscreenMode()));
  RefreshResolutions();
  const auto R=S->GetScreenResolution(); ObservedResolution=R; ObservedWindowMode=int32(S->GetFullscreenMode()); const FString Value=FString::Printf(TEXT("%d x %d"),R.X,R.Y);
  if(Resolution->FindOptionIndex(Value)<0)Resolution->AddOption(Value);Resolution->SetSelectedOption(Value);
- WindowMode->SetSelectedIndex(int32(S->GetFullscreenMode()));
  const int32 Q=S->GetOverallScalabilityLevel();Quality->SetSelectedIndex(Q>=0?Q:5);
  const int32 FPS=FMath::RoundToInt(S->GetFrameRateLimit());const FString Limit=FPS>0?FString::FromInt(FPS):TEXT("Unlimited");
  if(FrameLimit->FindOptionIndex(Limit)<0)FrameLimit->AddOption(Limit);FrameLimit->SetSelectedOption(Limit);
@@ -393,6 +397,7 @@ void UACEVideoSettingsWidget::ResetVideo()
  InvertMouseX->SetIsChecked(ACECameraSettings::GetInvertMouseX());InvertMouseY->SetIsChecked(ACECameraSettings::GetInvertMouseY());
  ToggleMouseLook->SetIsChecked(ACECameraSettings::GetToggleMouseLook());
  ClassicMovement->SetIsChecked(ACERuntimeOptions::ClassicMovement());
+ StationaryMissileAttacks->SetIsChecked(ACERuntimeOptions::StationaryMissileAttacks());
  DesktopScale->SetSelectedIndex(FMath::RoundToInt((ACERuntimeOptions::Get(TEXT("DesktopUIScale"))-1.f)*4.f));
  CursorScale->SetValue(ACERuntimeOptions::Get(TEXT("CursorScale")));
  CursorScaleLabel->SetText(FText::FromString(FString::Printf(TEXT("%d%%"),FMath::RoundToInt(CursorScale->GetValue()*100.f))));
@@ -466,6 +471,7 @@ bool UACEVideoSettingsWidget::HasPendingChanges() const
   || CameraAlignToSlope->IsChecked()!=(ACERuntimeOptions::Get(TEXT("CameraAlignToSlope"))>.5f)
   || ToggleMouseLook->IsChecked()!=ACECameraSettings::GetToggleMouseLook()
   || ClassicMovement->IsChecked()!=ACERuntimeOptions::ClassicMovement()
+  || StationaryMissileAttacks->IsChecked()!=ACERuntimeOptions::StationaryMissileAttacks()
   || InvertMouseY->IsChecked()!=ACECameraSettings::GetInvertMouseY()
   || DesktopScale->GetSelectedIndex()!=FMath::RoundToInt((ACERuntimeOptions::Get(TEXT("DesktopUIScale"))-1.f)*4.f)
   || ObjectGlow->IsChecked()!=(ACERuntimeOptions::Get(TEXT("ObjectGlow"))>.5f)
@@ -528,6 +534,7 @@ void UACEVideoSettingsWidget::ApplyRuntimeOptions()
  ACERuntimeOptions::Set(TEXT("ActiveSoundOnly"),BackgroundAudio->IsChecked()?0:1);
  ACERuntimeOptions::Set(TEXT("CameraAlignToSlope"),CameraAlignToSlope->IsChecked()?1:0);
  ACERuntimeOptions::Set(TEXT("ClassicMovement"),ClassicMovement->IsChecked()?1:0);
+ ACERuntimeOptions::Set(TEXT("StationaryMissileAttacks"),StationaryMissileAttacks->IsChecked()?1:0);
  ACERuntimeOptions::Set(TEXT("Anisotropy"),float(1<<FMath::Clamp(Filtering->GetSelectedIndex(),0,4)));
  if(auto* GI=GetGameInstance()) if(auto* Client=GI->GetSubsystem<UACEClientSubsystem>()) for(auto& P:CharacterChecks)Client->SendSetSingleCharacterOption(P.Key,P.Value->IsChecked());
  ACERuntimeOptions::Apply();
@@ -723,6 +730,7 @@ void UACEVideoSettingsWidget::DefaultsVideo()
  InvertMouseX->SetIsChecked(false);InvertMouseY->SetIsChecked(false);DesktopScale->SetSelectedIndex(0);
  ToggleMouseLook->SetIsChecked(false);
  ClassicMovement->SetIsChecked(false);
+ StationaryMissileAttacks->SetIsChecked(false);
  CursorScale->SetValue(1.f); ChangeCursorScale(1.f);
  ObjectGlow->SetIsChecked(true); ChangeObjectGlow(true);
  UniformDungeonLighting->SetIsChecked(false); ChangeUniformDungeonLighting(false);

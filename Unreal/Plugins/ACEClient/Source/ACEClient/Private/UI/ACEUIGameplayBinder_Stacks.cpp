@@ -17,8 +17,6 @@ bool UACEUIGameplayBinder::CanMoveInventoryAmountToContainer(int32 Guid, int32 C
 		|| Client->GetTradeSelfItems().Contains(Guid) || Client->GetTradeSelfItems().Contains(Container)) return false;
 	if (!ACEInventoryRules::CheckHookStatus(Item, Destination)) return false;
 	Amount = Amount > 0 ? FMath::Min(Amount, FMath::Max(1, Item.StackSize)) : FMath::Max(1, Item.StackSize);
-	const bool bPack = ACEInventoryRules::IsContainer(Item) || (Item.ItemType & ACEItemType::Container)
-		|| (Item.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot);
 	// Retail permits packs in any container with container slots (including
 	// chests). Ordinary backpacks have none. Never allow a containment cycle.
 	TSet<int32> Parents;
@@ -38,15 +36,8 @@ bool UACEUIGameplayBinder::CanMoveInventoryAmountToContainer(int32 Guid, int32 C
 			&& !Client->GetTradeSelfItems().Contains(MergeTarget)
 			&& Session->AvailableMergeAmount(Item, Target) > 0) return true;
 	}
-	// A full move within the same pack simply reorders its existing slot.
-	if (Item.ContainerId == Container && Amount == FMath::Max(1, Item.StackSize)) return true;
 	if (bAutoMerge && Session && Session->FindContainerMergeTarget(Guid,Container,Amount)) return true;
-	// Match the inventory's seven default side slots when a player descriptor
-	// omits capacity. Zero on an ordinary bag still means no nested packs.
-	const int32 Capacity = bPack ? (Container == Client->GetPlayerGuid() && Destination.ContainersCapacity == 0
-		? 7 : Destination.ContainersCapacity) : Destination.ItemsCapacity;
-	if (Capacity == -1) return true;
-	return Session && Capacity > Session->CountContainerSlots(Container,bPack);
+	return Session && Session->HasRoomForInventoryMove(Item, Destination, Amount);
 }
 
 void UACEUIGameplayBinder::UpdateInventoryContainerDropFeedback(FVector2D CanvasLocalPos)

@@ -2284,7 +2284,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                     // changes; retain the actual canvas hit testing and activation.
                     Manager->OnElementActivated.Remove(Gameplay->ActivatedHandle);
                     UACEUIElementManager::ApplyFloatyResizeLayout(Floaty);
-                    for(const FIntPoint Size:{FIntPoint(1920,1080),FIntPoint(2560,1440),FIntPoint(3840,2160),FIntPoint(800,600),FIntPoint(640,480),FIntPoint(800,450),FIntPoint(480,360)})
+                    for(const FIntPoint Size:{FIntPoint(1920,1080),FIntPoint(2560,1440),FIntPoint(3840,2160),FIntPoint(5120,1440),FIntPoint(800,600),FIntPoint(640,480),FIntPoint(800,450),FIntPoint(480,360)})
                     {
                         ScreenSize=Size;
                         CaptureScreen(FString::Printf(TEXT("OptionsWindowResize_%d"),Size.X));

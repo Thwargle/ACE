@@ -31,6 +31,7 @@
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SDPIScaler.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/SCanvas.h"
 #include "Widgets/Input/SButton.h"
@@ -78,10 +79,27 @@ TArray<ACEWaypoint::FRoutePoint> UACEPluginSubsystem::GetWaypointMapRoute(bool D
 }
 namespace
 {
+constexpr float MinWaypointArrowScale = 0.25f;
+const FString ArrowScaleKey = TEXT("waypoint.arrow.scale");
+
 FString ArrowPreferenceFile(const UACEPluginSubsystem& Host)
 {
     return Host.UserDirectory()/TEXT("Waypoint/floating-arrow.txt");
 }
+}
+float UACEPluginSubsystem::WaypointArrowScale() const
+{
+    double Scale = 1.;
+    if (Settings) Settings->TryGetNumberField(ArrowScaleKey, Scale);
+    return FMath::IsFinite(Scale) ? float(FMath::Clamp(Scale, double(MinWaypointArrowScale), 1.)) : 1.f;
+}
+void UACEPluginSubsystem::SetWaypointArrowScale(float Scale, bool Persist)
+{
+    if (!FMath::IsFinite(Scale)) return;
+    Scale = FMath::Clamp(Scale, MinWaypointArrowScale, 1.f);
+    if (!Settings) Settings = MakeShared<FJsonObject>();
+    Settings->SetNumberField(ArrowScaleKey, Scale);
+    if (Persist) SaveSettings();
 }
 void UACEPluginSubsystem::LoadWaypointArrowPreference()
 {
@@ -93,7 +111,7 @@ void UACEPluginSubsystem::LoadWaypointArrowPreference()
         return;
     }
     auto P=Find(TEXT("waypoint"));
-    bShowWaypointArrow=false;
+    bShowWaypointArrow=true;
     if(!P)return;
     // Before the dedicated preference, the profile and desktop window could
     // disagree. Honor an existing opt-out from either source.
@@ -118,22 +136,24 @@ bool UACEPluginSubsystem::WaypointOption(const FString& Key,bool Default) const
 }
 bool UACEPluginSubsystem::SetWaypointOption(const FString& Key,bool Value)
 {
-    auto P=Find(TEXT("waypoint"));if(!P)return false;
     if(Key==TEXT("arrow"))
     {
         bShowWaypointArrow=Value;
+        IFileManager::Get().MakeDirectory(*FPaths::GetPath(ArrowPreferenceFile(*this)),true);
         if(FFileHelper::SaveStringToFile(Value?TEXT("visible"):TEXT("hidden"),*ArrowPreferenceFile(*this),
             FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))return true;
         Notice=TEXT("Could not save floating arrow visibility for the next login.");
         return false;
     }
+    auto P=Find(TEXT("waypoint"));if(!P)return false;
     P->Profile->SetBoolField(Key,Value);
     return SaveProfile(P->Id,P->ProfileName,ProfileJson(P->Id),false);
 }
-bool UACEPluginSubsystem::SetWaypoint(const FString& Text)
+bool UACEPluginSubsystem::SetWaypoint(const FString& Text,bool FromPlugin)
 {
     FVector2D Point;if(!ACEWaypoint::Parse(Text,Point)){Notice=TEXT("Enter coordinates such as 42.0N, 33.6E (N/S first, then E/W).");return false;}
-    SetWaypoint(Point);return true;
+    if(!FromPlugin&&!IsWaypointEnabled())return false;
+    SetWaypoint(Point,0,FromPlugin);return true;
 }
 float UACEPluginSubsystem::WaypointMapOpacity() const
 {return GetPluginWindowOpacity(TEXT("waypoint.map"));}
@@ -160,9 +180,15 @@ void UACEPluginSubsystem::SetWaypointMapZoom(bool Overlay,bool Dungeon,double Va
     if(!Settings)Settings=MakeShared<FJsonObject>();
     Settings->SetNumberField(WaypointZoomKey(Overlay,Dungeon),Value);SaveSettings();
 }
-void UACEPluginSubsystem::SetWaypoint(FVector2D Point,uint32 Dungeon)
+void UACEPluginSubsystem::SetWaypoint(FVector2D Point,uint32 Dungeon,bool FromPlugin)
 {
-    if(!IsWaypointEnabled() || !FMath::IsFinite(Point.X) || !FMath::IsFinite(Point.Y) || FMath::Abs(Point.X)>102 || FMath::Abs(Point.Y)>102)return;
+    if(!FMath::IsFinite(Point.X) || !FMath::IsFinite(Point.Y) || FMath::Abs(Point.X)>102 || FMath::Abs(Point.Y)>102)return;
+    if(!IsWaypointEnabled())
+    {
+        if(FromPlugin){PluginWaypoint=Point;PluginWaypointDungeon=Dungeon;}
+        return;
+    }
+    PluginWaypoint.Reset();
     if(auto P=Find(TEXT("waypoint")))
     {
         P->Profile->SetNumberField(TEXT("east"),Point.X);P->Profile->SetNumberField(TEXT("north"),Point.Y);
@@ -175,6 +201,7 @@ void UACEPluginSubsystem::SetWaypoint(FVector2D Point,uint32 Dungeon)
 }
 bool UACEPluginSubsystem::GetWaypoint(FVector2D& Point,uint32& Dungeon) const
 {
+    if(PluginWaypoint.IsSet()){Point=PluginWaypoint.GetValue();Dungeon=PluginWaypointDungeon;return true;}
     auto P=Find(TEXT("waypoint"));double X,Y,D=0;
     if(!P || !P->Profile->TryGetNumberField(TEXT("east"),X) || !P->Profile->TryGetNumberField(TEXT("north"),Y) || !FMath::IsFinite(X) || !FMath::IsFinite(Y) || FMath::Abs(X)>102 || FMath::Abs(Y)>102)return false;
     P->Profile->TryGetNumberField(TEXT("dungeon_landblock"),D);Dungeon=FMath::IsFinite(D) && D>=0 && D<=MAX_uint32?uint32(D):0;
@@ -185,7 +212,7 @@ bool UACEPluginSubsystem::GetWaypoint(FVector2D& Point,uint32& Dungeon) const
     Point=FVector2D(X,Y);return true;
 }
 void UACEPluginSubsystem::ClearWaypoint()
-{if(auto P=Find(TEXT("waypoint"))){P->Profile->RemoveField(TEXT("east"));P->Profile->RemoveField(TEXT("north"));SaveProfile(P->Id,P->ProfileName,ProfileJson(P->Id),false);}}
+{PluginWaypoint.Reset();if(auto P=Find(TEXT("waypoint"));P&&P->Enabled){P->Profile->RemoveField(TEXT("east"));P->Profile->RemoveField(TEXT("north"));SaveProfile(P->Id,P->ProfileName,ProfileJson(P->Id),false);}}
 
 bool UACEPluginSubsystem::ImportWaypointLocations(const FString& FilePath)
 {
@@ -275,10 +302,10 @@ const TArray<FACEWaypointLandmark>& UACEPluginSubsystem::GetWaypointLocations()
     if(LoadSavedWaypointAtlas(UserDirectory()/TEXT("Waypoint/locations.json"),WaypointLocations,bWaypointAtlasHasRoutingData))
         return WaypointLocations;
 
-    const auto Plugin=IPluginManager::Get().FindPlugin(TEXT("ACEClient"));
+    const auto Plugin=Find(TEXT("waypoint"));
     FString Source,Error;
     ACEWaypointAtlas::FImportResult Parsed;
-    if(Plugin&&FFileHelper::LoadFileToString(Source,*(Plugin->GetBaseDir()/TEXT("ClientMods/waypoint/locations.xml")))
+    if(Plugin&&FFileHelper::LoadFileToString(Source,*(Plugin->Directory/TEXT("locations.xml")))
         &&ACEWaypointAtlas::ParseLocations(Source,Parsed,Error))
     {
         WaypointLocations=MoveTemp(Parsed.Locations);
@@ -330,8 +357,6 @@ public:
     void Construct(const FArguments& A)
     {
         Host=A._Host;FACEPluginStyle::Use(A._Host,TEXT("waypoint.arrow"));
-        SetVisibility(TAttribute<EVisibility>::CreateLambda([H=Host]
-        {return H.IsValid()&&H->ShouldShowWaypointArrow()?EVisibility::HitTestInvisible:EVisibility::Collapsed;}));
     }
     FVector2D ComputeDesiredSize(float)const override{return FVector2D(260,190);}
     void Tick(const FGeometry& G,double T,float D)override{SLeafWidget::Tick(G,T,D);Invalidate(EInvalidateWidgetReason::Paint);}
@@ -1047,10 +1072,10 @@ public:
                 [SearchLocationsButton()];
             Body->AddSlot().AutoHeight()[SNew(SACEPluginText).Tag(TEXT("Waypoint.ImportStatus")).AutoWrapText(true).ColorAndOpacity(Accent)
                 .Text_Lambda([this]{return FText::FromString(Status);})];
-            Body->AddSlot().AutoHeight()[SNew(SWaypointArrow).Host(Host.Get())];
+            Body->AddSlot().AutoHeight().HAlign(HAlign_Left)[Host->MakeWaypointArrowPreview()];
             Body->AddSlot().AutoHeight().Padding(0,8)[Check(TEXT("distance"),TEXT("Show distance to destination"),true)];
             Body->AddSlot().AutoHeight()[Check(TEXT("arrow"),TEXT("Show floating arrow"),true)];
-            Body->AddSlot().AutoHeight().Padding(0,8)[WaypointLabel(TEXT("Use the game UI lock or hold Quick-show pinned windows to move the arrow."),13)];
+            Body->AddSlot().AutoHeight().Padding(0,8)[WaypointLabel(TEXT("Drag the lower-right corner to resize. Unlock the HUD or hold Quick-show pinned windows to adjust the floating arrow."),13)];
             Body->AddSlot().AutoHeight()[WaypointButton(TEXT("Open map"),[this]{if(Host.IsValid())ChildSlot[Host->MakeWaypointPanel(true,false,ShowTitle)];})];
             Body->AddSlot().AutoHeight().Padding(0,12)[WaypointLabel(TEXT("Click coordinates in chat to set a destination."),15)];
         }
@@ -1096,7 +1121,17 @@ private:
 };
 }
 TSharedRef<SWidget> UACEPluginSubsystem::MakeWaypointPanel(bool bMap,bool bArrowOnly,bool bShowTitle)
-{if(bArrowOnly)return SNew(SWaypointArrow).Host(this);return SNew(SWaypointPanel).Host(this).Map(bMap).ShowTitle(bShowTitle);}
+{
+    if (bArrowOnly)
+    {
+        const TWeakObjectPtr<UACEPluginSubsystem> Host(this);
+        return SNew(SDPIScaler).Tag(TEXT("Waypoint.FloatingArrow"))
+            .Visibility_Lambda([Host]{return Host.IsValid() && Host->ShouldShowWaypointArrow() ? EVisibility::HitTestInvisible : EVisibility::Collapsed;})
+            .DPIScale_Lambda([Host]{return Host.IsValid() ? Host->WaypointArrowScale() : 1.f;})
+            [SNew(SWaypointArrow).Host(this)];
+    }
+    return SNew(SWaypointPanel).Host(this).Map(bMap).ShowTitle(bShowTitle);
+}
 TSharedRef<SWidget> UACEPluginSubsystem::MakeWaypointMapIcon(){return SNew(SWaypointMapIcon);}
 TSharedRef<SWidget> UACEPluginSubsystem::MakeWaypointDungeonOverlay()
 {
@@ -1158,7 +1193,6 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeWaypointDungeonOverlay()
 #include "Input/HittestGrid.h"
 #include "Types/PaintArgs.h"
 #include "Widgets/IToolTip.h"
-#include "Widgets/Layout/SDPIScaler.h"
 namespace
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEWaypointOverlayTest,"ACE.Plugins.Waypoint.PinnedDungeon",
@@ -1269,9 +1303,14 @@ bool FACEWaypointOverlayTest::RunTest(const FString&)
     }
     if(FApp::CanEverRender())
     {
+        const float OriginalScale=Host->WaypointArrowScale();
+        const bool WasVisible=Host->ShouldShowWaypointArrow();
+        ON_SCOPE_EXIT{Host->SetWaypointArrowScale(OriginalScale);Host->SetWaypointOption(TEXT("arrow"),WasVisible);};
+        Host->SetWaypointOption(TEXT("arrow"),true);
+        Host->SetWaypointArrowScale(1.f);
         const FVector2D ArrowSize(290,190);FWidgetRenderer Renderer(false,true);
-        auto Arrow=SNew(SWaypointArrow).Host(Host);auto* Target=FWidgetRenderer::CreateTargetFor(ArrowSize,TF_Bilinear,true);
-        TArray<FColor> First;
+        auto Arrow=Host->MakeWaypointPanel(false,true);auto* Target=FWidgetRenderer::CreateTargetFor(ArrowSize,TF_Bilinear,true);
+        TArray<FColor> First,Full;
         for(int32 Turn=0;Turn<2;++Turn)
         {
             FACEPosition P;P.CellId=0x01430171;P.Location=FVector(49,-75,0);
@@ -1287,7 +1326,22 @@ bool FACEWaypointOverlayTest::RunTest(const FString&)
             }
             TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(290,190,Pixels,PNG);
             FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/TEXT("Automation")/FString::Printf(TEXT("Waypoint-Compass-%d.png"),Turn)));
+            if(Turn==1)Full=MoveTemp(Pixels);
         }
+        // Measure the painted compass face separately from its coordinate and distance labels.
+        Host->SetWaypointArrowScale(.5f);
+        ++GFrameCounter;Renderer.DrawWidget(Target,Arrow,ArrowSize,0);FlushRenderingCommands();
+        TArray<FColor> Half;Target->GameThread_GetRenderTargetResource()->ReadPixels(Half);
+        auto CompassWidth=[](const TArray<FColor>& Pixels,float Scale)
+        {
+            int32 MinX=290,MaxX=-1;
+            for(int32 Y=FMath::CeilToInt(36*Scale);Y<117*Scale;++Y)
+                for(int32 X=0;X<290;++X)
+                    if(Pixels[Y*290+X].R>80){MinX=FMath::Min(X,MinX);MaxX=FMath::Max(X,MaxX);}
+            return MaxX-MinX+1;
+        };
+        const int32 FullWidth=CompassWidth(Full,1.f),HalfWidth=CompassWidth(Half,.5f);
+        TestTrue(TEXT("A 50 percent arrow paints at half width on the same HUD surface"),FullWidth>40&&FMath::Abs(HalfWidth*2-FullWidth)<=4);
         Target->ReleaseResource();
     }
     if(FApp::CanEverRender())

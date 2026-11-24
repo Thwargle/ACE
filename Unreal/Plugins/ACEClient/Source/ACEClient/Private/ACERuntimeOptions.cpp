@@ -22,11 +22,13 @@ namespace
  bool bUniformDungeonLighting=false;
  bool bLegionsSky=false;
  bool bClassicMovement=false;
+ bool bStationaryMissileAttacks=false;
 }
 int32 DynamicLightingQuality() { return AppliedDynamicLightingQuality; }
 bool UniformDungeonLighting() { return bUniformDungeonLighting; }
 bool LegionsSky() { return bLegionsSky; }
 bool ClassicMovement() { return bClassicMovement; }
+bool StationaryMissileAttacks() { return bStationaryMissileAttacks; }
 float Get(const TCHAR* Key)
 {
  for (const auto& O : Values) if (FCString::Strcmp(O.Key,Key)==0) {
@@ -67,6 +69,7 @@ void Apply()
 {
  bLegionsSky=Get(TEXT("LegionsSky"))>.5f;
  bClassicMovement=Get(TEXT("ClassicMovement"))>.5f;
+ bStationaryMissileAttacks=Get(TEXT("StationaryMissileAttacks"))>.5f;
  // Windows/Linux apply this gain to the entire audio device after focus loss.
  // Our emitter gains alone cannot override Unreal's default background mute.
  const float BackgroundGain=Get(TEXT("ActiveSoundOnly"))>.5f?0.f:1.f;

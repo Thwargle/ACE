@@ -3114,8 +3114,10 @@ void UACEUIGameplayBinder::BeginCombatPowerCharge(uint32 AttackHeight, bool bHel
 	bCombatPluginAttack = false; // a manual attack takes over from automation
 	if (PlayerController)
 	{
-		PlayerController->PrepareManualCombat(true);
-		bCombatMovementBlocked = PlayerController->IsJumpAirborne();
+		const bool bMovingMissile = CombatMode == int32(ACECombatMode::Missile) && Client && Client->GetSession()
+			&& Client->GetSession()->IsMissileMovementBlocked();
+		if (!bMovingMissile) PlayerController->PrepareManualCombat(true);
+		bCombatMovementBlocked = bMovingMissile || PlayerController->IsJumpAirborne();
 	}
 	bCombatAttackHeld = bHeld;
 	ReleasedAttackPower = RequestedAttackPower;
@@ -3157,6 +3159,8 @@ void UACEUIGameplayBinder::CancelCombatAttack()
 
 void UACEUIGameplayBinder::SetCombatMovementBlocked(bool bBlocked)
 {
+	if (CombatMode == int32(ACECombatMode::Missile) && Client && Client->GetSession())
+		bBlocked |= Client->GetSession()->IsMissileMovementBlocked();
 	const bool bWasBlocked = bCombatMovementBlocked;
 	bCombatMovementBlocked = bBlocked;
 	if (bBlocked)
@@ -3249,7 +3253,7 @@ bool UACEUIGameplayBinder::IsCombatPoseReady() const
 	if (Client && Client->IsInPortalSpace()) return false;
 	if (CombatMode != int32(ACECombatMode::Missile)) return true;
 	const auto Session = Client ? Client->GetSession() : nullptr;
-	if (!Session) return false;
+	if (!Session || Session->IsMissileMovementBlocked()) return false;
 	// ClientCombatSystem::PlayerInReadyPosition(true) requires an interpreted
 	// Ready substate in a missile style. Reload/Aim cannot build a new shot.
 	const uint32 Style = Session->GetCurrentStance();

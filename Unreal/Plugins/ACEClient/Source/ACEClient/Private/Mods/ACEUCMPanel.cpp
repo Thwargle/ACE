@@ -82,7 +82,7 @@ namespace ACEUCMPanelPrivate
         SLATE_BEGIN_ARGS(SUCMPanel):_ShowTitle(true){} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_ARGUMENT(FString,InitialPage) SLATE_ARGUMENT(bool,ShowTitle) SLATE_END_ARGS()
         void Construct(const FArguments& A)
         {
-            Host=A._Host;ShowTitle=A._ShowTitle;FACEPluginStyle::Use(A._Host,A._InitialPage==TEXT("Standalone loot")?TEXT("looteditor"):TEXT("ucm"));if(!A._InitialPage.IsEmpty())Page=A._InitialPage;for(auto P:Host->Plugins)if(P->Id==TEXT("ucm"))Plugin=P;
+            Host=A._Host;ShowTitle=A._ShowTitle;FACEPluginStyle::Use(A._Host,A._InitialPage==TEXT("Standalone loot")?TEXT("looteditor"):TEXT("ucm"));if(!A._InitialPage.IsEmpty())Page=A._InitialPage;Plugin=Host->ProfileOwner(TEXT("ucm"));
             if(!Plugin)return;
             if(Page==TEXT("Rules")||Page==TEXT("Mobs")||Page==TEXT("Mob"))Page=TEXT("Monsters");
             if(Page==TEXT("Profiles"))Page=TEXT("Import");
@@ -1121,7 +1121,7 @@ bool FACEUCMLootEditorTest::RunTest(const FString&)
     auto* GI=NewObject<UGameInstance>();GI->Init();ON_SCOPE_EXIT{GI->Shutdown();};
     TestTrue(TEXT("Retail fonts load for the actual loot editor"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
     auto* Host=GI->GetSubsystem<UACEPluginSubsystem>();TSharedPtr<FACEClientPlugin> Plugin;
-    for(auto P:Host->Plugins)if(P->Id==TEXT("ucm"))Plugin=P;
+    Plugin=Host->ProfileOwner(TEXT("ucm"));
     if(!Plugin)return false;
     const auto Original=Plugin->Profile;ON_SCOPE_EXIT{Plugin->Profile=Original;};
     auto Parse=[](const TCHAR* Text){TSharedPtr<FJsonObject> O;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text),O);return O;};

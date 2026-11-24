@@ -31,13 +31,12 @@ the Waypoint panel, including the north arrow shown when you have no destination
 This choice persists across logins and Waypoint profiles. Chat links, map clicks,
 atlas routes and other plugins can update the destination while the arrow is hidden.
 Turn the checkbox back on to see the current heading or destination.
-**Show distance to destination** is independent. To move the
-arrow, unlock the game UI with the radar lock icon, or hold **Quick-show pinned
-windows** (Left Control by default), and drag the arrow area. The
-arrow has no background, frame or title bar, and does not intercept clicks while
-locked. Its
-position is stored through the same plugin window persistence as other plugins.
-Window positions, the destination and display preferences survive login/restart.
+Unlock the HUD with the radar lock icon or hold **Quick-show pinned windows**
+(Left Control by default). Drag the arrow to move it, or drag its lower-right
+corner to resize the arrow and its labels together. The preview in Waypoint
+settings has the same resize grip. Size and position are saved across logins.
+The locked HUD arrow lets clicks through. **Show distance to destination**
+controls the distance label independently.
 The desktop overlay hides with Alt+Z and is removed on logout.
 
 ## Map

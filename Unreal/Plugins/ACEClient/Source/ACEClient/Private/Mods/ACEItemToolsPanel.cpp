@@ -121,7 +121,8 @@ private:
         Add(SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).IsChecked_Lambda([this](){return Plugin->Enabled?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
             .OnCheckStateChanged_Lambda([this](ECheckBoxState S){Host->SetEnabled(Plugin->Id,S==ECheckBoxState::Checked);})[Text(TEXT("Enable Item Tools inventory actions"))]);
         Add(SNew(SBox).IsEnabled_Lambda([this](){return Plugin->Enabled;})[Button(Label,[this,Mode](){Host->StartItemTools(Mode);})]);
-        Add(Text(TEXT("UCM pauses during this job and resumes afterward."),12,Muted));
+        if(Host->Plugins.ContainsByPredicate([](const auto& Entry){return Entry->Id==TEXT("ucm")&&Entry->Enabled;}))
+            Add(Text(TEXT("UCM pauses during this job and resumes afterward."),12,Muted));
     }
     void Rules(const FString& Key,const FString& Label)
     {
@@ -135,8 +136,18 @@ private:
             .ButtonContent()[SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",14)).AutoWrapText(true).Text_Lambda([this,Key](){const TArray<TSharedPtr<FJsonValue>>* Values=nullptr;
                 const int32 N=P()->TryGetArrayField(Key+TEXT("_rules"),Values)?Values->Num():0;FString Name=String(P(),*(Key+TEXT("_file")));
                 return FText::FromString(N?FString::Printf(TEXT("%s  (%d rules)"),*Name,N):TEXT("None - choose loot profile"));})]];
-        Content->AddSlot().AutoHeight()[Button(TEXT("Copy UCM's active rules"),[this,Key](){for(const auto& U:Host->Plugins)if(U->Id==TEXT("ucm"))
-            {const TArray<TSharedPtr<FJsonValue>>* Values=nullptr;if(U->Profile->TryGetArrayField(TEXT("loot_rules"),Values)){P()->SetArrayField(Key+TEXT("_rules"),*Values);P()->SetStringField(Key+TEXT("_file"),TEXT("Copy of UCM rules"));Save();}}})];
+        if(Host->ProfileOwner(TEXT("ucm")))
+            Content->AddSlot().AutoHeight()[Button(TEXT("Copy active loot rules"),[this,Key]()
+            {
+                const auto Owner=Host->ProfileOwner(TEXT("ucm"));
+                const TArray<TSharedPtr<FJsonValue>>* Values=nullptr;
+                if(Owner&&Owner->Profile->TryGetArrayField(TEXT("loot_rules"),Values))
+                {
+                    P()->SetArrayField(Key+TEXT("_rules"),*Values);
+                    P()->SetStringField(Key+TEXT("_file"),TEXT("Copy of active loot rules"));
+                    Save();
+                }
+            })];
         Add(Tile(Content));
     }
     void Library()

@@ -148,6 +148,16 @@ namespace ACE.Server.Network.Structure
             return ToString(true);
         }
 
+        public bool HasTranslation()
+        {
+            // An omitted speed defaults to 1 on the wire. A VR stick can send
+            // a direction with an explicit zero speed on either axis.
+            return ((ForwardCommand is MotionCommand.WalkForward or MotionCommand.WalkBackwards or MotionCommand.RunForward)
+                    && ((Flags & RawMotionFlags.ForwardSpeed) == 0 || ForwardSpeed != 0))
+                || ((SidestepCommand is MotionCommand.SideStepLeft or MotionCommand.SideStepRight)
+                    && ((Flags & RawMotionFlags.SideStepSpeed) == 0 || SidestepSpeed != 0));
+        }
+
         public bool HasMovement()
         {
             return (Flags & (RawMotionFlags.ForwardCommand | RawMotionFlags.TurnCommand | RawMotionFlags.SideStepCommand)) != 0;

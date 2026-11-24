@@ -1,4 +1,5 @@
 #include "ACESession.h"
+#include "ACERuntimeOptions.h"
 #include "ACEOlthoi.h"
 #include "ACECombatTargeting.h"
 #include "VR/ACEVRLocomotion.h"
@@ -204,7 +205,7 @@ void FACESession::Disconnect()
 	bEnteredWorldSent = false;
 	PendingEnterCharacterId = 0;
 	bLoginCompleteSent = false;
-	bMoving = false;
+	bMoving = bReportedTranslation = bLocalMissileTravel = false;
 	bForcePositionReporting = false;
 	bHaveReportedPosition = false;
 	bPositionReportingSuspended = false;
@@ -385,7 +386,7 @@ void FACESession::ClearWorldState()
 	bEnteredWorldSent = false;
 	PendingEnterCharacterId = 0;
 	bLoginCompleteSent = false;
-	bMoving = false;
+	bMoving = bReportedTranslation = bLocalMissileTravel = false;
 	bForcePositionReporting = false;
 	bHaveReportedPosition = false;
 	bPositionReportingSuspended = false;
@@ -6722,6 +6723,7 @@ void FACESession::HandleViewContents(FACEBinaryReader& Reader)
 	// because ACE sends root/bag ViewContents before the corresponding creates.
 	const int32 RootGuid = ResolveContainerRoot(ContainerGuid);
 	bool bIsPlayerInventory = (RootGuid == PlayerGuid);
+	if (bIsPlayerInventory && PlayerGuid) ++InventoryDataRevision;
 	// ViewContents is also unsolicited inventory metadata at login. Retail
 	// ClientUISystem::OnViewContents only opens the requested ground object.
 	// In particular, bag A and B may arrive before PlayerDescription and their
@@ -8473,6 +8475,16 @@ int32 FACESession::CountContainerSlots(int32 ContainerGuid, bool bPackSlots, int
 	return Guids.Num() - int32(Exclude && Guids.Contains(Exclude));
 }
 
+bool FACESession::HasRoomForInventoryMove(const FACEWorldObject& Item, const FACEWorldObject& Destination, int32 Amount) const
+{
+	// Retail WillItemFitInContainer counts the ordinary and side-pack lists separately.
+	const bool bPack = IsPackSlotItem(Item) || Item.IsOpenable();
+	int32 Capacity = bPack ? Destination.ContainersCapacity : Destination.ItemsCapacity;
+	if (Destination.Guid == PlayerGuid && Capacity == 0) Capacity = bPack ? 7 : 102;
+	if (Item.ContainerId == Destination.Guid && Amount == FMath::Max(1, Item.StackSize)) return true;
+	return Capacity == -1 || (Capacity > 0 && CountContainerSlots(Destination.Guid, bPack) < Capacity);
+}
+
 void FACESession::GetInventorySlotGuids(int32 ContainerGuid, bool bPackSlots, TArray<int32>& Out) const
 {
 	Out.Reset();
@@ -9235,9 +9247,14 @@ void FACESession::SendTargetedMeleeAttack(int32 TargetGuid, uint32 AttackHeight,
 	++CombatEventRevision;
 }
 
+bool FACESession::IsMissileMovementBlocked() const
+{
+	return ACERuntimeOptions::StationaryMissileAttacks() && (bLocalMissileTravel || bReportedTranslation || !bAutoPosContact);
+}
+
 void FACESession::SendTargetedMissileAttack(int32 TargetGuid, uint32 AttackHeight, float AccuracyLevel)
 {
-	if (State != EACESessionState::InWorld || TargetGuid == 0)
+	if (State != EACESessionState::InWorld || TargetGuid == 0 || IsMissileMovementBlocked())
 	{
 		return;
 	}
@@ -9512,8 +9529,8 @@ void FACESession::SendMoveToState(float Forward, float Strafe, float Turn, bool 
 	AutoPosTimer = 0.f;
 	// Airborne physics remains active even with zero input. Ordinary position
 	// reports resume on landing; negotiated VR tracking reports its own feet.
-	bMoving = !FMath::IsNearlyZero(Forward) || !FMath::IsNearlyZero(Strafe)
-		|| !FMath::IsNearlyZero(Turn) || !bContact;
+	bReportedTranslation = !FMath::IsNearlyZero(Forward) || !FMath::IsNearlyZero(Strafe);
+	bMoving = bReportedTranslation || !FMath::IsNearlyZero(Turn) || !bContact;
 	bAutoPosContact = bContact;
 }
 
