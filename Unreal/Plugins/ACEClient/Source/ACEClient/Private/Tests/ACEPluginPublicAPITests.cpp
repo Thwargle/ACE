@@ -1,11 +1,13 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Misc/CommandLine.h"
 #include "ACETestDatDirectory.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
 #include "Interfaces/IPluginManager.h"
 #include "Mods/ACEPluginSubsystem.h"
+#include "Mods/ACEPluginCatalog.h"
 #include "Mods/ACEPluginVM.h"
 #include "Mods/ACEPluginPresentation.h"
 #include "Mods/ACEPluginDesktop.h"
@@ -745,14 +747,38 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
     P->Profile=Off;P->Profile->SetBoolField(TEXT("mana_charges_when_off"),true);H->NextIdleManaDecision=0;H->Tick(0);
     TestTrue(TEXT("Custom plugin can opt into stopped gear recharge"),H->IdleManaOwner==P->Id&&H->IdleManaVM.IsValid()&&!H->IdleManaFailed&&!P->Running);
     const auto ModSources=IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods");
+    FString Packages;
+    TArray<ACEPluginCatalog::FEntry> Releases;
+    if(FParse::Value(FCommandLine::Get(),TEXT("OfficialPluginFixtureDir="),Packages))
+    {
+        FString Xml;
+        if(!TestTrue(TEXT("Read official package descriptors"),FFileHelper::LoadFileToString(Xml,*(ModSources/TEXT("legacy-plugins.xml")))&&ACEPluginCatalog::Parse(Xml,Releases,Error)))return false;
+    }
+    else if(!IFileManager::Get().FileExists(*(ModSources/TEXT("ucm/plugin.json"))))
+    {
+        AddInfo(TEXT("Supply -OfficialPluginFixtureDir to run the standalone official plugin cases in a packaged client."));
+        return true;
+    }
     for(const FString Id:{TEXT("ucm"),TEXT("itemtools"),TEXT("foundry"),TEXT("derethlens"),TEXT("thirdeye"),TEXT("ucmmicro")})
     {
         H->StorageRoot=Root/TEXT("Standalone")/Id;
-        const FString Destination=H->StorageRoot/TEXT("Installed")/Id;
-        auto& Files=FPlatformFileManager::Get().GetPlatformFile();
-        Files.CreateDirectoryTree(*Destination);
-        if(!TestTrue(Id+TEXT(" standalone files copied"),Files.CopyDirectoryTree(*Destination,*(ModSources/Id),true)))return false;
         H->Settings=MakeShared<FJsonObject>();H->Discover();
+        if(!Packages.IsEmpty())
+        {
+            TGuardValue<EACESessionState> AtAccountScreen(Session.State,EACESessionState::Disconnected);
+            const auto* Release=Releases.FindByPredicate([&Id](const auto& Entry){return Entry.Id==Id;});
+            TArray<uint8> Bytes;
+            if(!TestTrue(Id+TEXT(" official package found"),Release&&FFileHelper::LoadFileToArray(Bytes,*(Packages/(Id+TEXT(".acplugin"))))))return false;
+            if(!ACEPluginCatalog::Install(*H,*Release,Bytes,Error)){AddError(Id+TEXT(": ")+Error);return false;}
+        }
+        else
+        {
+            const FString Destination=H->StorageRoot/TEXT("Installed")/Id;
+            auto& Files=FPlatformFileManager::Get().GetPlatformFile();
+            Files.CreateDirectoryTree(*Destination);
+            if(!TestTrue(Id+TEXT(" standalone files copied"),Files.CopyDirectoryTree(*Destination,*(ModSources/Id),true)))return false;
+            H->Discover();
+        }
         const auto Only=H->Find(Id);
         if(!TestTrue(Id+TEXT(" is the sole installed plugin"),Only&&H->Plugins.Num()==1))return false;
         H->SetEnabled(Id,true);
