@@ -468,6 +468,8 @@ public:
 	void SendPutItemInContainer(int32 ItemGuid, int32 ContainerGuid, int32 Placement, bool bAutoMerge = true);
 	/** Retail auto-merge: first destination stack that can hold the entire selected amount. */
 	int32 FindContainerMergeTarget(int32 ItemGuid, int32 ContainerGuid, int32 Amount, bool bIncludeSourcePack = false) const;
+	/** Stack capacity still available after accounting for outstanding merge requests. */
+	int32 AvailableMergeAmount(const FACEWorldObject& Source, const FACEWorldObject& Target) const;
 
 	/** GameAction StackableMerge (0x0054) — combine stackables by guid (amount of From into To). */
 	void SendStackableMerge(int32 MergeFromGuid, int32 MergeToGuid, int32 Amount);
@@ -973,6 +975,15 @@ private:
 	void RemoveInventoryObject(int32 ItemGuid);
 	int32 PendingEquipmentGuid = 0;
 	TMap<int32,double> PendingInventoryTransfers;
+	struct FPendingStackMerge
+	{
+		int32 Source, Target, Amount, TargetAfter;
+		double ExpiresAt;
+	};
+	TArray<FPendingStackMerge> PendingStackMerges;
+	int32 StackCountWithPendingMerges(const FACEWorldObject& Target) const;
+	void ConfirmStackCount(int32 Target, int32 Count);
+	void RejectStackMerge(int32 ItemGuid);
 	// Diagnostics only; never predict consumption or keep an item owned locally.
 	TMap<int32, double> RecentGiveRequests;
 	void LogGiveUpdate(int32 ItemGuid, const TCHAR* Receipt, int32 StackSize, int32 ContainerGuid);

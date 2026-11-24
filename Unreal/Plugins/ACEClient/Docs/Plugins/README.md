@@ -32,8 +32,8 @@ also accepts `@`. Older plugin command spellings remain aliases. Use
 
 ## Bundled plugins
 
-- [Waypoint](Waypoint.md) provides a navigation arrow, pinned map, GoArrow atlas
-  import and route planning.
+- [Waypoint](Waypoint.md) searches the bundled or imported atlas and guides you
+  along a route with an arrow and pinned map.
 - [Item Tools](ItemTools.md) handles stack merging, bulk giving, vendor exchanges,
   chest distribution and supply restocking.
 - [Auto Craft](AutoCraft.md) finds recipes, prepares ingredients and crafts a
@@ -44,7 +44,7 @@ also accepts `@`. Older plugin command spellings remain aliases. Use
   by separately distributed appearance plugins.
 - **Supply Ledger** tracks an item type across your packs and equipment. Select
   the item and click **+**. Counts and icons remain visible at zero, and each
-  row has a remove button. Click a row to toggle item names.
+  row has a remove button. Click an icon or name to show or hide all item names.
 - **Hunt Ledger** tracks XP and luminance over five minutes and since login or
   **Reset run**. Its level estimate uses XP earned during the current run.
 
@@ -173,8 +173,11 @@ Turning off follow also turns off navigation.
 
 ### Loot Profile Editor
 
-Open **Loot** in UCM or the standalone **LOOT** window. The first matching
-rule decides Keep, Skip, Salvage, Sell or Read. Requirements can match item
+Open **Loot** in UCM or the standalone **LOOT** window. The profile menu lists
+shared and older saved loot profiles. **New** starts with defaults and **Save as**
+copies the current rules.
+
+The first matching rule decides Keep, Skip, Salvage, Sell or Read. Requirements can match item
 properties, materials, spells or text. **Apply requirement** accepts the
 requirement draft, then **Apply rule** saves it and stops UCM. Use **Keep #**
 for count limits, choosing name or item-template matching. See

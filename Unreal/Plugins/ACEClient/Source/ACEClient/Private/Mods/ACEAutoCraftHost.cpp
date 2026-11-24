@@ -568,7 +568,7 @@ void UACEPluginSubsystem::TickAutoCraft(FACEClientPlugin* Policy)
         if(Largest.Guid)for(const auto& Pair:S->GetWorldObjects())
         {
             const auto& I=Pair.Value;if(I.Guid==Exclude||!Eligible(C,I,false))continue;
-            const int32 Amount=FMath::Min(Needed-Largest.StackSize,ACEInventoryRules::MergeAmount(I,Largest));
+            const int32 Amount=FMath::Min(Needed-Largest.StackSize,S->AvailableMergeAmount(I,Largest));
             if(Amount>0){Prepare(I,Largest,Amount,0);return;}
         }
         Finish(TEXT("Recipe needs two eligible item stacks with enough units. Check protected items and stack limits."));return;

@@ -21,6 +21,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Misc/FileHelper.h"
 #include "Misc/ScopeExit.h"
+#include "Interfaces/IPluginManager.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformFileManager.h"
 #if PLATFORM_WINDOWS
@@ -241,13 +242,14 @@ bool UACEPluginSubsystem::ImportWaypointLocations(const FString& FilePath)
     if(Parsed.InvalidExits)Notice+=FString::Printf(TEXT(" Ignored %d invalid travel exits."),Parsed.InvalidExits);
     Notice+=TEXT(" Atlas data may differ on custom servers.");return true;
 }
-const TArray<FACEWaypointLandmark>& UACEPluginSubsystem::GetWaypointLocations()
+static bool LoadSavedWaypointAtlas(const FString& File,TArray<FACEWaypointLandmark>& Locations,bool& HasRouting)
 {
-    if(bWaypointLocationsLoaded)return WaypointLocations;bWaypointLocationsLoaded=true;WaypointLocations.Reset();bWaypointAtlasHasRoutingData=false;
-    const FString File=UserDirectory()/TEXT("Waypoint/locations.json");FString Json;TSharedPtr<FJsonObject> Data;
-    if(IFileManager::Get().FileSize(*File)>16*1024*1024 || !FFileHelper::LoadFileToString(Json,*File) || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json),Data)||!Data)return WaypointLocations;
-    const TArray<TSharedPtr<FJsonValue>>* Records=nullptr;if(!Data->TryGetArrayField(TEXT("locations"),Records)||Records->Num()>20000)return WaypointLocations;
-    Data->TryGetBoolField(TEXT("includesRouting"),bWaypointAtlasHasRoutingData);
+    const int64 Size=IFileManager::Get().FileSize(*File);
+    if(Size<=0||Size>16*1024*1024)return false;
+    FString Json;TSharedPtr<FJsonObject> Data;
+    if(!FFileHelper::LoadFileToString(Json,*File)||!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json),Data)||!Data)return false;
+    const TArray<TSharedPtr<FJsonValue>>* Records=nullptr;
+    if(!Data->TryGetArrayField(TEXT("locations"),Records)||Records->Num()>20000)return false;
     for(const auto& V:*Records)
     {
         const TSharedPtr<FJsonObject>* O=nullptr;if(!V->TryGetObject(O))continue;FACEWaypointLandmark M;double EW,NS;
@@ -256,8 +258,31 @@ const TArray<FACEWaypointLandmark>& UACEPluginSubsystem::GetWaypointLocations()
             M.Name=M.Name.Left(256);M.Coordinates=FVector2D(EW,NS);
             if((*O)->TryGetNumberField(TEXT("exitEast"),EW)&&(*O)->TryGetNumberField(TEXT("exitNorth"),NS)&&FMath::IsFinite(EW)&&FMath::IsFinite(NS)&&FMath::Abs(EW)<=102&&FMath::Abs(NS)<=102)
                 M.TravelExit=FVector2D(EW,NS);
-            WaypointLocations.Add(MoveTemp(M));
+            Locations.Add(MoveTemp(M));
         }
+    }
+    if(Locations.IsEmpty())return false;
+    Data->TryGetBoolField(TEXT("includesRouting"),HasRouting);
+    return true;
+}
+
+const TArray<FACEWaypointLandmark>& UACEPluginSubsystem::GetWaypointLocations()
+{
+    if(bWaypointLocationsLoaded)return WaypointLocations;
+    bWaypointLocationsLoaded=true;
+    WaypointLocations.Reset();
+    bWaypointAtlasHasRoutingData=false;
+    if(LoadSavedWaypointAtlas(UserDirectory()/TEXT("Waypoint/locations.json"),WaypointLocations,bWaypointAtlasHasRoutingData))
+        return WaypointLocations;
+
+    const auto Plugin=IPluginManager::Get().FindPlugin(TEXT("ACEClient"));
+    FString Source,Error;
+    ACEWaypointAtlas::FImportResult Parsed;
+    if(Plugin&&FFileHelper::LoadFileToString(Source,*(Plugin->GetBaseDir()/TEXT("ClientMods/waypoint/locations.xml")))
+        &&ACEWaypointAtlas::ParseLocations(Source,Parsed,Error))
+    {
+        WaypointLocations=MoveTemp(Parsed.Locations);
+        bWaypointAtlasHasRoutingData=true;
     }
     return WaypointLocations;
 }
@@ -839,25 +864,28 @@ private:
     void RefreshMarkers()
     {
         Markers.Reset();auto* H=Host.Get();if(!H)return;
-        if(!Dungeon && H->WaypointOption(TEXT("towns")))for(const auto& Town:ACEWaypointTowns::Locations)
+        const bool ShowTowns=!Dungeon&&H->WaypointOption(TEXT("towns"));
+        const bool ShowPortals=H->WaypointOption(TEXT("portals"));
+        const bool ShowPOIs=!Dungeon&&H->WaypointOption(TEXT("pois"));
+        if(ShowTowns)for(const auto& Town:ACEWaypointTowns::Locations)
             Markers.Add({{Town.EastWest,Town.NorthSouth},Town.Name,false});
         // Preserve the three regional island labels; these artwork anchors
         // describe whole islands, unlike the precise town destinations above.
-        if(!Dungeon && H->WaypointOption(TEXT("towns")))for(const auto& Region:ACERetailMap::Locations)
+        if(ShowTowns)for(const auto& Region:ACERetailMap::Locations)
             if(FString(Region.Name).EndsWith(TEXT("Island")))
                 Markers.Add({{(Region.X+Region.Width*.5)/257.*204.-101.95,102.05-(Region.Y+Region.Height*.5)/267.*204.},Region.Name,false});
         if(!Dungeon)for(const auto& M:H->GetWaypointLocations())
         {
             const bool Portal=M.Type.Contains(TEXT("Portal"))||M.Type==TEXT("Dungeon");
             const bool Town=M.Type==TEXT("Town");
-            if(H->WaypointOption(Portal?TEXT("portals"):Town?TEXT("towns"):TEXT("pois")))
+            if(Portal?ShowPortals:Town?ShowTowns:ShowPOIs)
             {
                 // Imported atlases may override a town (including custom-server locations).
                 if(Town)Markers.RemoveAll([&](const FMarker& Existing){return Existing.Name.Equals(M.Name,ESearchCase::IgnoreCase);});
                 Markers.Add({M.Coordinates,M.Name,Portal,!Town});
             }
         }
-        if(H->WaypointOption(TEXT("portals")))if(auto* C=H->GetGameInstance()->GetSubsystem<UACEClientSubsystem>())if(auto Session=C->GetSession())for(const auto& Pair:Session->GetWorldObjects())
+        if(ShowPortals)if(auto* C=H->GetGameInstance()->GetSubsystem<UACEClientSubsystem>())if(auto Session=C->GetSession())for(const auto& Pair:Session->GetWorldObjects())
         {
             const auto& O=Pair.Value;
             if(!O.Position.IsValid() || !(O.ItemType&ACEItemType::Portal))continue;
@@ -957,8 +985,9 @@ public:
         Input->AddSlot().AutoWidth().Padding(8,0)[WaypointButton(TEXT("Go"),[this]{Navigate(Entry->GetText().ToString());})];
         Input->AddSlot().AutoWidth().Padding(4,0)[WaypointButton(TEXT("Clear"),[this]{if(Host.IsValid())Host->ClearWaypoint();})];
         Body->AddSlot().AutoHeight().Padding(0,12)[Input];
-        auto ShowRoute=WaypointButton(TEXT("Show route"),[this]{if(Host.IsValid())Host->OpenPluginWindow(TEXT("waypoint.route"));});
+        auto ShowRoute=WaypointButton(TEXT("Current directions"),[this]{if(Host.IsValid())Host->OpenPluginWindow(TEXT("waypoint.route"));});
         ShowRoute->SetTag(TEXT("Waypoint.ShowRoute"));
+        ShowRoute->SetToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Reopen the steps for your current route."))));
         ShowRoute->SetVisibility(TAttribute<EVisibility>::CreateLambda([H=Host]{return H.IsValid()&&!H->WaypointItinerary.IsEmpty()?EVisibility::Visible:EVisibility::Collapsed;}));
         Body->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(0,0,0,4)[ShowRoute];
         if(A._Map)
@@ -981,7 +1010,7 @@ public:
                 .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Shared with Waypoint Map background opacity in Plugin Manager. The global plugin opacity overrides this setting."))))
                 .Value_Lambda([this](){return Host.IsValid()?Host->WaypointMapOpacity():1.f;})
                 .OnValueChanged_Lambda([this](float Value){if(Host.IsValid())Host->SetWaypointMapOpacity(Value);})];
-            Body->AddSlot().AutoHeight()[WaypointLabel(TEXT("The pinned map follows you and switches between overworld and interior layouts. Drag to pan or use the wheel to zoom, even while locked; the center-player icon resumes following. Click a numbered dot to choose a location. Unlock the UI to move using the top-left grip or resize. Uncheck Pin to hide it."),13)];
+            Body->AddSlot().AutoHeight()[WaypointLabel(TEXT("Drag the map to pan. Center player resumes following. Unlock the UI to move or resize the window."),13)];
             Body->AddSlot().AutoHeight().Padding(0,6)[SNew(SHorizontalBox)
                 +SHorizontalBox::Slot().FillWidth(1)[SNew(SACEPluginEditableTextBox).Tag(TEXT("Waypoint.MapFilter")).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).HintText(FText::FromString(TEXT("Filter map by name"))).OnTextChanged_Lambda([this](const FText& T){if(Map)Map->SetSearch(T.ToString());})]
                 +SHorizontalBox::Slot().AutoWidth().Padding(4,0)[SearchLocationsButton()]];
@@ -992,13 +1021,13 @@ public:
                 +SHorizontalBox::Slot().AutoWidth()[WaypointButton(TEXT("Center on me"),[this]{Map->CenterOnPlayer();})]
                 +SHorizontalBox::Slot().AutoWidth().Padding(5,0)[WaypointButton(TEXT("Reset view"),[this]{Map->ResetView();})]];
             Body->AddSlot().AutoHeight().Padding(0,8)[WaypointButton(TEXT("Waypoint settings"),[this]{if(Host.IsValid())ChildSlot[Host->MakeWaypointPanel(false,false,ShowTitle)];})];
-            Body->AddSlot().AutoHeight().Padding(0,8)[WaypointLabel(TEXT("Drag to pan · Scroll to zoom · Click to navigate\nTowns and nearby portals. Atlas detail appears when zoomed in or searched. Dungeon floors near your elevation are brighter."),13)];
+            Body->AddSlot().AutoHeight().Padding(0,8)[WaypointLabel(TEXT("Scroll to zoom. Click a numbered dot to choose a location. Brighter dungeon floors are closer to your elevation."),13)];
         }
         else
         {
             Body->AddSlot().AutoHeight()[WaypointLabel(TEXT("GoArrow / CoD atlas"),18)];
             Body->AddSlot().AutoHeight()[SAssignNew(AtlasPath,SACEPluginEditableTextBox).Tag(TEXT("Waypoint.AtlasPath")).Style(&PanelStyle->Edit).Font(FACEPluginStyle::NativeFont("Regular",16)).HintText(FText::FromString(TEXT("Full path to GoArrow or CoD XML")))];
-            Body->AddSlot().AutoHeight().Padding(0,3)[WaypointLabel(TEXT("Browse for a GoArrow or CoD XML file, then choose Import locations."),13)];
+            Body->AddSlot().AutoHeight().Padding(0,3)[WaypointLabel(TEXT("An atlas is included. Import XML to replace it."),13)];
             auto Browse=WaypointButton(TEXT("Browse XML file"),[this]{BrowseLocations();});
             Browse->SetTag(TEXT("Waypoint.BrowseLocations"));
             Browse->SetEnabled(TAttribute<bool>::CreateLambda([](){return !ACEWaypointFilePicker::IsOpen();}));
@@ -1023,7 +1052,7 @@ public:
             Body->AddSlot().AutoHeight()[Check(TEXT("arrow"),TEXT("Show floating arrow"),true)];
             Body->AddSlot().AutoHeight().Padding(0,8)[WaypointLabel(TEXT("Use the game UI lock or hold Quick-show pinned windows to move the arrow."),13)];
             Body->AddSlot().AutoHeight()[WaypointButton(TEXT("Open map"),[this]{if(Host.IsValid())ChildSlot[Host->MakeWaypointPanel(true,false,ShowTitle)];})];
-            Body->AddSlot().AutoHeight().Padding(0,12)[WaypointLabel(TEXT("Click coordinates in chat or enter them above. The arrow shows your current coordinates. Unlock the game UI and drag its title to move it; its position is saved."),15)];
+            Body->AddSlot().AutoHeight().Padding(0,12)[WaypointLabel(TEXT("Click coordinates in chat to set a destination."),15)];
         }
         if(A._Map)Body->AddSlot().AutoHeight()[SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",14)).ColorAndOpacity(Accent).AutoWrapText(true)
             .Text_Lambda([this]{return FText::FromString(Status);})];
@@ -1039,7 +1068,7 @@ private:
     {
         auto Button=WaypointButton(TEXT("Search locations"),[this]{OpenAtlas(FString());});
         Button->SetTag(TEXT("Waypoint.SearchLocations"));
-        Button->SetToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Search the imported atlas by name or type, then point the arrow or find a route."))));
+        Button->SetToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Search the atlas by name or type, then point the arrow or find a route."))));
         return Button;
     }
     void BrowseLocations()

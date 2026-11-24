@@ -24,6 +24,7 @@
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SExpandableArea.h"
 #include "Widgets/Input/SButton.h"
+#include "Framework/Application/SlateApplication.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SMultiLineEditableTextBox.h"
@@ -154,13 +155,12 @@ namespace ACEPluginPanelPrivate
                     +SHorizontalBox::Slot().AutoWidth().Padding(8,0)[SNew(SBox).WidthOverride(110)
                         [SNew(SACEPluginSpinBox<int32>).Tag(TEXT("PluginEnabledLimit")).Style(&FACEPluginStyle::Current()->Spin)
                             .Font(FACEPluginStyle::NativeFont("Regular",16)).MinValue(0).MaxValue(MAX_int32).EnableSlider(false)
-                            .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Maximum enabled plugins. Disabled plugins do not count. Saved across logins; 0 removes the limit."))))
                             .Value_Lambda([this](){return Host->GetEnabledPluginLimit();})
                             .OnValueCommitted_Lambda([this](int32 Limit,ETextCommit::Type){Host->SetEnabledPluginLimit(Limit);ManagerNotice=Host->Notice;})]]);
                 Add(SNew(SACEPluginText).Tag(TEXT("PluginEnabledCount")).Font(FACEPluginStyle::NativeFont("Regular",14))
                     .Text_Lambda([this](){const int32 Limit=Host->GetEnabledPluginLimit();return FText::FromString(Limit==0
-                        ? FString::Printf(TEXT("%d enabled / unlimited. Disabled plugins do not count."),Host->GetEnabledPluginCount())
-                        : FString::Printf(TEXT("%d / %d enabled. Disabled plugins do not count."),Host->GetEnabledPluginCount(),Limit));}).AutoWrapText(true));
+                        ? FString::Printf(TEXT("%d enabled"),Host->GetEnabledPluginCount())
+                        : FString::Printf(TEXT("%d / %d enabled"),Host->GetEnabledPluginCount(),Limit));}).AutoWrapText(true));
                 Add(SNew(SACEPluginText).Tag(TEXT("PluginManagerNotice")).Font(FACEPluginStyle::NativeFont("Regular",16)).AutoWrapText(true)
                     .Visibility_Lambda([this](){return ManagerNotice.IsEmpty()?EVisibility::Collapsed:EVisibility::Visible;})
                     .Text_Lambda([this](){return FText::FromString(ManagerNotice);}));
@@ -190,14 +190,9 @@ namespace ACEPluginPanelPrivate
                             .OnSlateButtonDragDetected_Lambda([H=Host,PluginId=P->Id](const FGeometry&,const FPointerEvent&){return ACEPluginOrder::BeginDrag(H.Get(),PluginId,TEXT("__manager"));})
                             [SNew(SBox).WidthOverride(14).HeightOverride(24)[SNew(SACEPluginIcon).Id(TEXT("plugin.grip"))]]];
                     Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,8,0)[SNew(SACEPluginBadge).Plugin(P)];
-                    FString Description=P->Description;
-                    if(P->Id==TEXT("ucm"))Description=TEXT("Combat, buffs, recovery, routes and looting.");
-                    else if(P->Id==TEXT("ucmmicro"))Description=TEXT("Quick toggles for UCM activities.");
-                    else if(P->Id==TEXT("looteditor"))Description=TEXT("Create and edit loot profiles.");
-                    else if(P->Id==TEXT("waypoint"))Description=TEXT("Direction arrow, world map and dungeon map.");
                     Row->AddSlot().FillWidth(1).VAlign(VAlign_Center).Padding(0,0,12,0)
                         [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[SNew(SACEPluginText).Font(FACEPluginStyle::NativeFont("Regular",18)).Text_Lambda([P]{return FText::FromString(P->DisplayTitle());})]
-                        +SVerticalBox::Slot().AutoHeight().Padding(0,4,0,0)[SNew(SACEPluginText).Text(FText::FromString(Description))
+                        +SVerticalBox::Slot().AutoHeight().Padding(0,4,0,0)[SNew(SACEPluginText).Text(FText::FromString(P->Description))
                             .Font(FACEPluginStyle::NativeFont("Regular",14)).ColorAndOpacity(FLinearColor(.86f,.83f,.75f)).AutoWrapText(true)]];
                     const FString Capabilities=P->LocalService?(P->Permissions.Contains(TEXT("local_tools"))?TEXT("Local appearance and bundled native converter. Native tools run outside the Lua sandbox."):TEXT("Local cosmetic appearance only")):P->Permissions.IsEmpty()?TEXT("No game actions"):TEXT("Game actions: ")+FString::Join(P->Permissions,TEXT(", "));
                     Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,12,0)[SNew(SCheckBox).Tag(FName(*(TEXT("PluginEnabled.")+P->Id))).Style(&FACEPluginStyle::Current()->Check).Padding(4)
@@ -259,16 +254,26 @@ namespace ACEPluginPanelPrivate
             }
             Add(Label(TEXT("Profile name")));
             Add(SAssignNew(Name,SACEPluginEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FACEPluginStyle::NativeFont("Regular",20)).Text(FText::FromString(P->ProfileName)));
-            TArray<FString> SavedProfiles; IFileManager::Get().FindFiles(SavedProfiles, *(Host->UserDirectory()/TEXT("Profiles")/P->Id/TEXT("*.json")),true,false);
-            SavedProfiles.Sort();
-            for(const FString& File:SavedProfiles)
-            {
-                const FString Profile=FPaths::GetBaseFilename(File);
-                Add(Button(TEXT("Load: ")+Profile,[this,P,Profile](){Host->LoadProfile(P->Id,Profile);Rebuild();}));
-            }
             auto Profiles=SNew(SHorizontalBox);
             Profiles->AddSlot().FillWidth(1)[Button(TEXT("Save as"),[this,P](){Host->SaveProfile(P->Id,Name->GetText().ToString(),Host->ProfileJson(P->Id));Rebuild();})];
-            Profiles->AddSlot().FillWidth(1).Padding(8,0)[Button(TEXT("Load profile"),[this,P](){if(!Host->LoadProfile(P->Id,Name->GetText().ToString()))Host->Notice=TEXT("Profile not found");Rebuild();})]; Add(Profiles);
+            Profiles->AddSlot().FillWidth(1).Padding(8,0)[SNew(SACEPluginComboButton).ComboButtonStyle(&Retail->Combo)
+                .ButtonContent()[Label(TEXT("Load profile"),16)]
+                .OnGetMenuContent_Lambda([this,P]()->TSharedRef<SWidget>{
+                    TArray<FString> Files;
+                    IFileManager::Get().FindFiles(Files,*(Host->UserDirectory()/TEXT("Profiles")/P->Id/TEXT("*.json")),true,false);
+                    Files.Sort();
+                    auto Menu=SNew(SVerticalBox);
+                    for(const auto& File:Files)
+                    {
+                        const FString Profile=FPaths::GetBaseFilename(File);
+                        Menu->AddSlot().AutoHeight()[Button(Profile,[this,P,Profile](){
+                            FSlateApplication::Get().DismissAllMenus();
+                            Host->LoadProfile(P->Id,Profile);Rebuild();
+                        })];
+                    }
+                    if(Files.IsEmpty())Menu->AddSlot().AutoHeight()[Label(TEXT("No saved profiles"),14)];
+                    return SNew(SBox).MaxDesiredHeight(240)[SNew(SScrollBox)+SScrollBox::Slot()[Menu]];
+                })]; Add(Profiles);
             const TArray<TSharedPtr<FJsonValue>>* Fields=nullptr;
             if (P->Manifest->TryGetArrayField(TEXT("settings"),Fields)) for (const auto& Field:*Fields)
             {

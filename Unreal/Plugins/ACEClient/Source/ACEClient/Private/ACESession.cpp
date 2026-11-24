@@ -95,6 +95,7 @@ void FACESession::Disconnect()
 	ManualAppraisalGuid = 0;
 	bBackgroundAppraisalContext = false;
 	PendingInventoryTransfers.Reset();
+	PendingStackMerges.Reset();
 	RecentGiveRequests.Reset();
 	GiveRecipientGuid = 0;
 	Confirmations.Reset();
@@ -284,6 +285,7 @@ void FACESession::RequestLogOff()
 
 void FACESession::ClearWorldState()
 {
+	PendingStackMerges.Reset();
 	RecentGiveRequests.Reset();
 	ResetBookEditing();
 	Confirmations.Reset();
@@ -481,6 +483,11 @@ void FACESession::Tick(float DeltaSeconds)
 	CheckBookWriteTimeout();
 	for(auto It=PendingInventoryTransfers.CreateIterator();It;++It)
 		if(State!=EACESessionState::InWorld||FPlatformTime::Seconds()>=It.Value())It.RemoveCurrent();
+	if (!PendingStackMerges.IsEmpty())
+	{
+		const double Now = FPlatformTime::Seconds();
+		PendingStackMerges.RemoveAll([Now](const auto& Merge) { return Now >= Merge.ExpiresAt; });
+	}
 	if (PendingEquipmentGuid && FPlatformTime::Seconds() >= PendingEquipmentUntil)
 	{
 		CancelEquipmentSwap();
@@ -2154,6 +2161,7 @@ void FACESession::UpsertWorldObject(const FACEWorldObject& Object, bool bForceRe
 		}
 	}
 	ApplyPlayerInventoryCapacity(Merged);
+	ConfirmStackCount(Merged.Guid, Existing && !bSameInstance ? MAX_int32 : Merged.StackSize);
 	WorldObjects.Add(Merged.Guid, Merged);
 	// CreateObject can complete after ContainId, or arrive without another
 	// inventory receipt. Refresh cached rows on arrival/replacement as well as
@@ -2581,6 +2589,7 @@ void FACESession::DeleteWorldObject(int32 Guid)
 		}
 		if (SelectedObject.Guid == Guid) SelectObject(0);
 		VRPoses.Remove(Guid);
+		ConfirmStackCount(Guid, MAX_int32);
 		WorldObjects.Remove(Guid);
 		PropertyStamps.Remove(Guid);
 		RemoveFromContainerLists(Guid);
@@ -5016,6 +5025,39 @@ void FACESession::SendTurbineChat(uint32 ChannelId, uint32 ChatType, const FStri
 	SendGameMessage(ACEOpcode::TurbineChat, W.GetData(), ACEQueue::LoginQueue);
 }
 
+int32 FACESession::StackCountWithPendingMerges(const FACEWorldObject& Target) const
+{
+	int32 Count = FMath::Max(1, Target.StackSize);
+	for (const auto& Merge : PendingStackMerges)
+		if (Merge.Target == Target.Guid) Count = FMath::Max(Count, Merge.TargetAfter);
+	return Count;
+}
+
+int32 FACESession::AvailableMergeAmount(const FACEWorldObject& Source, const FACEWorldObject& Target) const
+{
+	const int32 Amount = ACEInventoryRules::MergeAmount(Source, Target);
+	if (!Amount || PendingStackMerges.IsEmpty()) return Amount;
+	return FMath::Min(Amount, FMath::Max(0, Target.MaxStackSize - StackCountWithPendingMerges(Target)));
+}
+
+void FACESession::ConfirmStackCount(int32 Target, int32 Count)
+{
+	PendingStackMerges.RemoveAll([=](const auto& Merge) { return Merge.Target == Target && Merge.TargetAfter <= Count; });
+}
+
+void FACESession::RejectStackMerge(int32 ItemGuid)
+{
+	int32 Index = PendingStackMerges.IndexOfByPredicate([ItemGuid](const auto& Merge) { return Merge.Source == ItemGuid; });
+	// ACE can report the recipient instead if it is stuck, in trade, or no longer stackable.
+	if (Index == INDEX_NONE)
+		Index = PendingStackMerges.IndexOfByPredicate([ItemGuid](const auto& Merge) { return Merge.Target == ItemGuid; });
+	if (Index == INDEX_NONE) return;
+	const auto Rejected = PendingStackMerges[Index];
+	for (int32 I = Index + 1; I < PendingStackMerges.Num(); ++I)
+		if (PendingStackMerges[I].Target == Rejected.Target) PendingStackMerges[I].TargetAfter -= Rejected.Amount;
+	PendingStackMerges.RemoveAt(Index);
+}
+
 int32 FACESession::FindContainerMergeTarget(int32 ItemGuid, int32 ContainerGuid, int32 Amount, bool bIncludeSourcePack) const
 {
 	const auto* Item=WorldObjects.Find(ItemGuid);
@@ -5043,12 +5085,18 @@ int32 FACESession::FindContainerMergeTarget(int32 ItemGuid, int32 ContainerGuid,
 	for(int32 Container:Containers)
 	{
 		if(Offered(Container))continue;
+		if (Container != ContainerGuid)
+		{
+			const auto* Pack = WorldObjects.Find(Container);
+			if (!Pack || (Pack->ContainerId && Pack->ContainerId != ContainerGuid)
+				|| (!Pack->ContainerId && Pack->ParentGuid && Pack->ParentGuid != ContainerGuid)) continue;
+		}
 		TArray<int32> Items;GetPackItemGuids(Container,Items);
 		for(int32 Guid:Items)
 		{
 			const auto* Other=WorldObjects.Find(Guid);
-			if(Other && !Other->WielderId && !Other->ParentGuid && !Other->CurrentWieldedLocation
-				&& Other->StackSize>=0 && !Offered(Guid) && ACEInventoryRules::MergeAmount(*Item,*Other)>=Amount)return Guid;
+			if(Other && Other->ContainerId==Container && !Other->WielderId && !Other->ParentGuid && !Other->CurrentWieldedLocation
+				&& Other->StackSize>=0 && !Offered(Guid) && AvailableMergeAmount(*Item,*Other)>=Amount)return Guid;
 		}
 	}
 	return 0;
@@ -5102,6 +5150,12 @@ void FACESession::SendStackableMerge(int32 MergeFromGuid, int32 MergeToGuid, int
 	{
 		return;
 	}
+	const auto* Source = WorldObjects.Find(MergeFromGuid);
+	const auto* Target = WorldObjects.Find(MergeToGuid);
+	if (!Source || !Target || Amount > AvailableMergeAmount(*Source, *Target)) return;
+	// Reserve space only for planning. Displayed counts and ownership still come from the server.
+	PendingStackMerges.Add({MergeFromGuid, MergeToGuid, Amount, StackCountWithPendingMerges(*Target) + Amount,
+		FPlatformTime::Seconds() + 20.});
 	FACEBinaryWriter W;
 	W.WriteUInt32(static_cast<uint32>(MergeFromGuid));
 	W.WriteUInt32(static_cast<uint32>(MergeToGuid));
@@ -7776,6 +7830,7 @@ void FACESession::HandleInventoryServerSaveFailed(FACEBinaryReader& Reader)
 	PendingInventoryTransfers.Remove(ItemGuid);
 	if (ItemGuid == PendingEquipmentGuid || PendingEquipmentRemovals.Contains(ItemGuid)) CancelEquipmentSwap();
 
+	RejectStackMerge(ItemGuid);
 	InventoryFailureItem = ItemGuid;
 	InventoryFailureError = Reader.CanRead(4) ? Reader.ReadUInt32() : 0;
 	++InventoryFailureSerial;
@@ -7881,6 +7936,8 @@ void FACESession::HandleInventoryRemoveObject(FACEBinaryReader& Reader)
 void FACESession::RemoveInventoryObject(int32 ItemGuid)
 {
 	LogGiveUpdate(ItemGuid, TEXT("RemoveInventoryObject"), 0, 0);
+	// Deleting a consumed source can precede the recipient's new stack count.
+	ConfirmStackCount(ItemGuid, MAX_int32);
 	EquipmentRemovalEvidence.Remove(ItemGuid);
 	PendingInventoryTransfers.Remove(ItemGuid);
 	// Whole-item turn-ins have no SetStackSize. Invalidate cached inventories
@@ -7965,6 +8022,7 @@ void FACESession::HandleSetStackSize(FACEBinaryReader& Reader)
 			Obj->StackSize = FMath::Clamp(Obj->StackSize, 0, Obj->MaxStackSize);
 		}
 		Obj->Value = Value;
+		ConfirmStackCount(Guid, Obj->StackSize);
 		if (SelectedObject.bValid && SelectedObject.Guid == Guid)
 		{
 			SelectedObject.Name = Obj->Name;
@@ -8121,6 +8179,7 @@ void FACESession::HandlePublicUpdatePropertyInt(FACEBinaryReader& Reader)
 			{
 				Obj->StackSize = FMath::Clamp(Obj->StackSize, 0, Obj->MaxStackSize);
 			}
+			ConfirmStackCount(Guid, Obj->StackSize);
 		}
 		else if (Prop == 91) // PropertyInt.MaxStructure
 		{

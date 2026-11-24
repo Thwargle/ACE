@@ -459,6 +459,7 @@ void UACEPluginSubsystem::Discover()
             auto P = MakeShared<FACEClientPlugin>(); P->Id = Id; P->Manifest = M; P->Api=int32(Number(M,TEXT("api"),1));
             P->Name = String(M, TEXT("name"), Id); P->Version = String(M, TEXT("version"));
             P->Description = String(M, TEXT("description")); P->Directory = Root / Dir;
+            P->bBundledUCM = Plugin && Root == Roots[0] && Dir == TEXT("ucm") && Id == TEXT("ucm") && P->Api == 1;
             P->LocalService = String(M,TEXT("mode"))==TEXT("local");
             P->Companion = String(M,TEXT("mode"))==TEXT("companion");
             P->ChatCursor=ChatResume.FindRef(Id);
@@ -646,7 +647,7 @@ bool UACEPluginSubsystem::Start(const FString& Id)
     if(P->IsPolicy()){IdleManaVM.Reset();IdleManaOwner.Empty();IdleManaFailed=false;bRouteJoinRequested=true;RouteVisibilityOffset=0;
         bTrackRouteMovement=false;RouteMovementSamples.Reset();bRouteMovementOverflow=false;}
     if(P->IsPolicy()){CombatTarget=0;PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();CombatOutcomes.Empty();ClearBuffRequests();RouteShortcutAnchor.Reset();if(!Resume){RuntimeRoute.Reset();RoutePoint=1;}RouteRebuiltAt=0;}
-    CachedSpells.Reset();
+    CachedSpellArray.Reset();
     P->LoggedActivity.Empty();P->LoggedRouteStatus.Empty();
     LogUCMEvent(*P,Resume?TEXT("UCM resumed"):TEXT("UCM started"));
     P->NextAction = 0; P->NextDecision=0;P->WaitAction.Empty();P->Status = TEXT("Running"); Notice.Empty(); return true;
@@ -1305,11 +1306,11 @@ void UACEPluginSubsystem::AddBuff(const FString& Id, int32 SpellId)
     if (!Found) Buffs.Add(MakeShared<FJsonValueNumber>(SpellId));
     P->Profile->SetArrayField(TEXT("buffs"), Buffs); SaveProfile(Id, P->ProfileName, Encode(P->Profile));
 }
-TSharedPtr<FJsonObject> UACEPluginSubsystem::Snapshot()
+TSharedPtr<FJsonObject> UACEPluginSubsystem::Snapshot(bool bEquipmentManaOnly)
 {
     ACE_PROFILE_SCOPE(PluginSnapshot);
     TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginSnapshotCommon);
-    if(CompanionReadBatch && CompanionReadBatch->Data)
+    if(!bEquipmentManaOnly && CompanionReadBatch && CompanionReadBatch->Data)
         return MakeShared<FJsonObject>(*CompanionReadBatch->Data);
     auto O = MakeShared<FJsonObject>(); auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     auto* D = GetGameInstance()->GetSubsystem<UACEDatSubsystem>(); const auto& V = C->GetPlayerVitalsView();
@@ -1347,6 +1348,40 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::Snapshot()
     }
     O->SetBoolField(TEXT("moving"), !MovementOwner.IsEmpty() || (!FastCastOwner.IsEmpty() && FastCastStarted) || (!OptionalCastOwner.IsEmpty() && OptionalCastStarted));
     O->SetNumberField(TEXT("heading"),PC&&PC->GetPawn()?PC->GetPawn()->GetActorRotation().Yaw:0);
+    TArray<TSharedPtr<FJsonValue>> Enchantments,Harmful;auto Cooldowns=MakeShared<FJsonObject>();
+    for (const auto& E : C->GetActiveEnchantments(true))
+    {
+        if(E.bCooldown)Cooldowns->SetNumberField(FString::FromInt(uint32(E.SpellId)&0x7fff),E.Duration<0?1.e9:FMath::Max(0.,E.Duration+E.StartTime-(FPlatformTime::Seconds()-E.ReceivedAt)));
+        if(bEquipmentManaOnly)continue;
+        if(!E.bCooldown&&!E.bBeneficial&&E.Duration>=0)
+        {
+            uint32 School=0,Power=0,Category=0,Flags=0;double Duration=0;
+            const double Remaining=E.Duration+E.StartTime-(FPlatformTime::Seconds()-E.ReceivedAt);
+            if(Remaining>0&&D->TryGetPluginSpellInfo(E.SpellId,School,Power,Category,Flags,Duration)&&!(Flags&8))
+            {
+                auto A=MakeShared<FJsonObject>();A->SetNumberField(TEXT("id"),E.SpellId);A->SetNumberField(TEXT("category"),E.SpellCategory);
+                A->SetNumberField(TEXT("power"),Power);A->SetNumberField(TEXT("remaining"),Remaining);Harmful.Add(MakeShared<FJsonValueObject>(A));
+            }
+        }
+        if (!E.bBeneficial || E.bCooldown) continue;
+        auto A = MakeShared<FJsonObject>(); A->SetNumberField(TEXT("id"), E.SpellId); A->SetNumberField(TEXT("category"), E.SpellCategory);
+        A->SetNumberField(TEXT("power"), E.PowerLevel);
+        A->SetNumberField(TEXT("duration"), E.Duration);
+        A->SetNumberField(TEXT("remaining"), E.Duration < 0 ? 1.e9 : FMath::Max(0., E.Duration + E.StartTime - (FPlatformTime::Seconds() - E.ReceivedAt)));
+        Enchantments.Add(MakeShared<FJsonValueObject>(A));
+    }
+    O->SetArrayField(TEXT("enchantments"), Enchantments);
+    O->SetArrayField(TEXT("harmful_enchantments"),Harmful);
+    O->SetObjectField(TEXT("cooldowns"),Cooldowns);
+    if(bEquipmentManaOnly)
+    {
+        O->SetNumberField(TEXT("player"),uint32(C->GetPlayerGuid()));
+        O->SetNumberField(TEXT("action_serial"),ActionSerial);
+        O->SetArrayField(TEXT("action_events"),ActionOutcomes);
+        O->SetBoolField(TEXT("jumping"),PC && PC->IsPluginJumpPending());
+        ExtendInventorySnapshot(O);
+        return O;
+    }
     const auto Known = C->GetKnownSpells(); TSet<int32> KnownIds(Known);
     auto SpellIds=Known;
     // Profile references may be a higher tier learned by a different character.
@@ -1365,9 +1400,10 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::Snapshot()
         for(int32 School=1;School<SchoolSkills.Num();++School)if(Entry.SkillId==SkillIds[School])SchoolSkills[School]=Entry.Current;
     const uint64 Revision=C->GetSession()?C->GetSession()->GetSpellDataRevision():0;
     const uint32 FocusMask=D->GetPlayerSpellFocusMask();
-    if(CachedSpells.IsEmpty() || CachedSpellIds!=SpellIds || CachedSchoolSkills!=SchoolSkills || Revision!=CachedSpellRevision || FocusMask!=CachedSpellFocusMask)
+    if(!CachedSpellArray || CachedSpellIds!=SpellIds || CachedSchoolSkills!=SchoolSkills || Revision!=CachedSpellRevision || FocusMask!=CachedSpellFocusMask)
     {
-    CachedSpells.Reset();CachedSpellIds=SpellIds;CachedSchoolSkills=SchoolSkills;CachedSpellRevision=Revision;CachedSpellFocusMask=FocusMask;
+    TArray<TSharedPtr<FJsonValue>> Spells; Spells.Reserve(SpellIds.Num());
+    CachedSpellIds=SpellIds;CachedSchoolSkills=SchoolSkills;CachedSpellRevision=Revision;CachedSpellFocusMask=FocusMask;
     CachedKnownSpellValues.Reset(Known.Num());for(int32 Id:Known)CachedKnownSpellValues.Add(MakeShared<FJsonValueNumber>(Id));
     for (int32 Id : SpellIds)
     {
@@ -1394,35 +1430,12 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::Snapshot()
         S->SetBoolField(TEXT("beneficial"),(Flags&4)!=0);S->SetBoolField(TEXT("caster_target"),(Flags&8)!=0);
         S->SetBoolField(TEXT("self_buff"), (Flags & 8) && (Flags & 4) && Duration > 0);
         S->SetNumberField(TEXT("skill"), SchoolSkills.IsValidIndex(School)?SchoolSkills[School]:0);
-        CachedSpells.Add(MakeShared<FJsonValueObject>(S));
+        Spells.Add(MakeShared<FJsonValueObject>(S));
     }
+    CachedSpellArray=MakeShared<FJsonValueArray>(MoveTemp(Spells));
     }
-    O->SetArrayField(TEXT("spells"), CachedSpells);
+    O->SetField(TEXT("spells"), CachedSpellArray);
     O->SetArrayField(TEXT("known_spells"),CachedKnownSpellValues);
-    TArray<TSharedPtr<FJsonValue>> Enchantments,Harmful;auto Cooldowns=MakeShared<FJsonObject>();
-    for (const auto& E : C->GetActiveEnchantments(true))
-    {
-        if(E.bCooldown)Cooldowns->SetNumberField(FString::FromInt(uint32(E.SpellId)&0x7fff),E.Duration<0?1.e9:FMath::Max(0.,E.Duration+E.StartTime-(FPlatformTime::Seconds()-E.ReceivedAt)));
-        if(!E.bCooldown&&!E.bBeneficial&&E.Duration>=0)
-        {
-            uint32 School=0,Power=0,Category=0,Flags=0;double Duration=0;
-            const double Remaining=E.Duration+E.StartTime-(FPlatformTime::Seconds()-E.ReceivedAt);
-            if(Remaining>0&&D->TryGetPluginSpellInfo(E.SpellId,School,Power,Category,Flags,Duration)&&!(Flags&8))
-            {
-                auto A=MakeShared<FJsonObject>();A->SetNumberField(TEXT("id"),E.SpellId);A->SetNumberField(TEXT("category"),E.SpellCategory);
-                A->SetNumberField(TEXT("power"),Power);A->SetNumberField(TEXT("remaining"),Remaining);Harmful.Add(MakeShared<FJsonValueObject>(A));
-            }
-        }
-        if (!E.bBeneficial || E.bCooldown) continue;
-        auto A = MakeShared<FJsonObject>(); A->SetNumberField(TEXT("id"), E.SpellId); A->SetNumberField(TEXT("category"), E.SpellCategory);
-        A->SetNumberField(TEXT("power"), E.PowerLevel);
-        A->SetNumberField(TEXT("duration"), E.Duration);
-        A->SetNumberField(TEXT("remaining"), E.Duration < 0 ? 1.e9 : FMath::Max(0., E.Duration + E.StartTime - (FPlatformTime::Seconds() - E.ReceivedAt)));
-        Enchantments.Add(MakeShared<FJsonValueObject>(A));
-    }
-    O->SetArrayField(TEXT("enchantments"), Enchantments);
-    O->SetArrayField(TEXT("harmful_enchantments"),Harmful);
-    O->SetObjectField(TEXT("cooldowns"),Cooldowns);
     const auto Selection=C->GetSelectedObject();
     const int32 Dead=Selection.bShowHealth && Selection.HealthFraction<=0 ? Selection.Guid:0;
     const int32 Target = PC ? PC->FindNearbyTarget(true,0,Dead) : 0; FACEWorldObject Obj;
@@ -1576,7 +1589,18 @@ void UACEPluginSubsystem::TickIdleEquipmentMana()
         if(Enabled&&!Plugins.ContainsByPredicate([](const auto& Other){return Other->Running&&!Other->LocalService&&!Other->Companion;})&&Now>=NextIdleManaDecision)
         {
             NextIdleManaDecision=Now+2;
-            const uint32 Hash=GetTypeHash(Encode(P->Profile));
+            // A stopped API 2 policy runs the stock mana service in a separate VM.
+            const bool StockRecharge=P->bBundledUCM || P->Api>=2;
+            auto Profile=MakeShared<FJsonObject>();
+            if(StockRecharge)
+            {
+                for(const TCHAR* Key:{TEXT("item_mana"),TEXT("item_mana_threshold"),TEXT("fill_mana_stones"),TEXT("mana_tank_minimum"),
+                    TEXT("consumables"),TEXT("assist_items"),TEXT("weapon_items"),TEXT("weapons"),TEXT("item_buff_targets"),
+                    TEXT("melee_weapon"),TEXT("melee_secondary_equip"),TEXT("buff_items")})
+                    if(const auto* Value=P->Profile->Values.Find(Key))Profile->SetField(Key,*Value);
+            }
+            else *Profile=*P->Profile;
+            const uint32 Hash=GetTypeHash(Encode(Profile));
             if(IdleManaOwner!=P->Id||IdleManaSession.Pin()!=C->GetSession()||IdleManaPlayer!=C->GetPlayerGuid()||Hash!=IdleManaProfileHash)
             {if(auto Previous=Find(IdleManaOwner))Previous->CombatTransitionIntent.Reset();P->CombatTransitionIntent.Reset();IdleManaOwner=P->Id;IdleManaVM.Reset();IdleManaFailed=false;IdleManaSession=C->GetSession();IdleManaPlayer=C->GetPlayerGuid();IdleManaProfileHash=Hash;}
             if(!IdleManaFailed)
@@ -1593,12 +1617,12 @@ void UACEPluginSubsystem::TickIdleEquipmentMana()
                 if(!IdleManaFailed&&P->CombatTransitionIntent)UpdateCombatTransition(*P);
                 else if(!IdleManaFailed&&!InventoryInteractionPending())
                 {
-                    auto Profile=MakeShared<FJsonObject>(*P->Profile);Profile->RemoveField(TEXT("vt_library"));Profile->SetBoolField(TEXT("ucm_mana_only"),true);
+                    Profile->RemoveField(TEXT("vt_library"));Profile->SetBoolField(TEXT("ucm_mana_only"),true);
                     // Operational failures use the same bounded activity retry
                     // as running UCM; only a VM error disables this service.
                     if(P->ActivityFailure){Profile->SetObjectField(TEXT("ucm_activity_failure"),P->ActivityFailure);P->ActivityFailure.Reset();}
                     TSharedPtr<FJsonObject> Intent;
-                    if(!IdleManaVM->Step(Snapshot(),Profile,Intent,Error))IdleManaFailed=true;
+                    if(!IdleManaVM->Step(Snapshot(StockRecharge),Profile,Intent,Error,StockRecharge))IdleManaFailed=true;
                     else if(Intent)
                     {
                         const FString Action=String(Intent,TEXT("action"));
@@ -1731,7 +1755,7 @@ bool UACEPluginSubsystem::Tick(float)
             ExtendUCMCraftSnapshot(PolicySnapshot);
             ExtendUCMCombatSnapshot(PolicySnapshot);
         }
-        if (!P->VM->Step(PolicySnapshot, TickProfile, Intent, Error)) { Stop(P->Id, TEXT("Script error: ") + Error); continue; }
+        if (!P->VM->Step(PolicySnapshot, TickProfile, Intent, Error, P->bBundledUCM)) { Stop(P->Id, TEXT("Script error: ") + Error); continue; }
         if(P->IsPolicy()){RouteMovementSamples.Reset();bRouteMovementOverflow=false;FollowMovementSamples.Reset();bFollowMovementOverflow=false;}
         if (Intent)
         {

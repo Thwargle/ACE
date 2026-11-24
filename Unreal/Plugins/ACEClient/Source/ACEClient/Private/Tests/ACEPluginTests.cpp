@@ -473,7 +473,12 @@ bool FACEPluginHostTest::RunTest(const FString&)
             if(TestTrue(*FString::Printf(TEXT("%s is enabled through its widget ancestry"),Name),IsControlEnabled(Panel,B)))B->SimulateClick();
             B->UpdateAllAttributes();Panel->SlatePrepass(1.f);
         };
-        TestTrue(TEXT("Browse-before-import fixture starts with no atlas"),H->GetWaypointLocations().IsEmpty());
+        const auto Bundled=H->GetWaypointLocations();
+        if(!TestTrue(TEXT("The included atlas supplies towns and portal exits before import"),
+            Bundled.ContainsByPredicate([](const auto& P){return P.Name==TEXT("Arwic")&&P.Type==TEXT("Town")&&P.Coordinates.Equals(FVector2D(56.6,33.3),.001);})
+            &&Bundled.ContainsByPredicate([](const auto& P){return P.TravelExit.IsSet();})&&H->bWaypointAtlasHasRoutingData))return false;
+        TestFalse(TEXT("Using the included atlas does not create a personal import"),IFileManager::Get().FileExists(*(H->UserDirectory()/TEXT("Waypoint/locations.json"))));
+        auto BundledUnchanged=[&]{return SameWaypointLocations(Bundled,H->GetWaypointLocations());};
         ACEWaypointFilePicker::FComplete PickerComplete;
         FString PickerInitialPath;int32 PickerRequests=0;
         ACEWaypointFilePicker::SetTestPicker([&](const FString& InitialPath,ACEWaypointFilePicker::FComplete Complete)
@@ -495,7 +500,7 @@ bool FACEPluginHostTest::RunTest(const FString&)
             // process the same attribute/layout update the next UI frame performs.
             Browse->UpdateAllAttributes();Panel->SlatePrepass(1.f);
         };
-        TestTrue(TEXT("XML Browse is enabled before any path or atlas exists"),PathBox->GetText().IsEmpty()&&IsControlEnabled(Panel,Browse));
+        TestTrue(TEXT("XML Browse is enabled before importing"),PathBox->GetText().IsEmpty()&&IsControlEnabled(Panel,Browse));
         Click(TEXT("Browse XML file"));
         TestEqual(TEXT("Browse requests one XML chooser"),PickerRequests,1);
         TestTrue(TEXT("Chooser starts without a typed path"),PickerInitialPath.IsEmpty());
@@ -504,7 +509,7 @@ bool FACEPluginHostTest::RunTest(const FString&)
         if(!TestTrue(TEXT("XML chooser supplies an asynchronous completion"),bool(PickerComplete)))return false;
         CompletePicker(Atlas,FString(),false);
         TestEqual(TEXT("Selected XML populates the editable path"),PathBox->GetText().ToString(),Atlas);
-        TestTrue(TEXT("Selecting an XML waits for the explicit Import button"),H->GetWaypointLocations().IsEmpty()
+        TestTrue(TEXT("Selecting an XML waits for the explicit Import button"),BundledUnchanged()
             &&FindControl(Panel,TEXT("Waypoint.AtlasPath"))==PathBox&&!FindControl(Panel,TEXT("Waypoint.AtlasResults")).IsValid());
         TestTrue(TEXT("Browse is available again after choosing a file"),!ACEWaypointFilePicker::IsOpen()&&IsControlEnabled(Panel,Browse));
         Click(TEXT("Browse XML file"));
@@ -519,28 +524,28 @@ bool FACEPluginHostTest::RunTest(const FString&)
         if(!TestTrue(TEXT("Picker cancellation callback is available"),bool(PickerComplete)))return false;
         CompletePicker(FString(),FString(),true);
         TestTrue(TEXT("Cancelling the XML chooser preserves path, feedback and imported data"),PathBox->GetText().ToString()==Atlas
-            &&PickerStatus->GetText().ToString()==BeforeCancel&&H->GetWaypointLocations().IsEmpty());
+            &&PickerStatus->GetText().ToString()==BeforeCancel&&BundledUnchanged());
         Click(TEXT("Browse XML file"));
         if(!TestTrue(TEXT("Typed filename validation callback is available"),bool(PickerComplete)))return false;
         CompletePicker(Root/TEXT("not an atlas.txt"),FString(),false);
         TestTrue(TEXT("A typed non-XML filename cannot bypass the chooser filter"),PathBox->GetText().ToString()==Atlas
-            &&PickerStatus->GetText().ToString().Contains(TEXT("Choose a GoArrow or CoD XML file"))&&H->GetWaypointLocations().IsEmpty());
+            &&PickerStatus->GetText().ToString().Contains(TEXT("Choose a GoArrow or CoD XML file"))&&BundledUnchanged());
         Click(TEXT("Browse XML file"));
         if(!TestTrue(TEXT("Uppercase XML filename callback is available"),bool(PickerComplete)))return false;
         const FString UppercaseAtlas=Root/TEXT("Locations.XML");
         CompletePicker(UppercaseAtlas,FString(),false);
         TestEqual(TEXT("XML selection accepts case-insensitive extensions"),PathBox->GetText().ToString(),UppercaseAtlas);
-        TestTrue(TEXT("Choosing XML still leaves import under user control"),H->GetWaypointLocations().IsEmpty()
+        TestTrue(TEXT("Choosing XML still leaves import under user control"),BundledUnchanged()
             &&PickerStatus->GetText().ToString().Contains(TEXT("Import locations")));
         Click(TEXT("Search locations"));
-        auto EmptyStatus=StaticCastSharedPtr<STextBlock>(FindControl(Panel,TEXT("Waypoint.AtlasStatus")));
-        auto EmptyResults=StaticCastSharedPtr<SListView<TSharedPtr<FACEWaypointLandmark>>>(FindControl(Panel,TEXT("Waypoint.AtlasResults")));
-        if(!TestTrue(TEXT("Search locations opens an empty atlas with guidance back to import"),EmptyStatus&&EmptyResults
-            &&EmptyResults->GetItems().IsEmpty()&&EmptyStatus->GetText().ToString().Contains(TEXT("No locations imported"))
-            &&EmptyStatus->GetText().ToString().Contains(TEXT("Back"))))return false;
+        auto DefaultResults=StaticCastSharedPtr<SListView<TSharedPtr<FACEWaypointLandmark>>>(FindControl(Panel,TEXT("Waypoint.AtlasResults")));
+        auto DefaultSearch=StaticCastSharedPtr<SEditableTextBox>(FindControl(Panel,TEXT("Waypoint.AtlasSearch")));
+        if(!TestTrue(TEXT("Search lists the included atlas before import"),DefaultSearch&&DefaultResults&&DefaultResults->GetItems().Num()==Bundled.Num()))return false;
+        DefaultSearch->SetText(FText::FromString(TEXT("Arwic")));
+        if(!TestTrue(TEXT("Bundled atlas search filters by town"),DefaultResults->GetItems().Num()>0&&DefaultResults->GetItems().Num()<Bundled.Num()))return false;
         Click(TEXT("Back"));
         PathBox=StaticCastSharedPtr<SEditableTextBox>(FindControl(Panel,TEXT("Waypoint.AtlasPath")));
-        if(!TestTrue(TEXT("Back from an empty browser restores the import path"),PathBox.IsValid()))return false;
+        if(!TestTrue(TEXT("Back from the bundled atlas preserves the chosen XML path"),PathBox&&PathBox->GetText().ToString()==UppercaseAtlas))return false;
         PathBox->SetText(FText::FromString(FString::Printf(TEXT("  \"%s\"  "),*Atlas)));
         Click(TEXT("Import locations"));
         auto Status=StaticCastSharedPtr<STextBlock>(FindControl(Panel,TEXT("Waypoint.AtlasStatus")));

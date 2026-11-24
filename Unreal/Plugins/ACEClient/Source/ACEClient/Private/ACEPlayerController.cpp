@@ -1672,6 +1672,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	// Drive walk/run anim on the local player's appearance from the same axes we send to the server.
 	FTransform WalkingRootDelta = FTransform::Identity;
 	float WalkingCycleSeconds = DeltaTime;
+	bool bClassicCastBlocksForward = false;
 	bool bWalkingTransitionThisFrame = false, bWalkingTransitionPending = false;
 	if (APawn* PossessedPawn = GetPawn())
 	{
@@ -1682,11 +1683,11 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			// Retail StopObjectCompletely and ordinary key-up both return through
 			// the motion table. Stop/chat suppress input, not the unfinished step.
 			App->SetTurnInput(bVR || bJumpAirborne ? 0.f : bMouseFacing ? MouseTurnAnimationRate : ReportedTurn*(bRunning?1.5f:1.f));
-			if (!bJumpAirborne && !FMath::IsNearlyZero(F)
-				&& (FMath::Sign(F) != FMath::Sign(ForwardSent) || bForceMovementResend))
+			if (!bJumpAirborne && !FMath::IsNearlyZero(F))
 			{
-				App->InterruptCastWithMovement();
-				App->FinishMissileMotion();
+				const bool bNewForward = FMath::Sign(F) != FMath::Sign(ForwardSent) || bForceMovementResend;
+				if (bNewForward || ACERuntimeOptions::ClassicMovement()) App->InterruptCastWithMovement();
+				if (bNewForward) App->FinishMissileMotion();
 			}
 			App->UpdateCellLighting((bHavePredictedPose ? PredictedPose : Client->GetPlayerPosition()).CellId);
 			if (bJumpAirborne)
@@ -1733,9 +1734,10 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			WalkingRootDelta = App->AdvanceWalkingMotion(DeltaTime, WalkingCycleSeconds);
 			bWalkingTransitionPending = App->HasWalkingTransition();
 			// Report the requested raw movement to the server, but don't predict
-			// a full-speed walk/run cycle while a missile/physical combat link
-			// owns the forward channel. Casting stays mobile on desktop and touch.
-			if (!bVR && App->HasPendingCombatForwardMotion()) WalkingCycleSeconds = 0.f;
+			// a walk/run cycle underneath an unfinished action. Retail sidestep
+			// and turn are independent modifiers and keep their full frame time.
+			bClassicCastBlocksForward = ACERuntimeOptions::ClassicMovement() && App->HasPendingCastForwardMotion();
+			if (bClassicCastBlocksForward || (!bVR && App->HasPendingCombatForwardMotion())) WalkingCycleSeconds = 0.f;
 		}
 	}
 
@@ -3649,11 +3651,12 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					bLocalPredicting = true;
 					bHavePredictedPose = true;
 					JumpAirborneSeconds = 0.f;
-					JumpWorldAceVelocity = Pred.GetAceForwardInAcSpace() * F
+					const float FallForward = bClassicCastBlocksForward ? 0.f : F;
+					JumpWorldAceVelocity = Pred.GetAceForwardInAcSpace() * FallForward
 						* (F < 0.f ? .65f : 1.f) * Client->GetLocomotionSpeed(bRunning)
 						+ Pred.GetAceRightInAcSpace() * R * Client->GetSidestepSpeed(bRunning);
 					if (bUniformVRMovement)
-						JumpWorldAceVelocity = Pred.GetAcQuat().RotateVector(ACEVRLocomotion::JumpVelocity(F, R, bRunning, Client->GetRunRate()));
+						JumpWorldAceVelocity = Pred.GetAcQuat().RotateVector(ACEVRLocomotion::JumpVelocity(FallForward, R, bRunning, Client->GetRunRate()));
 					JumpWorldAceVelocity.Z = -9.8f * DeltaTime;
 					GroundZ = Desired.Z - .5f * 9.8f * WorldScale * DeltaTime * DeltaTime;
 					bForceMovementResend = true;
@@ -8134,6 +8137,7 @@ void AACEPlayerController::HandleMotionUpdate(int32 ObjectGuid, const FACEObject
 				// completes Reload with the authored overhead nock/draw animation.
 				App->FinishMissileMotion();
 				App->FinishEmoteMotion();
+				App->InterruptCastWithMovement();
 			}
 		}
 	}

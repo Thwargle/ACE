@@ -30,16 +30,16 @@ bool UACEUIGameplayBinder::CanMoveInventoryAmountToContainer(int32 Guid, int32 C
 		if (!Client->GetWorldObject(Parent, Ancestor)) break;
 		Parent = Ancestor.ContainerId;
 	}
-	if (MergeTarget)
+	const auto Session=Client->GetSession();
+	if (MergeTarget && Session)
 	{
 		FACEWorldObject Target;
 		if (Client->GetWorldObject(MergeTarget, Target) && Target.ContainerId == Container
 			&& !Client->GetTradeSelfItems().Contains(MergeTarget)
-			&& ACEInventoryRules::MergeAmount(Item, Target) > 0) return true;
+			&& Session->AvailableMergeAmount(Item, Target) > 0) return true;
 	}
 	// A full move within the same pack simply reorders its existing slot.
 	if (Item.ContainerId == Container && Amount == FMath::Max(1, Item.StackSize)) return true;
-	const auto Session=Client->GetSession();
 	if (bAutoMerge && Session && Session->FindContainerMergeTarget(Guid,Container,Amount)) return true;
 	// Match the inventory's seven default side slots when a player descriptor
 	// omits capacity. Zero on an ordinary bag still means no nested packs.
@@ -322,7 +322,7 @@ bool UACEUIGameplayBinder::MergeInventoryAmount(int32 Guid, int32 TargetGuid, in
 	const auto Offered = Client->GetTradeSelfItems();
 	const auto OtherOffers = Client->GetTradePartnerItems();
 	if (Offered.Contains(Guid) || Offered.Contains(TargetGuid) || OtherOffers.Contains(Guid) || OtherOffers.Contains(TargetGuid)) return false;
-	Amount = FMath::Min(Amount, ACEInventoryRules::MergeAmount(Source, Target));
+	Amount = FMath::Min(Amount, Client->GetSession()->AvailableMergeAmount(Source, Target));
 	if (Amount <= 0) return false;
 	Client->SendStackableMerge(Guid, TargetGuid, Amount);
 	SelectInventoryGuid(TargetGuid); // ItemHolder::AttemptMerge selects the surviving stack.

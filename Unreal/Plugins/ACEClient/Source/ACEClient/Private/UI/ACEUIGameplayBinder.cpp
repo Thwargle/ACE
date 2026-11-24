@@ -27,6 +27,7 @@
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
 #include "UI/ACEUIResourceResolver.h"
+#include "UI/ACEItemDragIcon.h"
 #include "UI/ACERetailTextBlock.h"
 #include "UI/ACEUILayoutResolver.h"
 #include "UI/ACEUIElement.h"
@@ -5120,7 +5121,17 @@ void UACEUIGameplayBinder::UpdateInventoryDrag(FVector2D CanvasLocalPos)
 		InvDragIcon->SetPadding(FMargin(0.f));
 		InvDragIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
 	}
-	SetIconDid(InvDragIcon, InvDragIconDid);
+	UTexture2D* DragTexture = ACEItemDragIcon::Resolve(Canvas->GetResourceResolver(),
+		Client ? Client->GetSession().Get() : nullptr, InvDragGuid, InvDragIconDid);
+	const auto DrawAs = DragTexture ? ESlateBrushDrawType::Image : ESlateBrushDrawType::NoDrawType;
+	if (InvDragIcon->Background.GetResourceObject() != DragTexture || InvDragIcon->Background.DrawAs != DrawAs)
+	{
+		FSlateBrush Brush;
+		Brush.SetResourceObject(DragTexture);
+		Brush.ImageSize = FVector2D(32, 32);
+		Brush.DrawAs = DrawAs;
+		InvDragIcon->SetBrush(Brush);
+	}
 	// ItemSlot's DAT accept/reject artwork belongs to the hovered destination cell.
 	if (PaperDollDragTargetIcon) PaperDollDragTargetIcon->SetVisibility(ESlateVisibility::Collapsed);
 	FString TargetName; int64 TargetMask = 0;

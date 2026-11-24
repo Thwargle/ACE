@@ -129,16 +129,16 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
             .OnClicked_Lambda([Click](){Click();return FReply::Handled();})
             [SNew(SACEPluginText).Text(FText::FromString(Label)).Font(FACEPluginStyle::NativeFont("Regular",14))]];
     };
-    QuickButton(TEXT("F"),TEXT("Force Buff: refresh enabled buffs, even while UCM is stopped."),[Host](){if(Host.IsValid())Host->RequestForceBuff();},true);
+    QuickButton(TEXT("F"),TEXT("Refresh enabled buffs now, even with UCM stopped."),[Host](){if(Host.IsValid())Host->RequestForceBuff();},true);
     QuickButton(TEXT("CF"),TEXT("Cancel Force Buff after the current cast."),[Host](){if(Host.IsValid())Host->CancelForceBuff();},
         TAttribute<bool>::CreateLambda([Host](){return Host.IsValid()&&Host->IsForceBuffRequested();}));
     Quick->AddSlot().AutoWidth().Padding(3,0)[SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).IsFocusable(false)
-        .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Follow Character: select a player, enable FC, then start UCM. Disable to stop following."))))
+        .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Follow the selected player while UCM runs."))))
         .IsChecked_Lambda([Host](){return Host.IsValid()&&Host->IsUCMFollowEnabled()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
         .OnCheckStateChanged_Lambda([Host](ECheckBoxState V){if(Host.IsValid())Host->SetUCMFollowSelected(V==ECheckBoxState::Checked);})
         [SNew(SACEPluginText).Text(FText::FromString(TEXT("FC"))).Font(FACEPluginStyle::NativeFont("Regular",14))]];
     Quick->AddSlot().AutoWidth().Padding(3,0)[SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).IsFocusable(false)
-        .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Corners: follow the player's observed footsteps in order instead of heading directly toward them."))))
+        .ToolTip(FACEPluginStyle::Tooltip(FText::FromString(TEXT("Follow the player's footsteps around corners."))))
         .IsChecked_Lambda([UCM](){auto P=UCM();bool On=false;if(P)P->Profile->TryGetBoolField(TEXT("follow_corners"),On);return On?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
         .OnCheckStateChanged_Lambda([Host,UCM](ECheckBoxState V){if(auto P=UCM();P&&Host.IsValid()){P->Profile->SetBoolField(TEXT("follow_corners"),V==ECheckBoxState::Checked);Host->SaveCurrentProfile(P->Id,false);}})
         [SNew(SACEPluginText).Text(FText::FromString(TEXT("C"))).Font(FACEPluginStyle::NativeFont("Regular",14))]];

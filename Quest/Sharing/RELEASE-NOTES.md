@@ -1,24 +1,20 @@
-# AC:Unreal / AC:VR release 164
+# AC:Unreal / AC:VR release 165
 
-Windows desktop, PC VR, native Linux, standalone Quest, and the Android phone and tablet preview share version **2026.11.23.164**.
+Windows desktop, PC VR, native Linux, standalone Quest, and the Android phone and tablet preview share version **2026.11.23.165**.
 
 ## Waypoint
 
-- **Browse XML file** opens the atlas file picker. **Search locations** opens the imported GoArrow or CoD atlas from NAV or the full map.
-- **Find route** opens a separate desktop **Waypoint Route** window with clickable steps. Use **Show route** to reopen your directions while the route is active.
+- Search 5,066 locations and plan routes with the included atlas. An atlas you imported stays selected across updates that preserve your character settings.
+- **Find route** calculates directions. **Current directions** reopens the steps for your active route.
 
-## UCM
+## Combat and looting
 
-- Enable **Craft ammunition from bundles** and set a minimum stock level for your launcher. Crafting uses the matching bundled components and requires trained Fletching.
-- A clear return path lets UCM rejoin its navigation route directly after combat. Edit stored route points while navigation is active.
-- Buff maintenance checks active combat and remaining enchantment time, including equipment banes.
-- UCM continues running in the background. **Play Audio in Background** in Sound Options controls whether game sounds stay audible while alt-tabbed.
+- Enable **Classic movement** in options for retail casting movement locks and animation breaks. The setting is optional.
+- Missile characters using UCM without a navigation route hold their ground when a target is out of range. A busy pickup can be retried while the corpse is open.
+- UCM counts Jack of All Trades when checking base-skill wield requirements.
+- Manual and UCM pickups respect stack capacity, including space reserved by earlier pickups. Excess items go into another stack.
+- Dragging a rare or enchanted item shows its icon overlay and visual effects. This restores the white emblem on the Pearl of Defending.
 
-## Inventory, housing, and graphics
+## Plugins
 
-- Pickup tries whole-stack merges and uses retail pack order. Grid moves preserve the requested slot even while item details are arriving.
-- Item Tools proceeds to the next merge as soon as it observes the inventory change. Reduced armor uses its current slot coverage.
-- The House tab shows coordinates. **Max Fog Distance** controls the far fog limit, with a softer horizon band when Far Terrain Horizon is enabled.
-- Vendor purchases and restocking account for the quoted alternate-currency balance. Hooked items and entrance lighting use the expected interior materials.
-
-The README and Lua plugin documentation have been shortened. Players supply their own retail data. See the release verification record for the automated checks.
+- Plugin panels have shorter instructions and clearer control labels. UCM’s idle equipment-mana checks process less character data, and spell lists are reused until they change.

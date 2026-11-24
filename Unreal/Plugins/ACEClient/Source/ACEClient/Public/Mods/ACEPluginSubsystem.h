@@ -58,6 +58,7 @@ struct FACEClientPlugin
 {
     TSharedPtr<FJsonObject> ProfileLinks, ProfileBaseline;
     FString Id, Name, Version, Description, Directory, Status = TEXT("Stopped"), ProfileName = TEXT("Default");
+    bool bBundledUCM = false;
     TArray<FString> Permissions;
     // Omitted fields preserve the original API; an explicit list is opt-in.
     TSet<FString> SnapshotFields;
@@ -402,7 +403,7 @@ public:
 
     void RecordWaypoint(const FString& Id, const TSharedPtr<FJsonObject>& Details = nullptr);
     void AddBuff(const FString& Id, int32 SpellId);
-    TSharedPtr<FJsonObject> Snapshot();
+    TSharedPtr<FJsonObject> Snapshot(bool bEquipmentManaOnly = false);
     /** Called before the normal prediction/network pipeline; never teleports the pawn. */
     void ApplyMovement(AACEPlayerController* Controller, float& Forward, float& Right, float& Turn,
         bool Manual, bool Blocked, bool VR, const FVector& Facing, float MaxFrameTravel = 0.f);
@@ -612,6 +613,7 @@ private:
     TMap<int32, FLootedCorpse> LootedCorpses;
     TMap<int32, double> AppraisalRequests;
     TArray<TSharedPtr<FJsonValue>> CachedInventory;
+    TSharedPtr<FJsonValue> CachedInventoryArray;
     TMap<int32,int32> CachedInventoryIndices;
     TSet<int32> InventoryWieldInt64Keys;
     TSet<int32> DirtyInventoryAppraisals;
@@ -644,8 +646,8 @@ private:
     void WakeCombatDecision();
     void UnbindCombatEvents();
     void ObserveCombatFeedback(const FString& Name,int32 Damage,bool Incoming,bool Critical);
-    void RecordCombatOutcome(bool Hit);
-    void AddCombatOutcome(int32 Target,bool Hit,bool Unhittable=false,int32 Spell=0,int32 Damage=0);
+    void RecordCombatOutcome(bool Hit,bool MissileOutOfRange=false);
+    void AddCombatOutcome(int32 Target,bool Hit,bool Unhittable=false,int32 Spell=0,int32 Damage=0,double RejectedDistance=-1.);
     void ObserveOffensiveSpellChat(const FString& Text,const FString& Sender,int32 Type);
     void ExpireOffensiveCasts(double Now);
     struct FOffensiveCast
@@ -705,7 +707,7 @@ private:
     double NextRouteCheck=0;
 
     TArray<int32> CachedSpellIds, CachedSchoolSkills;
-    TArray<TSharedPtr<FJsonValue>> CachedSpells;
+    TSharedPtr<FJsonValue> CachedSpellArray;
     TArray<TSharedPtr<FJsonValue>> CachedKnownSpellValues;
     uint64 CachedSpellRevision = MAX_uint64;
     uint32 CachedSpellFocusMask = MAX_uint32;

@@ -611,6 +611,8 @@ Do not infer removal from a capped snapshot; keep a bounded timeout for missing
 or overwritten evidence.
 
 `combat_events` entries have `serial`, `target`, `hit`, `unhittable` and `time`.
+When the server rejects a missile shot as out of range, `missile_rejected_distance`
+gives the distance in metres to the selected target when the reply arrived.
 Correlated single-target spell hits additionally carry `spell` and, when supplied
 by the damage result, positive `damage`. Neither UseDone nor spell words count as
 damage. Target snapshots expose `health` when supplied by an appraisal, or
