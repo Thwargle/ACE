@@ -4,6 +4,7 @@
 #include "ACEDatSubsystem.h"
 #include "ACEPlayerController.h"
 #include "ACEInventoryRules.h"
+#include "ACEItemTools.h"
 #include "ACEEquipmentRules.h"
 #include "ACEScrollLearning.h"
 #include "ACEVendorPricing.h"
@@ -1123,11 +1124,16 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
     int64 Pyreals=0;
     if(C->GetOpenVendorGuid()&&C->GetWorldObject(C->GetOpenVendorGuid(),Vendor))
     {
+        const auto Space=ACEItemTools::VendorSpace(C);
+        Out->SetNumberField(TEXT("vendor_free_slots"),Space.ItemSlots);
+        Out->SetNumberField(TEXT("vendor_coin_stack"),Space.CoinStack);
         Out->SetStringField(TEXT("vendor_name"),Vendor.Name);Out->SetNumberField(TEXT("vendor_wcid"),Vendor.WeenieClassId);
         for(const auto& Item:C->GetVendorMerchandise())
         {
             auto J=MakeShared<FJsonObject>();J->SetNumberField(TEXT("id"),uint32(Item.Guid));J->SetNumberField(TEXT("wcid"),Item.WeenieClassId);
             J->SetStringField(TEXT("name"),ACERetailObjectNames::Name(Item));J->SetNumberField(TEXT("limit"),ACEInventoryRules::VendorPurchaseLimit(Item));
+            J->SetNumberField(TEXT("room"),Space.PurchaseRoom(Item));
+            if(ACEItemTools::IsMMD(Item))J->SetBoolField(TEXT("mmd"),true);
             J->SetNumberField(TEXT("unit_value"),FMath::Max(0,Item.Value)/FMath::Max(1,Item.StackSize));
             J->SetNumberField(TEXT("sell_rate"),Item.ItemType==ACEItemType::PromissoryNote?1.15:double(C->GetVendorSellRate()));
             Stock.Add(MakeShared<FJsonValueObject>(J));
@@ -1609,20 +1615,15 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
             || !Owned||!LootItemAvailable(C,Item)||Item.ItemType!=ACEItemType::PromissoryNote||Item.Value<=0
             || !Session->CanVendorBuyItem(Item)||Amount<1||Amount>FMath::Max(1,Item.StackSize)||FMath::FloorToDouble(Amount)!=Amount)
         {ReportActivityFailure(P,I,TEXT("Trade note or vendor changed; restocking stopped"));return true;}
+        if(ACEVendorPricing::VendorBuyPayout(Item,int32(Amount),C->GetVendorBuyRate())>ACEItemTools::VendorSpace(C).PayoutRoom(Action==TEXT("split_note")))
+        {ReportActivityFailure(P,I,TEXT("Free more pack slots for the trade note proceeds"));return true;}
         if(Action==TEXT("sell_note"))
         {
             if(Amount!=FMath::Max(1,Item.StackSize)){ReportActivityFailure(P,I,TEXT("Trade note split is not confirmed; nothing sold"));return true;}
             C->SendSellItems(Vendor,{{int32(Amount),Id}});return true;
         }
         if(Amount>=FMath::Max(1,Item.StackSize)){ReportActivityFailure(P,I,TEXT("Trade note stack changed; nothing split"));return true;}
-        int32 Destination=0;
-        auto TryPack=[&](int32 PackId)
-        {
-            FACEWorldObject Pack;if(Destination||!C->GetWorldObject(PackId,Pack))return;
-            const int32 Capacity=Pack.ItemsCapacity>0?Pack.ItemsCapacity:(PackId==C->GetPlayerGuid()?102:0);
-            if(Capacity>C->GetPackItems(PackId).Num())Destination=PackId;
-        };
-        TryPack(Item.ContainerId);TryPack(C->GetPlayerGuid());for(const auto& Pack:C->GetPlayerPacks())TryPack(Pack.Guid);
+        const int32 Destination=C->PlanInventoryPickup(Id,0,int32(Amount),false).Container;
         if(!Destination){ReportActivityFailure(P,I,TEXT("Free an inventory slot to split trade notes for restocking"));return true;}
         C->SendStackableSplitToContainer(Id,Destination,0,int32(Amount));return true;
     }
@@ -1634,6 +1635,7 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
         for(const auto& Stock:C->GetVendorMerchandise())if(Stock.Guid==Id)
         {
             if(Amount>ACEInventoryRules::VendorPurchaseLimit(Stock)){ReportActivityFailure(P,I,TEXT("Requested vendor stock is no longer available"));return true;}
+            if(P.Id==TEXT("ucm")&&Amount>ACEItemTools::PurchaseRoom(C,Stock)){ReportActivityFailure(P,I,TEXT("Free a pack slot for the purchase"));return true;}
             C->SendBuyItems(Vendor,{{int32(Amount),Id}});return true;
         }
         ReportActivityFailure(P,I,TEXT("Purchase item is not in the open vendor's stock"));return true;

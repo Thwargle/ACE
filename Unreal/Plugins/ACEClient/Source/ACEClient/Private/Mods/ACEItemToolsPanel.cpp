@@ -121,6 +121,9 @@ private:
         Add(SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).IsChecked_Lambda([this](){return Plugin->Enabled?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
             .OnCheckStateChanged_Lambda([this](ECheckBoxState S){Host->SetEnabled(Plugin->Id,S==ECheckBoxState::Checked);})[Text(TEXT("Enable Item Tools inventory actions"))]);
         Add(SNew(SBox).IsEnabled_Lambda([this](){return Plugin->Enabled;})[Button(Label,[this,Mode](){Host->StartItemTools(Mode);})]);
+        if(Mode==TEXT("shop")||Mode==TEXT("restock"))
+            Add(SNew(SBox).ToolTipText(INVTEXT("Open a vendor that sells Trade Note (250,000) for pyreals.")).IsEnabled_Lambda([this](){return Plugin->Enabled&&HasMMDVendor(Client());})
+                [Button(TEXT("Convert Peas to MMDs"),[this](){Host->StartItemTools(TEXT("convert_peas"));})]);
         if(Host->Plugins.ContainsByPredicate([](const auto& Entry){return Entry->Id==TEXT("ucm")&&Entry->Enabled;}))
             Add(Text(TEXT("UCM pauses during this job and resumes afterward."),12,Muted));
     }

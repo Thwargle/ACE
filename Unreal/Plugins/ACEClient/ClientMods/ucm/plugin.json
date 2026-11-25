@@ -3,7 +3,7 @@
   "id": "ucm",
   "name": "Unattended Combat Manager",
   "short_name": "UCM",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Automate combat, recovery, buffs, crafting, fellowship, routes and looting.",
   "permissions": [
     "cast",

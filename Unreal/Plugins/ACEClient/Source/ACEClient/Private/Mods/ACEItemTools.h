@@ -25,33 +25,74 @@ inline bool Transferable(UACEClientSubsystem* C, FACEWorldObject Item)
     }
     return false;
 }
-inline int32 PurchaseRoom(UACEClientSubsystem* C,const FACEWorldObject& Stock)
+inline bool UsesPackSlot(const FACEWorldObject& Item)
 {
-    auto Session=C->GetSession();if(!Session)return 0;
-    auto PackSlot=[](const FACEWorldObject& O){return ACEInventoryRules::IsContainer(O)||(O.ItemType&ACEItemType::Container)||(O.ObjectDescriptionFlags&ACEObjectDescFlag::RequiresPackSlot);};
-    const bool IsPack=PackSlot(Stock);const auto Offered=C->GetTradeSelfItems();
-    TMap<int32,int32> Counts;Counts.Add(C->GetPlayerGuid(),0);
-    for(const auto& Pack:C->GetPlayerPacks())if(!Offered.Contains(Pack.Guid))Counts.Add(Pack.Guid,0);
-    int64 Room=0;
-    for(const auto& Pair:Session->GetWorldObjects())
+    return ACEInventoryRules::IsContainer(Item)||(Item.ItemType&ACEItemType::Container)||(Item.ObjectDescriptionFlags&ACEObjectDescFlag::RequiresPackSlot);
+}
+struct FVendorSpace
+{
+    int32 ItemSlots=0,PackSlots=0,CoinStack=25000;
+
+    int32 PurchaseRoom(const FACEWorldObject& Stock) const
     {
-        const auto& I=Pair.Value;if(I.WielderId||I.ParentGuid||I.CurrentWieldedLocation)continue;
-        if(auto* Count=Counts.Find(I.ContainerId);Count&&PackSlot(I)==IsPack)
+        // ACE checks new stacks before charging the player or merging anything.
+        return (UsesPackSlot(Stock)?PackSlots:ItemSlots)>0?ACEInventoryRules::VendorPurchaseLimit(Stock):0;
+    }
+    int64 PayoutRoom(bool Split) const
+    {
+        return int64(FMath::Max(0,ItemSlots-(Split?1:0)))*CoinStack;
+    }
+};
+inline FVendorSpace VendorSpace(UACEClientSubsystem* C)
+{
+    FVendorSpace Space;
+    auto Session=C->GetSession();if(!Session)return Space;
+    const auto Offered=C->GetTradeSelfItems();
+    TMap<int32,int32> Counts;
+    const int32 Player=C->GetPlayerGuid();
+    if(!Player)return Space;
+    Counts.Add(Player,0);
+    for(const auto& Pack:C->GetPlayerPacks())
+        if(ACEInventoryRules::IsContainer(Pack)&&!Offered.Contains(Pack.Guid))Counts.Add(Pack.Guid,0);
+    Session->GetPackItemCounts(Counts);
+    for(const auto& Pair:Counts)
+    {
+        const auto* Pack=Session->GetWorldObjects().Find(Pair.Key);
+        const int32 Capacity=ACEInventoryRules::SlotCapacity(Pack,Pair.Key==Player,false);
+        Space.ItemSlots+=Capacity==-1?MAX_uint16:FMath::Max(0,Capacity-Pair.Value);
+        if(Pair.Key==Player)
         {
-            ++*Count;
-            if(!IsPack&&I.WeenieClassId==Stock.WeenieClassId&&Transferable(C,I))Room+=FMath::Max(0,I.MaxStackSize-FMath::Max(1,I.StackSize));
+            const int32 PackCapacity=ACEInventoryRules::SlotCapacity(Pack,true,true);
+            Space.PackSlots=PackCapacity==-1?MAX_uint16:FMath::Max(0,PackCapacity-Session->CountContainerSlots(Player,true));
         }
     }
-    for(auto& Pair:Counts)
+    for(const auto& Pair:Session->GetWorldObjects())
     {
-        if(const auto* Contents=Session->GetContainerContents(Pair.Key))
-            for(const auto& Ref:*Contents)if(!Session->GetWorldObjects().Contains(Ref.ItemGuid)&&(Ref.ContainerType!=0)==IsPack)++Pair.Value;
-        FACEWorldObject Pack;if(!C->GetWorldObject(Pair.Key,Pack))continue;
-        const int32 Capacity=IsPack?Pack.ContainersCapacity:Pack.ItemsCapacity;
-        if(Capacity==-1)return ACEInventoryRules::VendorPurchaseLimit(Stock);
-        Room+=int64(FMath::Max(0,Capacity-Pair.Value))*FMath::Max(1,Stock.MaxStackSize);
+        const auto& Item=Pair.Value;
+        if(Item.WeenieClassId==273&&Item.MaxStackSize>0&&Counts.Contains(Item.ContainerId))
+        {Space.CoinStack=Item.MaxStackSize;break;}
     }
-    return int32(FMath::Clamp<int64>(Room,0,ACEInventoryRules::VendorPurchaseLimit(Stock)));
+    return Space;
+}
+inline int32 PurchaseRoom(UACEClientSubsystem* C,const FACEWorldObject& Stock)
+{
+    return VendorSpace(C).PurchaseRoom(Stock);
+}
+inline bool IsMMD(const FACEWorldObject& Stock)
+{
+    return Stock.WeenieClassId==20630&&Stock.ItemType==ACEItemType::PromissoryNote&&ACEInventoryRules::VendorPurchaseLimit(Stock)>0;
+}
+inline bool IsPea(const FACEWorldObject& Item)
+{
+    const int32 Id=Item.WeenieClassId;
+    return (Id>=8284&&Id<=8357)||Id==20963||Id==25729||Id==36642||Id==36675||(Id>=36729&&Id<=36735)||Id==39329
+        ||(Item.ItemType==ACEItemType::SpellComponents&&Item.Name.EndsWith(TEXT(" Pea")));
+}
+inline bool HasMMDVendor(UACEClientSubsystem* C)
+{
+    if(!C)return false;
+    const auto Session=C->GetSession();
+    return Session&&Session->GetOpenVendorGuid()&&Session->VendorUsesPyreals()&&Session->GetVendorMerchandise().ContainsByPredicate(IsMMD);
 }
 inline double Number(const TSharedPtr<FJsonObject>& O,const TCHAR* K,double Default=0)
 {double V;return O&&O->TryGetNumberField(K,V)&&FMath::IsFinite(V)?V:Default;}

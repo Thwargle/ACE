@@ -6,7 +6,7 @@ the [public Lua API](PublicAPI.md), [companion guide](Companions.md) or
 
 ## Manage plugins
 
-At login, open **Accounts → Plugin Manager** to install official and community plugins.
+On the login screen, select **Plugin Manager** on the main bar to install official and community plugins.
 New players start with an empty plugin list. On an upgrade from the bundled client,
 the account screen restores the former official packages from GitHub. Keep the client
 online during the first visit. It retries interrupted downloads on later visits.

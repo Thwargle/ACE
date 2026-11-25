@@ -1,10 +1,19 @@
-#requires -Version 7.0
+#requires -Version 5.1
 param()
 $ErrorActionPreference = 'Stop'
 $serverDirectory = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\Unreal\PackagedVR\Server'))
 $serverExe = Join-Path $serverDirectory 'ACE.Server.exe'
 if (!(Test-Path -LiteralPath $serverExe)) { throw "Server executable not found: $serverExe" }
-$config = Get-Content -LiteralPath (Join-Path $serverDirectory 'Config.js') -Raw | ConvertFrom-Json
+$configPath = Join-Path $serverDirectory 'Config.js'
+$configText = Get-Content -LiteralPath $configPath -Encoding UTF8 -Raw
+if ($PSVersionTable.PSVersion.Major -eq 5) {
+    # ACE accepts comments and trailing commas. Preserve quoted strings, including URLs and escaped quotes.
+    $quotedString = '("(?:[^"\\]|\\.)*")'
+    $configText = $configText -creplace ($quotedString + '|//[^\r\n]*|/\*[\s\S]*?\*/'), '$1 '
+    $configText = $configText -creplace ($quotedString + '|,(?=\s*[}\]])'), '$1'
+}
+try { $config = ConvertFrom-Json -InputObject $configText }
+catch { throw "Cannot parse the ACE server configuration at $configPath." }
 $port = [int]$config.Server.Network.Port
 if ($port -lt 1 -or $port -gt 65534) { throw 'Invalid server UDP port in Config.js.' }
 

@@ -385,8 +385,7 @@ FACEInventoryPickup UACEClientSubsystem::PlanInventoryPickup(int32 ItemGuid, int
 	auto HasRoom = [&](int32 Container)
 	{
 		const auto* Object = Objects.Find(Container);
-		if (!Object) return false;
-		const int32 Capacity = bPackItem ? Object->ContainersCapacity : Object->ItemsCapacity;
+		const int32 Capacity = ACEInventoryRules::SlotCapacity(Object, Container == Self, bPackItem);
 		if(Capacity==-1)return true;
 		const int32 Used=bPackItem ? Session->CountContainerSlots(Container,true,Exclude) : ItemCounts.FindRef(Container);
 		return Used < Capacity;

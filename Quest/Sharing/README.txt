@@ -106,6 +106,11 @@ Use this project's VR-enabled server for its custom VR combat/pose extensions.
 
 UPDATES / TROUBLESHOOTING
 
+- Three dots before the account screen on v166: use the complete v167 Quest
+  bundle and run its Update-Quest.cmd to replace the APK and keep your DATs
+  and logins. The updated APK enables the Quest Vulkan device profile. Data repair
+  only checks the DATs. If the dots persist, capture diagnostics while the
+  headset is awake and the app is open.
 - Black screen or "AC:VR isn't responding" before login: while the failure is
   still recent, connect USB and run Diagnose-Quest.cmd. Accept USB debugging if
   needed. Send the resulting Quest-Diagnostics-*.zip. It records app version,

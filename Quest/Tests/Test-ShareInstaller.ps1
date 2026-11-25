@@ -67,6 +67,11 @@ if ($args -contains 'getprop') {
     if ($args[1] -eq 'PHONE') { Write-Output 'Pixel 9' } else { Write-Output 'Quest 3' }
     exit 0
 }
+if (($args -join ' ') -match 'shell dumpsys package com\.acecommunity\.questtest$') {
+    if ($scenario -eq 'data-repair') { Write-Output '    versionName=previous' }
+    else { Write-Output '    versionName=test' }
+    exit 0
+}
 # Only the update preflight may ask about existing data in these fixtures.
 if (($args -join ' ') -match 'shell run-as com.acecommunity.questtest test -s files/ACUnreal/Saved/DAT/') { exit 0 }
 $cmd = $args -join ' '
@@ -128,7 +133,7 @@ Test-Case 'phone' 'cannot see the requested headset' 1 @('-CheckConnection','-Co
 Test-Case 'model-race' 'Connection check passed' 0 @('-CheckConnection','-ConnectionTimeoutSeconds','10')
 Test-Case 'install-disconnect' 'Installation complete' 0 @('-SkipData','-ConnectionTimeoutSeconds','10') 2
 Test-Case 'install-storage' 'INSTALL_FAILED_INSUFFICIENT_STORAGE' 1 @('-SkipData','-ConnectionTimeoutSeconds','10') 1
-Test-Case 'data-repair' 'Installation complete' 0 @('-RepairData','-DatDirectory',$fixtureDat,'-ConnectionTimeoutSeconds','0') 0
+Test-Case 'data-repair' '(?s)Installed on this headset: AC:VR previous.*Update-Quest\.cmd.*Game data repair complete' 0 @('-RepairData','-DatDirectory',$fixtureDat,'-ConnectionTimeoutSeconds','0') 0
 Test-Case 'invalid-options' 'cannot be combined' 1 @('-RepairData','-SkipData','-ConnectionTimeoutSeconds','0') 0
 Test-Case 'legacy-profile' 'Existing game data, login and settings migrated' 0 @('-SkipData','-ConnectionTimeoutSeconds','0') 1
 [IO.File]::WriteAllBytes((Join-Path $workspace 'Legions.sky'),[Text.Encoding]::ASCII.GetBytes('LSK2fixture!'))

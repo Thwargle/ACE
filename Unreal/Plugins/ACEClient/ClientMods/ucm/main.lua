@@ -1415,7 +1415,7 @@ local function vendor_work(s,p,inventory,option)
   if not option('vendor_restock',false) or (s.vendor or 0)~=q.vendor then
    purchase_pending=nil;return result(nil,'Purchase wait cancelled: vendor or restocking changed')
   end
-  if stock_count(q.wcid,q.name)>=q.expected then purchase_pending=nil
+  if stock_count(q.wcid,q.name)>=q.expected and (not q.cost or funds<=q.money-q.cost) then purchase_pending=nil
   elseif s.time>=q.deadline then
    return failed('Purchase not confirmed: check currency, pack space and vendor stock')
   else return result(nil,'Waiting for purchased '..q.name) end
@@ -1429,30 +1429,50 @@ local function vendor_work(s,p,inventory,option)
     if have<r.quantity then
      local v=stock[r.item_wcid] and stock[r.item_wcid][r.item_name]
      if v then
-      local count=math.min(r.quantity-have,v.limit)
-      local cost=v.unit_value and math.max(1,math.ceil(v.unit_value*(v.sell_rate or 1)*count-.1))
+      local count=math.min(r.quantity-have,v.limit,v.room or v.limit)
+      if count<=0 then return failed('Free a pack slot for '..r.item_name) end
+      local price=v.unit_value and v.unit_value*(v.sell_rate or 1)
+      local check_funds=s.vendor_uses_pyreals or s.vendor_purchase_funds~=nil
+      if price and price>0 and check_funds and funds>=math.max(1,math.ceil(price-.1)) then
+       count=math.min(count,math.floor((funds+.1)/price))
+      end
+      local cost=price and math.max(1,math.ceil(price*count-.1))
       if cost and (s.vendor_uses_pyreals or s.vendor_purchase_funds~=nil) and funds<cost then
        if not s.vendor_uses_pyreals then return failed('Not enough vendor currency for '..r.item_name) end
-       local deficit=cost-funds;local candidates,total={},0;local reserved={}
+       local deficit=cost-funds;local candidates,total,fitting_value={},0,0;local reserved={}
+       local slots=s.vendor_free_slots or 100000
+       local coin_stack=s.vendor_coin_stack or 25000
        for _,rule in ipairs(p.vendor_rules or {}) do
         if rule.enabled~=false and rule.server==s.world_name and rule.vendor_wcid==s.vendor_wcid and rule.vendor_name==s.vendor_name then reserved[rule.item_wcid]=true end
        end
        for _,note in ipairs(s.vendor_trade_notes or {}) do
         if not reserved[note.wcid] and note.unit_value>0 and note.count>0 then
-         candidates[#candidates+1]=note;total=total+note.unit_value*note.count
+         total=total+note.unit_value*note.count
+         local amount=math.min(note.count,math.ceil(deficit/note.unit_value))
+         -- A split occupies a slot until the vendor has accepted the sale.
+         if amount<note.count or amount*note.unit_value>slots*coin_stack then
+          amount=math.min(amount,note.count-1,math.floor(math.max(0,slots-1)*coin_stack/note.unit_value))
+         end
+         if amount>0 then
+          local value=amount*note.unit_value
+          candidates[#candidates+1]={note=note,amount=amount,value=value}
+          fitting_value=fitting_value+value
+         end
         end
        end
-       if total<deficit then return failed('Not enough pyreals or redeemable trade notes for '..r.item_name) end
+       if total+funds<math.max(1,math.ceil(price-.1)) then return failed('Not enough pyreals or redeemable trade notes for '..r.item_name) end
+       if funds+fitting_value<math.max(1,math.ceil(price-.1)) then return failed('Free more pack slots for trade note proceeds before buying '..r.item_name) end
        -- Prefer a denomination covering the shortfall with the least change.
        -- Otherwise redeem the largest available contribution and reassess.
        table.sort(candidates,function(a,b)
-        local ac=math.min(a.count,math.ceil(deficit/a.unit_value))*a.unit_value
-        local bc=math.min(b.count,math.ceil(deficit/b.unit_value))*b.unit_value
+        local ac,bc=a.value,b.value
         if (ac>=deficit)~=(bc>=deficit) then return ac>=deficit end
         if ac~=bc then if ac>=deficit then return ac<bc else return ac>bc end end
-        return a.id<b.id
+        local whole_a,whole_b=a.amount==a.note.count,b.amount==b.note.count
+        if whole_a~=whole_b then return whole_a end
+        return a.note.id<b.note.id
        end)
-       local note=candidates[1];local amount=math.min(note.count,math.ceil(deficit/note.unit_value))
+       local note,amount=candidates[1].note,candidates[1].amount
        note_pending={phase=amount<note.count and 'split' or 'sell',id=note.id,wcid=note.wcid,name=note.name,
         unit_value=note.unit_value,count=amount,before=note.count,money=funds,vendor=s.vendor,deadline=s.time+15,serial=s.action_serial or 0}
        if amount<note.count then
@@ -1462,7 +1482,7 @@ local function vendor_work(s,p,inventory,option)
        end
        return {action='sell_note',vendor=s.vendor,item=note.id,count=amount,status='Redeeming '..amount..' '..note.name..' for supplies'}
       end
-      purchase_pending={wcid=r.item_wcid,name=r.item_name,expected=have+count,deadline=s.time+15,serial=s.action_serial or 0,vendor=s.vendor}
+      purchase_pending={wcid=r.item_wcid,name=r.item_name,expected=have+count,cost=check_funds and cost,money=funds,deadline=s.time+15,serial=s.action_serial or 0,vendor=s.vendor}
       return {action='buy',vendor=s.vendor,item=v.id,count=count,status='Restocking '..r.item_name..' ('..have..' / '..r.quantity..')'}
      end
      return failed('Saved restock item is not available: '..r.item_name)

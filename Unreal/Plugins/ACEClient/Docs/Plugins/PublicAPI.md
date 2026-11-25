@@ -3,8 +3,8 @@
 API 2 exposes native gameplay data, actions and UI to Lua plugins. API 1
 manifests remain supported.
 
-Players can browse, install and update registered Lua plugins from **Accounts →
-Plugin Manager** before logging in. Developers register a public GitHub repository
+Players can browse, install and update registered Lua plugins from **Plugin Manager**
+on the login screen’s main bar. Developers register a public GitHub repository
 once and publish subsequent versions as release assets in that repository.
 The [community catalog and packaging guide](https://github.com/Thwargle/ACUnrealPlugins)
 includes the registration format and publisher tools.
@@ -78,6 +78,10 @@ since an absent bool 68 means components are required.
 advertises them in `CoinValue`. Alternate currencies use the live physical or
 server-managed balance with pending purchase reservations. `pyreals` counts
 carried coins separately. Confirm purchases through inventory receipts.
+Each `vendor_stock` row includes `room`, the quantity a fresh stack can receive.
+`vendor_free_slots` counts ordinary free slots across carried packs and
+`vendor_coin_stack` gives the pyreal stack capacity. A partial sale needs
+one additional slot for the split before the vendor can pay out.
 
 ## Plugin title and toolbar icon
 

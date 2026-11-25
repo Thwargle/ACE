@@ -813,8 +813,9 @@ private:
 	int32 EffectsScrollOffset = 0;
 	bool bEffectsListPositive = true;
 	FACELinkStatus LastLinkStatus;
-	FACECharacterCreation LinkStatusStrings;
-	bool bLoadedLinkStatusStrings = false;
+	FACECharacterCreation StatusPanelStrings;
+	bool bTriedStatusPanelStrings = false;
+	const FACECharacterCreation& GetStatusPanelStrings();
 	double LastLinkPingRequestAt = 0.0;
 	double LastStatusIndicatorRefreshAt = 0.0;
 	UPROPERTY()

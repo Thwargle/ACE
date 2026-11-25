@@ -12,6 +12,10 @@
   ],
   "Plugins": [
     {
+      "Name": "AndroidDeviceProfileSelector",
+      "Enabled": true
+    },
+    {
       "Name": "AndroidPermission",
       "Enabled": true
     },

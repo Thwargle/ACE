@@ -35,6 +35,12 @@ Write-Host "AC:VR Quest packaging log: $log"
 $code = $LASTEXITCODE
 Get-Content -LiteralPath $log -Tail 35
 if ($code -ne 0) { throw "Quest packaging failed (exit $code). See $log" }
+# The game target opts out of implicit engine plugins. The generic Android profile
+# disables Vulkan before RHI initialization, but this build only cooks Vulkan shaders.
+$receipt = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Project/Binaries/Android/ACUnreal.target') -Raw | ConvertFrom-Json
+if ($receipt.BuildPlugins -notcontains 'AndroidDeviceProfileSelector') {
+    throw 'Quest build omitted AndroidDeviceProfileSelector. This APK cannot reliably select the Quest Vulkan profile.'
+}
 # Verify every shared generated material/collection made it into the cook.
 # This is independent of stale assets already present in the Quest checkout.
 $materialRoot = Join-Path $PSScriptRoot '../Unreal/Content/ACE/RuntimeMaterials'

@@ -114,7 +114,8 @@ bool FACELandscapeTextureFidelityTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Both platform limits preserve the authored height"), Texture->GetSizeY(), 1024);
 		TestEqual(TEXT("Landscape GPU format is uncompressed BGRA8"), Texture->GetPixelFormat(), PF_B8G8R8A8);
 		TestEqual(TEXT("Full mip chain remains for stable distant terrain"), Texture->GetNumMips(), 11);
-		TestEqual(TEXT("Terrain retains trilinear filtering"), Texture->Filter.GetValue(), TF_Trilinear);
+		TestEqual(TEXT("Terrain uses the platform's World sampler"), Texture->Filter.GetValue(), TF_Default);
+		TestEqual(TEXT("Terrain belongs to the World texture group"), Texture->LODGroup.GetValue(), TEXTUREGROUP_World);
 		for (const auto& Mip : Texture->GetPlatformData()->Mips)
 			TestEqual(TEXT("GPU upload does not retain a duplicate CPU mip chain"),Mip.BulkData.GetBulkDataSize(),int64(0));
 		auto* Provider=Texture->GetAssetUserData<UACELandTextureMipProvider>();

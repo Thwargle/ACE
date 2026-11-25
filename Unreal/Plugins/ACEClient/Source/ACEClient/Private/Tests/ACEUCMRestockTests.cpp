@@ -4,6 +4,8 @@
 #include "Interfaces/IPluginManager.h"
 #include "Serialization/JsonSerializer.h"
 #include "Mods/ACEPluginVM.h"
+#include "Mods/ACEPluginCatalog.h"
+#include "Misc/CommandLine.h"
 #include "Mods/ACEVTProfile.h"
 namespace
 {
@@ -12,7 +14,11 @@ TSharedPtr<FJsonObject> RestockJSON(const TCHAR* Text){TSharedPtr<FJsonObject> O
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMRestockTest,"ACE.Plugins.VendorRestock",EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACEUCMRestockTest::RunTest(const FString&)
 {
-    FString Script,Error;FFileHelper::LoadFileToString(Script,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    FString Script,Error,InstalledRoot;
+    FParse::Value(FCommandLine::Get(),TEXT("VendorTestCatalog="),InstalledRoot);
+    const FString Directory=InstalledRoot.IsEmpty()?IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm"):
+        ACEPluginCatalog::ActiveDirectory(InstalledRoot,TEXT("ucm"));
+    if(!TestTrue(TEXT("UCM policy exists"),!Directory.IsEmpty()&&FFileHelper::LoadFileToString(Script,*(Directory/TEXT("main.lua")))))return false;
     auto S=RestockJSON(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"action_serial":0,"world_name":"Test","vendor":2,"vendor_name":"Arcanist","vendor_wcid":200,"position":{"cell":2139029505,"x":84,"y":84,"z":12},"inventory":[{"id":9,"wcid":300,"name":"Scarab","count":7}],"vendor_stock":[{"id":3,"wcid":300,"name":"Scarab","limit":100}]})"));
     auto P=RestockJSON(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","vendor_restock":true,"vendor_rules":[{"server":"Test","vendor_name":"Arcanist","vendor_wcid":200,"item_name":"Scarab","item_wcid":300,"quantity":10}]})"));
     TSharedPtr<FJsonObject> I;
@@ -31,6 +37,14 @@ bool FACEUCMRestockTest::RunTest(const FString&)
         const auto SavedS=S,SavedP=P;
         S=RestockJSON(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"world_name":"Test","vendor":2,"vendor_name":"Arcanist","vendor_wcid":200,"vendor_uses_pyreals":true,"pyreals":100,"action_serial":0,"inventory":[{"id":9,"wcid":300,"name":"Scarab","count":7},{"id":40,"wcid":400,"name":"Trade Note","count":10}],"vendor_stock":[{"id":3,"wcid":300,"name":"Scarab","limit":100,"unit_value":1000,"sell_rate":1.2}],"vendor_trade_notes":[{"id":40,"wcid":400,"name":"Trade Note","count":10,"unit_value":1000}]})"));
         P=RestockJSON(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","vendor_restock":true,"vendor_rules":[{"server":"Test","vendor_name":"Arcanist","vendor_wcid":200,"item_name":"Scarab","item_wcid":300,"quantity":10}]})"));
+        S->SetNumberField(TEXT("vendor_free_slots"),3);S->SetNumberField(TEXT("vendor_coin_stack"),1000);
+        FACEPluginVM Tight;Tight.Load(Script,Error);Step(Tight);
+        TestEqual(TEXT("Limited payout space splits notes"),I->GetStringField(TEXT("action")),FString(TEXT("split_note")));
+        TestEqual(TEXT("One of three slots is reserved for the split"),I->GetNumberField(TEXT("count")),2.);
+        S->SetNumberField(TEXT("vendor_free_slots"),1);
+        FACEPluginVM NoSplit;NoSplit.Load(Script,Error);Step(NoSplit);
+        TestEqual(TEXT("Cannot liquidate notes without space for split proceeds"),I->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
+        S->RemoveField(TEXT("vendor_free_slots"));S->RemoveField(TEXT("vendor_coin_stack"));
         FACEPluginVM Redeem;TestTrue(TEXT("Trade-note policy loads"),Redeem.Load(Script,Error));
         Step(Redeem);TestEqual(TEXT("Partial redemption splits first"),I->GetStringField(TEXT("action")),FString(TEXT("split_note")));
         TestEqual(TEXT("Only four notes cover the 3500 shortfall"),I->GetNumberField(TEXT("count")),4.);
@@ -67,7 +81,8 @@ bool FACEUCMRestockTest::RunTest(const FString&)
             // A zero authoritative balance must not fall back to physical coins.
             S->SetNumberField(TEXT("pyreals"),Funds<3600?100000:0);
             FACEPluginVM Banked;TestTrue(TEXT("Banked restock policy loads"),Banked.Load(Script,Error));Step(Banked);
-            TestEqual(TEXT("Restock uses the open vendor's balance for either currency type"),I->GetStringField(TEXT("action")),FString(Funds>=3600?TEXT("buy"):TEXT("activity_failed")));
+            TestEqual(TEXT("Restock uses the open vendor's balance for either currency type"),I->GetStringField(TEXT("action")),FString(Funds>=1200?TEXT("buy"):TEXT("activity_failed")));
+            if(Funds==3599)TestEqual(TEXT("Partial purse buys the affordable batch"),I->GetNumberField(TEXT("count")),2.);
             if(Funds>=3600)
             {
                 TestEqual(TEXT("Bank funds buy only the missing quantity"),I->GetNumberField(TEXT("count")),3.);

@@ -20,6 +20,7 @@ namespace ACEPluginCatalog
         int32 Bytes = 0;
     };
     bool Parse(const FString& Xml, TArray<FEntry>& Entries, FString& Error);
+    TOptional<int32> CompareVersions(FString Installed,FString Latest);
     FString ActiveDirectory(const FString& UserRoot, const FString& Id, FString* Digest=nullptr);
     enum class EInstallState { Available, Current, Update, Repair, ManualCurrent, ManualUpdate, ManualUnknown, Newer, Bundled, Delisted };
     struct FInstallInfo

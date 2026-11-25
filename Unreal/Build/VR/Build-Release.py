@@ -304,7 +304,7 @@ def main():
     parser.add_argument('--quest-version', type=int, required=True)
     parser.add_argument('--windows-version', required=True)
     parser.add_argument('--linux-version', help='Required for release 88 onward; must match the Windows/Quest display version')
-    parser.add_argument('--installer-revision', type=int, default=11)
+    parser.add_argument('--installer-revision', type=int, default=13)
     parser.add_argument('--android-version', help='Include the verified Android phone/tablet preview APK')
     args = parser.parse_args()
     try:

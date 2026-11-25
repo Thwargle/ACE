@@ -6,6 +6,10 @@
 #include "Mods/ACEPluginVM.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "Mods/ACEItemTools.h"
+#include "Mods/ACEPluginCatalog.h"
+#include "HAL/FileManager.h"
+#include "HAL/PlatformFileManager.h"
+#include "Misc/CommandLine.h"
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
 #include "Engine/GameInstance.h"
@@ -26,8 +30,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEItemToolsTest,"ACE.Plugins.ItemTools.Transa
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
 bool FACEItemToolsTest::RunTest(const FString&)
 {
-    FString Source,Error;
-    TestTrue(TEXT("Bundled policy exists"),FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/itemtools/main.lua"))));
+    FString Source,Error,InstalledRoot;
+    FParse::Value(FCommandLine::Get(),TEXT("VendorTestCatalog="),InstalledRoot);
+    const FString PolicyDirectory=InstalledRoot.IsEmpty()?IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/itemtools"):
+        ACEPluginCatalog::ActiveDirectory(InstalledRoot,TEXT("itemtools"));
+    if(!TestTrue(TEXT("Item Tools policy exists"),!PolicyDirectory.IsEmpty()&&FFileHelper::LoadFileToString(Source,*(PolicyDirectory/TEXT("main.lua")))))return false;
     auto Snapshot=[](){return ITJson(TEXT(R"({"time":100,"ready":true,"busy":false,"action_serial":0,"action_error":0,"container":0,"inventory":[{"id":10,"wcid":100,"name":"Gem","count":3,"transferable":true},{"id":11,"wcid":100,"name":"Gem","count":4,"transferable":true},{"id":12,"wcid":100,"name":"Gem","count":9,"transferable":false}],"it_objects":[{"id":20,"name":"Recipient","recipient":true,"player":true,"distance":2},{"id":30,"name":"Chest","chest":true,"distance":2,"identified":true,"locked":false}],"vendor":40,"it_currency":100,"vendor_uses_pyreals":true,"vendor_stock":[{"id":41,"name":"Scarab","wcid":200,"limit":1000,"room":100,"unit_value":10,"sell_rate":1}],"contents":[],"contents_ready":true})"));};
     auto Profile=[](){return ITJson(TEXT(R"({"mode":"give","give_name":"Gem","target_id":20,"target_name":"Recipient","delay_ms":0,"chest_id":30,"chest_name":"Chest","chest_cycles":1,"chest_rules":[{"name":"Gem","action":"keep"}]})"));};
     auto Step=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject> I;Error.Empty();const bool OK=VM.Step(S,P,I,Error);TestTrue(*(FString(TEXT("Policy step: "))+Error),OK);return I?I:MakeShared<FJsonObject>();};
@@ -138,12 +145,68 @@ bool FACEItemToolsTest::RunTest(const FString&)
         FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetStringField(TEXT("mode"),TEXT("restock"));P->SetNumberField(TEXT("vendor_id"),40);
         P->SetArrayField(TEXT("restock"),{MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"name":"Scarab","wcid":200,"quantity":25})")))});
         auto Inv=S->GetArrayField(TEXT("inventory"));Inv.Add(MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"id":60,"name":"Trade Note","wcid":300,"count":5,"transferable":true,"can_sell":true,"trade_note":true,"sell_unit":100})"))));S->SetArrayField(TEXT("inventory"),Inv);
-        auto I=Step(VM,S,P);TestEqual(TEXT("Restock splits the minimum funding notes"),Action(I),FString(TEXT("it_split")));TestEqual(TEXT("Only required note count"),I->GetNumberField(TEXT("amount")),2.);
-        Inv.Last()->AsObject()->SetNumberField(TEXT("count"),3);Inv.Add(MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"id":61,"name":"Trade Note","wcid":300,"count":2,"transferable":true,"can_sell":true,"trade_note":true,"sell_unit":100})"))));S->SetArrayField(TEXT("inventory"),Inv);
+        S->SetNumberField(TEXT("vendor_free_slots"),3);S->SetNumberField(TEXT("vendor_coin_stack"),100);
+        auto I=Step(VM,S,P);TestEqual(TEXT("Spend existing currency first"),Action(I),FString(TEXT("it_buy")));TestEqual(TEXT("Affordable first batch"),I->GetNumberField(TEXT("amount")),10.);
+        Inv.Add(MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"id":50,"name":"Scarab","wcid":200,"count":10})"))));
+        S->SetArrayField(TEXT("inventory"),Inv);S->SetNumberField(TEXT("it_currency"),0);
+        I=Step(VM,S,P);TestEqual(TEXT("Restock splits the minimum funding notes"),Action(I),FString(TEXT("it_split")));TestEqual(TEXT("Only required note count"),I->GetNumberField(TEXT("amount")),2.);
+        Inv[3]->AsObject()->SetNumberField(TEXT("count"),3);Inv.Add(MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"id":61,"name":"Trade Note","wcid":300,"count":2,"transferable":true,"can_sell":true,"trade_note":true,"sell_unit":100})"))));S->SetArrayField(TEXT("inventory"),Inv);
         I=Step(VM,S,P);TestEqual(TEXT("Sells only the confirmed split"),I->GetNumberField(TEXT("item")),61.);
         Inv.Pop();S->SetArrayField(TEXT("inventory"),Inv);
-        TestFalse(TEXT("Waits for funding currency before selling another note"),Step(VM,S,P)->HasField(TEXT("action")));S->SetNumberField(TEXT("it_currency"),300);
-        I=Step(VM,S,P);TestEqual(TEXT("Buys after confirmed note redemption"),Action(I),FString(TEXT("it_buy")));TestEqual(TEXT("Buys desired shortage"),I->GetNumberField(TEXT("amount")),25.);
+        TestFalse(TEXT("Waits for funding currency before selling another note"),Step(VM,S,P)->HasField(TEXT("action")));S->SetNumberField(TEXT("it_currency"),200);
+        I=Step(VM,S,P);TestEqual(TEXT("Buys after confirmed note redemption"),Action(I),FString(TEXT("it_buy")));TestEqual(TEXT("Buys remaining shortage"),I->GetNumberField(TEXT("amount")),15.);
+    }
+    {
+        auto S=Snapshot(),P=Profile();
+        P->SetStringField(TEXT("mode"),TEXT("restock"));P->SetNumberField(TEXT("vendor_id"),40);
+        P->SetArrayField(TEXT("restock"),{MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"name":"Scarab","wcid":200,"quantity":100})")))});
+        S->GetArrayField(TEXT("vendor_stock"))[0]->AsObject()->SetNumberField(TEXT("unit_value"),12000);
+        S->SetNumberField(TEXT("it_currency"),0);
+        S->SetNumberField(TEXT("vendor_free_slots"),10);S->SetNumberField(TEXT("vendor_coin_stack"),25000);
+        auto Notes=ITJson(TEXT(R"JSON({"id":60,"name":"Trade Note (250,000)","wcid":20630,"count":5,"transferable":true,"can_sell":true,"trade_note":true,"sell_unit":250000})JSON"));
+        auto Single=ITJson(TEXT(R"JSON({"id":61,"name":"Trade Note (250,000)","wcid":20630,"count":1,"transferable":true,"can_sell":true,"trade_note":true,"sell_unit":250000})JSON"));
+        S->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(Notes),MakeShared<FJsonValueObject>(Single)});
+        FACEPluginVM VM;VM.Load(Source,Error);auto I=Step(VM,S,P);
+        TestEqual(TEXT("Ten free slots redeem a single MMD toward a larger shortage"),Action(I),FString(TEXT("it_sell")));
+        TestEqual(TEXT("Uses the standalone MMD"),ACEItemTools::Guid(I,TEXT("item")),61);
+        S->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(Notes)});
+        FACEPluginVM NoSplit;NoSplit.Load(Source,Error);
+        auto Blocked=Step(NoSplit,S,P);
+        TestEqual(TEXT("Ten slots cannot also hold a split note"),Action(Blocked),FString(TEXT("stop")));
+        TestTrue(TEXT("Reports the extra split slot and current free count"),ACEItemTools::String(Blocked,TEXT("status")).Contains(TEXT("11 free pack slots including one for the split. You have 10.")));
+        S->SetNumberField(TEXT("it_currency"),250000);
+        I=Step(VM,S,P);TestEqual(TEXT("Restock spends the one-note payout before redeeming again"),Action(I),FString(TEXT("it_buy")));
+        TestEqual(TEXT("Buys twenty scarabs from the first payout"),ACEItemTools::Number(I,TEXT("amount")),20.);
+        S->SetNumberField(TEXT("it_currency"),0);S->SetNumberField(TEXT("vendor_free_slots"),11);
+        FACEPluginVM WithSplit;WithSplit.Load(Source,Error);I=Step(WithSplit,S,P);
+        TestEqual(TEXT("Eleven free slots allow a split from a larger MMD stack"),Action(I),FString(TEXT("it_split")));
+        TestEqual(TEXT("Split only one MMD"),ACEItemTools::Number(I,TEXT("amount")),1.);
+    }
+    for (bool Banked : {false,true}) {
+        auto S=Snapshot(),P=Profile();P->SetStringField(TEXT("mode"),TEXT("convert_peas"));P->SetNumberField(TEXT("vendor_id"),40);
+        const TCHAR* Wallet=Banked?TEXT("vendor_purchase_funds"):TEXT("it_currency");
+        S->SetNumberField(TEXT("it_currency"),0);S->SetNumberField(Wallet,500000);S->SetNumberField(TEXT("vendor_free_slots"),13);S->SetNumberField(TEXT("vendor_coin_stack"),25000);
+        auto Protected=S->GetArrayField(TEXT("inventory"))[2]->AsObject();Protected->SetBoolField(TEXT("pea"),true);Protected->SetBoolField(TEXT("can_sell"),true);Protected->SetNumberField(TEXT("sell_unit"),250000);
+        auto Pea=ITJson(TEXT(R"({"id":70,"name":"Pyreal Pea","wcid":8330,"count":4,"transferable":true,"can_sell":true,"pea":true,"sell_unit":100000})"));
+        auto Inv=S->GetArrayField(TEXT("inventory"));Inv.Add(MakeShared<FJsonValueObject>(Pea));S->SetArrayField(TEXT("inventory"),Inv);
+        FACEPluginVM Invalid;Invalid.Load(Source,Error);TestEqual(TEXT("No sale without MMD stock"),Action(Step(Invalid,S,P)),FString(TEXT("stop")));
+        S->SetArrayField(TEXT("vendor_stock"),{MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"id":80,"name":"MMD","wcid":20630,"mmd":true,"limit":100,"room":100,"unit_value":250000,"sell_rate":1.15})")))});
+        FACEPluginVM VM;VM.Load(Source,Error);
+        auto I=Step(VM,S,P);TestEqual(TEXT("Peas split to fit coin payout"),Action(I),FString(TEXT("it_split")));TestEqual(TEXT("Reserves the split slot"),I->GetNumberField(TEXT("amount")),3.);
+        auto Part=MakeShared<FJsonObject>(*Pea);Part->SetNumberField(TEXT("id"),71);Part->SetNumberField(TEXT("count"),3);Inv.Add(MakeShared<FJsonValueObject>(Part));
+        S->SetArrayField(TEXT("inventory"),Inv);TestFalse(TEXT("New stack alone cannot authorize a sale"),Step(VM,S,P)->HasField(TEXT("action")));
+        Pea->SetNumberField(TEXT("count"),1);S->SetNumberField(TEXT("vendor_free_slots"),12);
+        I=Step(VM,S,P);TestEqual(TEXT("Confirmed pea split sells"),Action(I),FString(TEXT("it_sell")));TestEqual(TEXT("Sells split GUID"),I->GetNumberField(TEXT("item")),71.);
+        Inv.Pop();S->SetArrayField(TEXT("inventory"),Inv);S->SetNumberField(Wallet,525000);
+        TestFalse(TEXT("One of multiple payout stacks cannot authorize purchase"),Step(VM,S,P)->HasField(TEXT("action")));
+        S->SetNumberField(Wallet,800000);S->SetNumberField(TEXT("vendor_free_slots"),1);
+        I=Step(VM,S,P);TestEqual(TEXT("Exchanges before selling another pea"),Action(I),FString(TEXT("it_buy")));TestEqual(TEXT("Opening balance excluded"),I->GetNumberField(TEXT("amount")),1.);
+        Inv.Add(MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"id":81,"name":"MMD","wcid":20630,"count":1})"))));
+        S->SetArrayField(TEXT("inventory"),Inv);S->SetNumberField(Wallet,512500);S->SetNumberField(TEXT("vendor_free_slots"),12);
+        I=Step(VM,S,P);TestEqual(TEXT("Sells remaining pea"),Action(I),FString(TEXT("it_sell")));TestEqual(TEXT("Only the final unit"),I->GetNumberField(TEXT("amount")),1.);
+        Inv.RemoveAt(3);S->SetArrayField(TEXT("inventory"),Inv);S->SetNumberField(Wallet,612500);
+        I=Step(VM,S,P);TestEqual(TEXT("Finishes with remaining proceeds"),Action(I),FString(TEXT("stop")));TestTrue(TEXT("Reports change and MMDs"),ACEItemTools::String(I,TEXT("status")).Contains(TEXT("4 peas sold, 1 MMD purchased, 112500 pyreals left")));
+        TestTrue(TEXT("Reports protected peas left in inventory"),ACEItemTools::String(I,TEXT("status")).Contains(TEXT("remaining: 9")));
     }
     {
         FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetStringField(TEXT("mode"),TEXT("chest"));
@@ -170,6 +233,21 @@ bool FACEItemToolsTest::RunTest(const FString&)
         auto* GI=NewObject<UGameInstance>();GI->Init();ON_SCOPE_EXIT{GI->Shutdown();};
         auto* C=GI->GetSubsystem<UACEClientSubsystem>();auto* H=GI->GetSubsystem<UACEPluginSubsystem>();
         H->StorageRoot=FPaths::ProjectSavedDir()/TEXT("ItemToolsReview")/FGuid::NewGuid().ToString(EGuidFormats::Digits);H->Settings=MakeShared<FJsonObject>();
+        if(!InstalledRoot.IsEmpty())
+        {
+            // Discover the same active packages as the preview, with all settings and profiles isolated.
+            auto& Files=IFileManager::Get();
+            for(const TCHAR* Id:{TEXT("itemtools"),TEXT("ucm")})
+            {
+                const FString Active=ACEPluginCatalog::ActiveDirectory(InstalledRoot,Id);
+                const FString Copy=H->StorageRoot/TEXT("Catalog/Packages")/Id;
+                if(!TestTrue(TEXT("Copy installed policy revision"),!Active.IsEmpty()&&FPlatformFileManager::Get().GetPlatformFile().CopyDirectoryTree(
+                    *(Copy/FPaths::GetCleanFilename(Active)),*Active,true)))return false;
+                if(!TestEqual(TEXT("Copy active receipt"),Files.Copy(*(Copy/TEXT("active.txt")),*(FPaths::GetPath(Active)/TEXT("active.txt"))),uint32(COPY_OK)))return false;
+                AddInfo(FString(TEXT("Testing installed plugin at "))+Active);
+            }
+            H->bCatalogOnlyTest=true;H->Discover();
+        }
         C->Session=MakeShared<FACESession>();auto& S=*C->Session;S.State=EACESessionState::InWorld;S.PlayerGuid=0x50000001;
         S.PlayerVitals.bValid=true;S.PlayerVitals.Health=100;S.PlayerPosition.CellId=0x7D640001;
         auto P=H->Find(TEXT("itemtools"));if(!TestTrue(TEXT("Native plugin exists"),P.IsValid()))return false;
@@ -328,7 +406,10 @@ bool FACEItemToolsTest::RunTest(const FString&)
             Inv.Add(MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"id":96,"name":"Trade Note","count":1,"transferable":true,"can_sell":true,"trade_note":true,"sell_unit":200})"))));
             J->SetArrayField(TEXT("inventory"),Inv);J->SetNumberField(TEXT("it_currency"),S.GetVendorCurrencyCount());
             TestEqual(TEXT("Ordinary vendor counts live owned Pyreals"),S.GetVendorCurrencyCount(),100);
-            TestEqual(TEXT("Restock redeems a note for the shortage"),Action(Step(VM,J,Settings)),FString(TEXT("it_sell")));
+            Inv.Insert(MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"id":90,"name":"Scarab","wcid":200,"count":10})"))),0);
+            TestEqual(TEXT("Ordinary restock spends carried coins first"),Action(Step(VM,J,Settings)),FString(TEXT("it_buy")));
+            J->SetArrayField(TEXT("inventory"),Inv);J->SetNumberField(TEXT("it_currency"),0);
+            TestEqual(TEXT("Restock redeems a note for remaining supplies"),Action(Step(VM,J,Settings)),FString(TEXT("it_sell")));
             Inv.Pop();J->SetArrayField(TEXT("inventory"),Inv);
             TestFalse(TEXT("Note removal alone does not confirm its proceeds"),Step(VM,J,Settings)->HasField(TEXT("action")));
             FACEBinaryWriter Count;Count.WriteUInt8(1);Count.WriteUInt32(Coins.Guid);Count.WriteUInt32(300);Count.WriteUInt32(300);
@@ -374,6 +455,60 @@ bool FACEItemToolsTest::RunTest(const FString&)
         P->Profile->SetBoolField(TEXT("auto_restock"),false);H->ItemToolsLastVendor=0;H->UpdateItemToolsCharacter();
         TestFalse(TEXT("Vendor opening never starts purchases without opt-in"),P->Running);
         UCM->Running=false;
+        {
+            TestFalse(TEXT("Conversion cannot start at a vendor without MMDs"),H->StartItemTools(TEXT("convert_peas")));
+            FACEWorldObject Shop;Shop.Guid=40;Shop.Name=TEXT("Note seller");S.UpsertWorldObject(Shop);
+            FACEWorldObject MMD;MMD.Guid=82;MMD.WeenieClassId=20630;MMD.Name=TEXT("Trade Note (250,000)");
+            MMD.Value=250000;MMD.ItemType=ACEItemType::PromissoryNote;MMD.MaxStackSize=100;MMD.VendorQuantityAvailable=-1;
+            S.VendorMerchandise={MMD};S.VendorItemTypes=ACEItemType::SpellComponents;S.VendorMaxValue=-1;S.VendorBuyRate=1;
+            // Older player descriptions can omit main pack capacity. The fixture's side pack is full.
+            S.WorldObjects[Self.Guid].ItemsCapacity=0;
+            TestEqual(TEXT("Vendor uses the same default main capacity as inventory moves"),
+                ACEItemTools::VendorSpace(C).ItemSlots,102-S.CountContainerSlots(Self.Guid,false));
+            TestEqual(TEXT("A split can use the main pack when capacity was omitted"),C->PlanInventoryPickup(10,0,1,false).Container,Self.Guid);
+            {
+                const auto OriginalObjects=S.WorldObjects;
+                ON_SCOPE_EXIT { S.WorldObjects=OriginalObjects;++S.InventoryDataRevision; };
+                Stock.ItemType=ACEItemType::SpellComponents;Stock.Value=12000;Stock.MaxStackSize=100;
+                S.VendorItemTypes=ACEItemType::PromissoryNote;S.VendorMerchandise={Stock};
+                auto Note=MMD;Note.Guid=84;Note.ContainerId=Self.Guid;Note.StackSize=1;S.UpsertWorldObject(Note);
+                Note.Guid=85;Note.StackSize=5;Note.Value=1250000;S.UpsertWorldObject(Note);
+                const int32 Fill=ACEItemTools::VendorSpace(C).ItemSlots-10;
+                for(int32 N=0;N<Fill;++N)
+                {
+                    FACEWorldObject Other;Other.Guid=1000+N;Other.ContainerId=Self.Guid;S.WorldObjects.Add(Other.Guid,Other);
+                }
+                ++S.InventoryDataRevision;
+                if(!TestTrue(TEXT("Start restock at a nearly full vendor"),H->StartItemTools(TEXT("restock"))&&P->VM.IsValid()))return false;
+                auto View=H->ItemToolsSnapshot();View->SetBoolField(TEXT("ready"),true);
+                TestEqual(TEXT("Installed policy sees exactly ten payout slots"),ACEItemTools::Number(View,TEXT("vendor_free_slots")),10.);
+                auto Fund=Step(*P->VM,View,P->Profile);
+                TestEqual(TEXT("Installed policy chooses the one MMD that fits"),ACEItemTools::Guid(Fund,TEXT("item")),84);
+                S.CachedC2SPackets.Reset();H->ExecuteItemTools(*P,Fund);
+                TestEqual(TEXT("Host sends the single MMD sale at the exact pack limit"),CountAction(ACEGameAction::Sell),1);
+                H->Stop(P->Id);
+            }
+            S.VendorItemTypes=ACEItemType::SpellComponents;S.VendorMerchandise={MMD};
+            FACEWorldObject Pea;Pea.Guid=83;Pea.WeenieClassId=8330;Pea.Name=TEXT("Pyreal Pea");Pea.ContainerId=Self.Guid;
+            Pea.Value=300000;Pea.ItemType=ACEItemType::SpellComponents;S.UpsertWorldObject(Pea);
+            const FString InstalledVersion=P->Version;P->Version=TEXT("1.1.0");
+            TestFalse(TEXT("An older installed policy cannot start an unknown activity"),H->StartItemTools(TEXT("convert_peas")));
+            TestTrue(TEXT("Old install explains how to update"),P->Status.Contains(TEXT("Plugin Manager")));
+            P->Version=InstalledVersion;
+            if(!TestTrue(TEXT("MMD conversion starts through the button entry point"),H->StartItemTools(TEXT("convert_peas"))&&P->VM.IsValid()))return false;
+            auto Observe=[&](){auto J=H->ItemToolsSnapshot();J->SetNumberField(TEXT("time"),100);J->SetBoolField(TEXT("ready"),true);return J;};
+            auto Settings=P->Profile;Settings->SetNumberField(TEXT("delay_ms"),0);
+            auto Sale=Step(*P->VM,Observe(),Settings);
+            TestEqual(TEXT("Native snapshot identifies the pea and MMD stock"),Action(Sale),FString(TEXT("it_sell")));
+            S.CachedC2SPackets.Reset();H->ExecuteItemTools(*P,Sale);TestEqual(TEXT("One retail pea sale"),CountAction(ACEGameAction::Sell),1);
+            S.WorldObjects.Remove(Pea.Guid);++S.InventoryDataRevision;S.ApplyPlayerIntQuality(20,300000);
+            auto Purchase=Step(*P->VM,Observe(),Settings);
+            TestEqual(TEXT("Confirmed sale advances to an MMD purchase"),Action(Purchase),FString(TEXT("it_buy")));
+            H->ExecuteItemTools(*P,Purchase);TestEqual(TEXT("One retail MMD purchase using confirmed bank proceeds"),CountAction(ACEGameAction::Buy),1);
+            S.CachedC2SPackets.Reset();S.VendorMerchandise.Reset();S.UpsertWorldObject(Pea);
+            H->ExecuteItemTools(*P,Sale);TestEqual(TEXT("Stock disappearing prevents a stale sale"),CountAction(ACEGameAction::Sell),0);
+            H->Stop(P->Id);
+        }
     }
     {
         // Worst-case nonmatching name filters must yield and eventually finish,

@@ -5344,7 +5344,7 @@ bool FACESession::CanStowEquipmentInContainer(int32 Container, int32 Reserved) c
     const auto* Pack=WorldObjects.Find(Container);
     if(Container!=PlayerGuid && (!Pack || ResolveContainerRoot(Container)!=PlayerGuid
         || TradeSelfItems.Contains(Container) || TradePartnerItems.Contains(Container)))return false;
-    const int32 Capacity=Container==PlayerGuid && (!Pack || Pack->ItemsCapacity==0)?102:Pack->ItemsCapacity;
+    const int32 Capacity=ACEInventoryRules::SlotCapacity(Pack,Container==PlayerGuid,false);
     if(Capacity==-1)return true;
     if(Capacity<=0)return false; // foci occupy pack slots but cannot store equipment
     TSet<int32> Items;
@@ -8479,8 +8479,7 @@ bool FACESession::HasRoomForInventoryMove(const FACEWorldObject& Item, const FAC
 {
 	// Retail WillItemFitInContainer counts the ordinary and side-pack lists separately.
 	const bool bPack = IsPackSlotItem(Item) || Item.IsOpenable();
-	int32 Capacity = bPack ? Destination.ContainersCapacity : Destination.ItemsCapacity;
-	if (Destination.Guid == PlayerGuid && Capacity == 0) Capacity = bPack ? 7 : 102;
+	const int32 Capacity = ACEInventoryRules::SlotCapacity(&Destination, Destination.Guid == PlayerGuid, bPack);
 	if (Item.ContainerId == Destination.Guid && Amount == FMath::Max(1, Item.StackSize)) return true;
 	return Capacity == -1 || (Capacity > 0 && CountContainerSlots(Destination.Guid, bPack) < Capacity);
 }

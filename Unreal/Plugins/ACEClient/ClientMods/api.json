@@ -939,6 +939,8 @@
       "trained_skills",
       "usable_skills",
       "vendor",
+      "vendor_coin_stack",
+      "vendor_free_slots",
       "vendor_name",
       "vendor_purchase_funds",
       "vendor_stock",

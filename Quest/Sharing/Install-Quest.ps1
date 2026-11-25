@@ -31,7 +31,7 @@ if (!$SkyOnly) {
         throw 'APK checksum mismatch. Download and extract the ZIP again.'
     }
     $displayName = if ($manifest.displayName) { $manifest.displayName } else { 'AC:VR' }
-    Write-Host "Verified $displayName $($manifest.version) (bundle revision $($manifest.installerRevision))"
+    Write-Host "Verified APK in this folder: $displayName $($manifest.version) (bundle revision $($manifest.installerRevision))"
     if ($ValidateOnly) { return }
 }
 
@@ -221,6 +221,17 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
     Invoke-Adb -Arguments ($deviceArgs + @('shell', 'run-as', $package, 'pwd')) | Out-Host
     Write-Host 'Repairing game data for the installed app. The APK will not be reinstalled.'
 }
+$packageInfo = ''
+try { $packageInfo = Invoke-Adb -Arguments ($deviceArgs + @('shell', 'dumpsys', 'package', $package)) | Out-String }
+catch { Write-Verbose $_.Exception.Message }
+if ($packageInfo -match '(?m)^\s*versionName=([^\s]+)') {
+    $installedVersion = $Matches[1]
+    Write-Host "Installed on this headset: $displayName $installedVersion"
+    if ($installedVersion -ne $manifest.version) {
+        if (!$RepairData) { throw "The headset reports $installedVersion after installing the $($manifest.version) APK." }
+        Write-Host "Data repair keeps that version. To install this folder's APK, run Update-Quest.cmd."
+    }
+} else { Write-Warning 'Android did not report the installed app version.' }
 Move-QuestLegacyProfile
 if ($SkipData) {
     foreach ($name in $required) {
@@ -230,12 +241,14 @@ if ($SkipData) {
     Install-QuestData -DatDirectory $DatDirectory -DiagnosticDirectory $PSScriptRoot
 }
 if ($AC2SkyPath) { Install-QuestSky $AC2SkyPath $PSScriptRoot }
-Write-Host 'Installation complete. Updating this way preserves saved logins and settings.'
+if ($RepairData) { Write-Host 'Game data repair complete.' }
+else { Write-Host 'Installation complete. Updating this way preserves saved logins and settings.' }
 Write-Host "Open $displayName from the Unknown Sources section of your app library."
 Write-Host 'Enter the server address and your own account details supplied by the server owner.'
 if (!$NoLaunch) {
     $power = Invoke-Adb -Arguments ($deviceArgs + @('shell', 'dumpsys', 'power')) | Out-String
     if ($power -match 'mWakefulness=Awake') {
         Invoke-Adb -Arguments ($deviceArgs + @('shell', 'am', 'start', '-W', '-n', "$package/com.epicgames.unreal.GameActivity")) | Out-Host
+        Write-Host 'Check for the AC:VR account screen in the headset. If the three dots persist, run Diagnose-Quest.cmd while the app is still open.'
     } else { Write-Host 'The headset is asleep. Put it on before opening the app.' }
 }

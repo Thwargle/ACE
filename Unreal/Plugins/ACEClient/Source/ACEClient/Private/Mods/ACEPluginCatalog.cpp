@@ -178,7 +178,7 @@ FString ActiveDirectory(const FString& Root,const FString& Id,FString* Digest)
 
 // Publishers can use arbitrary version labels. Only infer an ordering for dotted
 // numeric versions. Exact labels and managed package digests work with any scheme.
-static TOptional<int32> CompareVersions(FString Installed,FString Latest)
+TOptional<int32> CompareVersions(FString Installed,FString Latest)
 {
     Installed.TrimStartAndEndInline();
     Latest.TrimStartAndEndInline();

@@ -4,6 +4,7 @@ local pending,queue,split,baseline=nil,nil,nil,nil
 local scans={}
 local completed,total,next_at,cycle,stage=0,0,0,0,'open'
 local operations=0
+local pea_proceeds,peas_sold=0,0
 local give_retry,give_retries=nil,0
 local received={}
 local refresh_at=0
@@ -27,18 +28,40 @@ local function count(items,name,wcid)
 end
 local function find(items,id) for _,i in ipairs(items or {}) do if i.id==id then return i end end end
 local function usable(i) return i and i.transferable==true end
+local function cost(item,n)
+ return math.max(1,math.ceil((item.sell_rate or 1)*(item.unit_value or 0)*n-.1))
+end
+local function payout(item,n)
+ return math.max(1,math.floor((item.payout_per_unit or item.sell_unit)*n+.1))
+end
+local function largest_fitting(limit,price,budget)
+ local low,high=0,limit
+ while low<high do
+  local mid=math.floor((low+high+1)/2)
+  if price(mid)<=budget then low=mid else high=mid-1 end
+ end
+ return low
+end
+local function sale_quantity(s,item,wanted)
+ local slots=s.vendor_free_slots or 100000
+ local coin_stack=s.vendor_coin_stack or 25000
+ if wanted==item.count and payout(item,wanted)<=slots*coin_stack then return wanted end
+ return largest_fitting(math.min(wanted,item.count-1),function(n)return payout(item,n) end,math.max(0,slots-1)*coin_stack)
+end
 local function issue(s,p,action,item,amount,target,kind)
  pending={kind=kind or action,id=item and item.id,amount=amount or 1,before=item and item.count or 0,
   name=item and item.name,wcid=item and item.wcid,serial=s.action_serial or 0,deadline=s.time+20,
   failure_serial=s.it_failure_serial or 0,
-  target=target,currency=s.it_currency or 0,
-  funding=action=='it_sell' and (p.mode=='restock' or (p.mode=='shop' and (p.buy_name or '')~='')),
+  target=target,currency=s.it_currency or 0,purse=s.vendor_purchase_funds,
+  funding=action=='it_sell' and (p.mode=='convert_peas' or p.mode=='restock' or (p.mode=='shop' and (p.buy_name or '')~='')),
   owned=item and action~='it_merge' and count(s.inventory,item.name,item.wcid) or 0}
  if action=='it_give' then
   local recipient=find(s.it_objects,target)
   pending.recipient_name=recipient and recipient.name
  end
  if action=='it_merge' then pending.target_before=find(s.inventory,target).count end
+ if pending.funding then pending.price=payout(item,amount) end
+ if action=='it_buy' then pending.price=cost(item,amount) end
  local r=status((action=='it_give' and 'Giving ' or action=='it_buy' and 'Buying ' or action=='it_sell' and 'Selling ' or action=='it_pickup' and 'Taking ' or action=='it_merge' and 'Merging ' or action=='it_split' and 'Splitting ' or action=='it_key' and 'Unlocking with ' or 'Opening ')..(item and item.name or 'chest'),action)
  r.item=item and item.id;r.amount=amount;r.target=target;r.vendor=s.vendor
  return r
@@ -69,43 +92,90 @@ local function give_target(s,p,key)
  local id=p[key..'_id'];local t=find(s.it_objects,id)
  if t and t.recipient and t.name==p[key..'_name'] and t.distance<=5 then return id,t.player end
 end
+local function sell(s,p,item,qty)
+ if qty==item.count then return issue(s,p,'it_sell',item,qty,s.vendor) end
+ split={name=item.name,wcid=item.wcid,amount=qty,known={},vendor=s.vendor}
+ for _,i in ipairs(s.inventory) do split.known[i.id]=true end
+ return issue(s,p,'it_split',item,qty,nil)
+end
 local function purchase(s,p,stock,amount)
  amount=math.min(amount,stock.limit or 0,stock.room or 0,100000)
  if amount<=0 then return stop('No inventory space or vendor stock available. Other plugins may continue.') end
- local function cost(n) return math.max(1,math.ceil((stock.sell_rate or 1)*(stock.unit_value or 0)*n-.1)) end
  local funds=s.it_currency or 0
- if cost(amount)>funds and not p.server_bank then
-  local seller
+ if cost(stock,amount)>funds and not p.server_bank then
+  local affordable=largest_fitting(amount,function(n)return cost(stock,n) end,funds)
+  if affordable>0 then return issue(s,p,'it_buy',stock,affordable,s.vendor) end
+  local seller,qty,eligible_value,fitting_value=nil,0,0,0
+  local blocked_item,required_slots
+  local reserved={}
+  if p.mode=='restock' then for _,r in ipairs(p.restock or {}) do reserved[r.name]=true end end
   for _,i in ipairs(s.inventory or {}) do
-   local chosen=p.sell_name and p.sell_name~='' and i.name==p.sell_name
+   local chosen=(p.sell_name or '')~='' and i.name==p.sell_name
    local note=p.redeem_notes~=false and s.vendor_uses_pyreals and i.trade_note
-   if usable(i) and i.can_sell and (chosen or note) and i.name~=stock.name and (i.sell_unit or 0)>0 then
-    if not seller or (chosen and seller.name~=p.sell_name) or i.sell_unit<seller.sell_unit then seller=i end
+   if usable(i) and i.can_sell and (chosen or note) and not reserved[i.name] and i.name~=stock.name and (i.sell_unit or 0)>0 then
+    eligible_value=eligible_value+payout(i,i.count)
+    local rate=i.payout_per_unit or i.sell_unit
+    local needed=rate>0 and math.max(1,math.ceil((cost(stock,amount)-funds-.1)/rate)) or i.count
+    local fit=sale_quantity(s,i,math.min(i.count,needed))
+    if fit==0 then
+     local slots=math.ceil(payout(i,1)/(s.vendor_coin_stack or 25000))+(i.count>1 and 1 or 0)
+     if not required_slots or slots<required_slots then blocked_item,required_slots=i,slots end
+    end
+    if fit>0 then fitting_value=fitting_value+payout(i,fit) end
+    if fit>0 then
+     local preferred=not seller or (chosen and seller.name~=p.sell_name)
+     if seller and chosen==(seller.name==p.sell_name) then
+      preferred=i.sell_unit<seller.sell_unit or (i.sell_unit==seller.sell_unit and fit==i.count and qty<seller.count)
+     end
+     if preferred then seller,qty=i,fit end
+    end
    end
   end
-  if seller then
-   local qty=math.min(seller.count,math.max(1,math.ceil((cost(amount)-funds)/seller.sell_unit)))
-   if qty<seller.count then
-    split={name=seller.name,wcid=seller.wcid,amount=qty,known={}}
-    for _,i in ipairs(s.inventory) do split.known[i.id]=true end
-    return issue(s,p,'it_split',seller,qty,nil)
-   end
-   return issue(s,p,'it_sell',seller,qty,s.vendor)
+  if funds+eligible_value<cost(stock,1) then return stop('Insufficient currency for '..stock.name..'.') end
+  if not seller and blocked_item then
+   local split_slot=blocked_item.count>1 and ' including one for the split' or ''
+   return stop(string.format('Redeeming one %s needs %d free pack slots%s. You have %d.',blocked_item.name,required_slots,split_slot,s.vendor_free_slots or 0))
   end
-  -- An unlimited buy uses the affordable remainder rather than discarding it.
-  if p.mode=='shop' and (p.buy_limit or 0)<=0 then
-   local low,high=0,amount
-   while low<high do local mid=math.floor((low+high+1)/2);if cost(mid)<=funds then low=mid else high=mid-1 end end
-   amount=low
-  end
-  if amount<=0 or cost(amount)>funds then return stop('Insufficient currency; no eligible funding items remain.') end
+  if not seller or funds+fitting_value<cost(stock,1) then return stop('Available sale proceeds cannot cover one '..stock.name..' with the current pack space.') end
+  return sell(s,p,seller,qty)
  end
  return issue(s,p,'it_buy',stock,amount,s.vendor)
+end
+local function mmd_stock(s)
+ if s.vendor_uses_pyreals then
+  for _,v in ipairs(s.vendor_stock or {}) do if v.mmd and v.limit>0 then return v end end
+ end
+end
+local function convert_peas(s,p,stock)
+ local budget=math.min(pea_proceeds,math.max(s.it_currency or 0,s.vendor_purchase_funds or 0))
+ local notes=largest_fitting(math.min(stock.limit,stock.room or 0),function(n)return cost(stock,n) end,budget)
+ if notes>0 then return issue(s,p,'it_buy',stock,notes,s.vendor) end
+ if budget>=cost(stock,1) then return stop('Free a pack slot for the MMD trade note.') end
+ local seller,qty,blocked,skipped=nil,0,false,0
+ for _,item in ipairs(s.inventory or {}) do
+  if usable(item) and item.pea and item.can_sell and (item.sell_unit or 0)>0 then
+   local fit=sale_quantity(s,item,item.count)
+   -- Prefer whole stacks to recover their slots for the next exchange.
+   if fit==item.count then return sell(s,p,item,fit) end
+   if fit>qty then seller,qty=item,fit end
+   blocked=true
+  elseif item.pea then skipped=skipped+item.count
+  end
+ end
+ if seller then return sell(s,p,seller,qty) end
+ if blocked then return stop('Free more pack space to continue converting peas.') end
+ local summary=string.format('%.0f %s sold, %.0f %s purchased, %.0f pyreals left.',peas_sold,peas_sold==1 and 'pea' or 'peas',completed,completed==1 and 'MMD' or 'MMDs',pea_proceeds)
+ if skipped>0 then summary=summary..' Protected or unsellable peas remaining: '..skipped..'.' end
+ return stop(summary)
 end
 return function(s,p)
  count_cache=nil
  local inv=s.inventory or {}
  local mode=p.mode or 'give'
+ if mode=='shop' or mode=='restock' or mode=='convert_peas' then
+  if (s.vendor or 0)==0 then return stop('Open a vendor before starting.') end
+  if p.vendor_id and p.vendor_id~=s.vendor then return stop('Vendor changed; transaction stopped.') end
+ end
  if not baseline and mode=='chest' then baseline={};for _,i in ipairs(inv) do baseline[i.id]=i.count or 1 end end
  if pending then
   local q=pending;local i=find(inv,q.id);local done=false
@@ -124,22 +194,30 @@ return function(s,p)
   elseif q.kind=='it_split' then
    for _,v in ipairs(inv) do if not split.known[v.id] and v.name==split.name and v.wcid==split.wcid and v.count==split.amount then
     if split.id and split.id~=v.id then return stop('Split has ambiguous results; review inventory before continuing.') end
-    split.id=v.id;done=true
+    split.id=v.id;done=i and i.count==q.before-q.amount
    end end
   elseif q.kind=='it_open' then done=s.container==q.target
   elseif q.kind=='it_key' then
    local chest=find(s.it_objects,q.target)
    done=chest and chest.locked==false or s.container==q.target or ((s.action_serial or 0)~=q.serial and (s.action_error or 0)==0)
   end
-  if done and q.funding and (s.it_currency or 0)<=q.currency then
-   if s.time>=q.deadline then return stop('Sale completed, but no inventory currency arrived. If this server banks sale proceeds, enable Use server bank for purchases; no more payment items were sold.') end
+  -- A bank may mirror the same receipt in CoinValue and the pack inventory.
+  -- Either full delta confirms it. Never add the balances or credits together.
+  local purse_delta=mode=='convert_peas' and q.purse and s.vendor_purchase_funds and s.vendor_purchase_funds-q.purse
+  if done and q.funding and (s.it_currency or 0)<q.currency+q.price and not (purse_delta and purse_delta>=q.price) then
+   if s.time>=q.deadline then return stop('Sale proceeds were not confirmed. Check the vendor balance before continuing.') end
    done=false
   end
   -- Bank servers debit currency outside inventory. The requested supply receipt
   -- confirms the purchase; an untagged UseDone alone never does.
-  if done and q.kind=='it_buy' and not p.server_bank and (s.it_currency or 0)>=q.currency then done=false end
+  if done and q.kind=='it_buy' and (not p.server_bank or mode=='convert_peas') and (s.it_currency or 0)>q.currency-q.price
+    and not (purse_delta and purse_delta<=-q.price) then done=false end
   if done then
    operations=operations+1
+   if mode=='convert_peas' then
+    if q.kind=='it_sell' then pea_proceeds=pea_proceeds+q.price;peas_sold=peas_sold+q.amount end
+    if q.kind=='it_buy' then pea_proceeds=pea_proceeds-q.price end
+   end
    if q.kind=='it_key' then identified[q.target]=nil;refresh_at=s.time+2;if stage=='opener' then cycle=cycle+1 end end
    if q.kind=='it_give' then
     completed=completed+given;give_retries=0
@@ -187,7 +265,18 @@ return function(s,p)
   if not recipient or not recipient.recipient or recipient.name~=q.recipient_name or recipient.distance>5 or (recipient.player and item.attuned) then return stop('Recipient changed or moved away; remaining items are still in your packs.') end
   give_retry=nil;return issue(s,p,'it_give',item,q.amount,q.target)
  end
- if split and split.id then local i=find(inv,split.id);split=nil;if not usable(i) then return stop('Split item changed; sale cancelled.') end;return issue(s,p,'it_sell',i,i.count,s.vendor) end
+ local mmd
+ if mode=='convert_peas' then
+  mmd=mmd_stock(s)
+  if not mmd then return stop('This vendor has no MMD trade notes available for pyreals.') end
+ end
+ if split and split.id then
+  local i=find(inv,split.id)
+  if s.vendor~=split.vendor or not usable(i) or not i.can_sell or i.wcid~=split.wcid or i.name~=split.name or i.count~=split.amount
+   or (mode=='convert_peas' and not i.pea) or sale_quantity(s,i,i.count)<i.count then return stop('Split item or vendor changed; sale cancelled.') end
+  split=nil;return issue(s,p,'it_sell',i,i.count,s.vendor)
+ end
+ if mode=='convert_peas' then return convert_peas(s,p,mmd) end
  if mode=='merge' then
   -- Keep full stacks intact. Fill the fullest partial stack from the smallest
   -- matching one, then rebuild from server-confirmed inventory on the next step.
@@ -240,8 +329,6 @@ return function(s,p)
   return stop('Complete: '..completed..' items given.')
  end
  if mode=='shop' or mode=='restock' then
-  if (s.vendor or 0)==0 then return stop('Open a vendor before starting.') end
-  if p.vendor_id and p.vendor_id~=s.vendor then return stop('Vendor changed; transaction stopped.') end
   if mode=='shop' then
    local stock;for _,i in ipairs(s.vendor_stock or {}) do if i.name==p.buy_name then stock=i;break end end
    if not stock then

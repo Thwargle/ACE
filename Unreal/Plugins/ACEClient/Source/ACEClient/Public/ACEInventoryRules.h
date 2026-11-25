@@ -12,6 +12,13 @@ enum class EACEOwnedItemUse : uint8
 
 namespace ACEInventoryRules
 {
+    inline int32 SlotCapacity(const FACEWorldObject* Container, bool MainPack, bool PackSlots)
+    {
+        const int32 Reported = Container ? (PackSlots ? Container->ContainersCapacity : Container->ItemsCapacity) : 0;
+        // The player description can omit either capacity. Side packs and foci use their reported limits.
+        return MainPack && Reported == 0 ? (PackSlots ? 7 : 102) : Reported;
+    }
+
     // Retail ItemHolder::CheckHookStatus (00586E90). Ownership here means
     // the house has an owner; the server separately checks access permissions.
     inline bool CheckHookStatus(const FACEWorldObject& Item, const FACEWorldObject& Container)

@@ -31,7 +31,11 @@ public class FakeAdb {
       Console.WriteLine(args[1] == "PHONE" ? "Pixel" : "Quest 3"); return 0;
     }
     if (cmd.Contains("dumpsys package")) {
+      if (mode == "quest-android14") { Console.WriteLine("appId=10172\nversionCode=166\nversionName=2026.11.24.166"); return 0; }
       Console.WriteLine("userId=10234\nversionCode=152\nversionName=2026.11.07.152"); return 0;
+    }
+    if (cmd.EndsWith("pm list packages -U --user current com.acecommunity.questtest")) {
+      Console.WriteLine("package:com.acecommunity.questtest.other uid:11111\npackage:com.acecommunity.questtest uid:10172"); return 0;
     }
     if (cmd.Contains("getprop")) { Console.WriteLine("test OS build"); return 0; }
     if (cmd.Contains("dumpsys power")) { Console.WriteLine("mWakefulness=Awake\nunrelated private setting"); return 0; }
@@ -43,11 +47,15 @@ public class FakeAdb {
       return 0;
     }
     if (cmd.Contains("logcat")) {
-      if (cmd.Contains("--uid=10234")) Console.WriteLine("UE startup trace");
+      if (cmd.Contains("--uid=10234") || cmd.Contains("--uid=10172")) Console.WriteLine("UE startup trace");
       else Console.WriteLine("Start proc com.acecommunity.questtest\nOTHER PRIVATE CONTENT");
       return 0;
     }
-    if (cmd.Contains("pidof")) { Console.WriteLine("4567"); return 0; }
+    if (cmd.Contains("pidof")) { Console.WriteLine(mode == "quest-android14" ? "21474 21434" : "4567"); return 0; }
+    if (cmd.EndsWith("dumpsys activity processes")) {
+      Console.WriteLine("ProcessRecord{abc 21434:com.acecommunity.questtest/u0a172}"); return 0;
+    }
+    if (cmd.EndsWith("debuggerd -b 21434")) { Console.WriteLine("Main game thread"); return 0; }
     if (cmd.Contains("dumpsys meminfo")) {
       if (mode == "timeout") Thread.Sleep(15000);
       Console.WriteLine("TOTAL PSS: 50000"); return 0;
@@ -69,7 +77,7 @@ $previousCase = $env:ACE_QUEST_DIAGNOSTIC_TEST_CASE
 $previousRoot = $env:ACE_QUEST_DIAGNOSTIC_TEST_ROOT
 try {
     $env:ACE_QUEST_DIAGNOSTIC_TEST_ROOT = $workspace
-    foreach ($case in @('healthy', 'other-anr', 'missing-data', 'timeout', 'restricted', 'none', 'unauthorized', 'multiple', 'multiple-selected')) {
+    foreach ($case in @('healthy', 'quest-android14', 'other-anr', 'missing-data', 'timeout', 'restricted', 'none', 'unauthorized', 'multiple', 'multiple-selected')) {
         $env:ACE_QUEST_DIAGNOSTIC_TEST_CASE = $case
         $outputDirectory = Join-Path $workspace $case
         $watch = [Diagnostics.Stopwatch]::StartNew()
@@ -97,12 +105,13 @@ try {
             if ($case -eq 'missing-data' -and $summary -notmatch 'client_portal.dat: missing or unreadable') { throw 'Missing DAT not reported.' }
             if ($case -eq 'timeout' -and ($summary -notmatch 'timed out' -or $watch.Elapsed.TotalSeconds -gt 12)) { throw 'Stalled ADB was not bounded.' }
             if ($case -eq 'restricted' -and $summary -notmatch 'native thread stacks: unavailable') { throw 'Denied backtrace not reported.' }
+            if ($case -eq 'quest-android14' -and $all -notmatch 'Main game thread') { throw 'Failed to select the main game PID from both Unreal processes.' }
         }
         Write-Output "PASS $case"
     }
     $commands = Get-Content -LiteralPath (Join-Path $workspace 'commands.txt') -Raw
     if ($commands -match '\b(install|uninstall|force-stop|kill-server|reboot|clear|rm)\b|logcat -c|am start') { throw 'Diagnostics attempted a mutation.' }
-    Write-Output "All 9 diagnostic cases passed. Evidence: $workspace"
+    Write-Output "All 10 diagnostic cases passed. Evidence: $workspace"
 } finally {
     $env:ACE_QUEST_DIAGNOSTIC_TEST_CASE = $previousCase
     $env:ACE_QUEST_DIAGNOSTIC_TEST_ROOT = $previousRoot

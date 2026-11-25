@@ -20,7 +20,6 @@
 
 namespace
 {
-	static const FLinearColor StatusGold(0.95f, 0.82f, 0.35f, 1.f);
 	static const FLinearColor StatusWhite(0.92f, 0.92f, 0.88f, 1.f);
 
 	static constexpr float EffectsRowHeight = 32.f; // DAT 2100001B / 10000128.
@@ -388,60 +387,84 @@ bool UACEUIGameplayBinder::TryHandleEffectsListClick(FVector2D Absolute)
 	return false;
 }
 
+const FACECharacterCreation& UACEUIGameplayBinder::GetStatusPanelStrings()
+{
+	if (!bTriedStatusPanelStrings && Canvas && Canvas->GetResourceResolver())
+	{
+		if (const auto* Dat = Canvas->GetResourceResolver()->GetDatSubsystem(); Dat && !Dat->GetDatDirectory().IsEmpty())
+		{
+			bTriedStatusPanelStrings = true;
+			StatusPanelStrings.LoadStrings(Dat->GetDatDirectory(), 0x23000001);
+		}
+	}
+	return StatusPanelStrings;
+}
+
 void UACEUIGameplayBinder::RefreshVitaePanelOverlays()
 {
-	if (!Client || !Manager || !Canvas || ActivePanelPage != TEXT("VitaePanel_Field"))
+	if (!Client || !Manager || !Canvas || !Canvas->WidgetTree || ActivePanelPage != TEXT("VitaePanel_Field"))
 	{
 		if (VitaePanelLabel)
 		{
 			VitaePanelLabel->SetVisibility(ESlateVisibility::Collapsed);
 		}
-		if (EffectsTitleLabel && ActivePanelPage != TEXT("PositiveEffectsPanel_Field")
-			&& ActivePanelPage != TEXT("NegativeEffectsPanel_Field"))
-		{
-			// Title label is shared with effects — leave alone when those pages own it.
-		}
 		return;
 	}
-	EnsureOverlays();
-	if (!VitaePanelLabel && Canvas->WidgetTree)
+	if (!VitaePanelLabel)
 	{
-		VitaePanelLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
-		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 10);
-		VitaePanelLabel->SetFont(Font);
+		VitaePanelLabel = Canvas->WidgetTree->ConstructWidget<UACERetailTextBlock>();
+		VitaePanelLabel->SetAutoWrapText(true);
 	}
-	if (!EffectsTitleLabel && Canvas->WidgetTree)
+	if (!EffectsTitleLabel)
 	{
-		EffectsTitleLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
-		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 10);
-		EffectsTitleLabel->SetFont(Font);
+		EffectsTitleLabel = Canvas->WidgetTree->ConstructWidget<UACERetailTextBlock>();
 	}
-	PlaceTextUnder(EffectsTitleLabel, TEXT("VitaePanel_Field"), TEXT("TitleText"),
-		TEXT("Vitae"), 10, StatusGold, StatusOverlayZ);
-	EffectsTitleLabel->SetJustification(ETextJustify::Center);
+	const auto& Strings = GetStatusPanelStrings();
+	const auto Title = Manager->FindElementUnder(ActivePanelPage, TEXT("TitleText"));
+	if (const auto Header = Title ? Title->Parent.Pin() : nullptr)
+	{
+		Title->Width = Header->Width;
+		Title->Height = Header->Height;
+	}
+	const FString* Caption = Title ? Strings.Strings.Find(Title->TextEntryId) : nullptr;
+	PlaceTextOnElement(EffectsTitleLabel, Title, Caption ? *Caption : TEXT("Vitae"), 10, FLinearColor::White, StatusOverlayZ);
 
 	float VitaeMul = 1.f;
-	const bool bHasVitae = Client->TryGetVitaeMultiplier(VitaeMul);
+	const int32 PenaltyPct = Client->TryGetVitaeMultiplier(VitaeMul)
+		? 100 - FMath::RoundToInt(FMath::Clamp(VitaeMul, 0.f, 1.f) * 100.f) : 0;
 	FString Body;
-	if (!bHasVitae || VitaeMul >= 0.999f)
+	if (PenaltyPct == 0)
 	{
-		Body = TEXT("You are at full strength.\n\nVitae weakens your skills and attributes after death. Earn experience to recover.");
+		Body = Strings.Text(TEXT("ID_Vitae_Text_Full"));
+		if (Body.IsEmpty()) Body = TEXT("Your Vitae, or life force, is at full strength.");
 	}
 	else
 	{
-		const int32 PenaltyPct = FMath::Clamp(100 - FMath::RoundToInt(VitaeMul * 100.f), 1, 99);
-		const FACEPlayerVitals Vitals = Client->GetPlayerVitals();
 		const int32 Level = Client->GetDeathLevel() > 0
-			? Client->GetDeathLevel()
-			: (Vitals.bValid ? Vitals.Level : 1);
+			? Client->GetDeathLevel() : Client->GetPlayerVitals().Level;
 		const int32 XpLeft = VitaeXpRemaining(VitaeMul, Level, Client->GetVitaeCpPool());
-		Body = FString::Printf(
-			TEXT("Your Vitae is reduced by %d%%.\n\n"
-				"Your skills are reduced by %d%%.\n\n"
-				"Experience needed to restore Vitae: %d"),
-			PenaltyPct, PenaltyPct, XpLeft);
+		const TMap<FString, FString> Values = {
+			{TEXT("PERCENT"), FString::FromInt(PenaltyPct)},
+			{TEXT("EXPERIENCE"), FText::AsNumber(XpLeft).ToString()}
+		};
+		// gmVitaeUI appends these strings to one field. The DAT supplies the paragraph breaks.
+		Body = Strings.FormatText(TEXT("ID_Vitae_Text_Vitae"), Values)
+			+ Strings.FormatText(TEXT("ID_Vitae_Text_Skills"), Values)
+			+ Strings.FormatText(TEXT("ID_Vitae_Text_Experience"), Values);
+		if (Body.IsEmpty())
+		{
+			Body = FString::Printf(TEXT("Vitae penalty: %d%%\n\nExperience to regain 1%% of your Vitae: %s"),
+				PenaltyPct, *Values[TEXT("EXPERIENCE")]);
+		}
 	}
-	PlaceTextUnder(VitaePanelLabel, TEXT("VitaePanel_Field"), TEXT("VitaeText"), Body, 10, StatusWhite, StatusOverlayZ + 1);
+	const auto TextField = Manager->FindElementUnder(ActivePanelPage, TEXT("VitaeText"));
+	if (const auto Background = TextField ? TextField->Parent.Pin() : nullptr)
+	{
+		// The text child has fixed DAT edges. Keep its symmetric inset when the floaty is resized.
+		TextField->Width = FMath::Max(1, Background->Width - 2 * TextField->X);
+		TextField->Height = Background->Height;
+	}
+	PlaceTextOnElement(VitaePanelLabel, TextField, Body, 10, FLinearColor::White, StatusOverlayZ + 1);
 }
 
 void UACEUIGameplayBinder::RefreshLinkStatusPanelOverlays()
@@ -476,19 +499,13 @@ void UACEUIGameplayBinder::RefreshLinkStatusPanelOverlays()
 	{
 		PingStr = FString::Printf(TEXT("%.0f"), LastLinkStatus.RoundTripSeconds * 1000.f);
 	}
-	if (!bLoadedLinkStatusStrings)
-	{
-		bLoadedLinkStatusStrings = true;
-		if (const auto* Resources = Canvas->GetResourceResolver())
-			if (const auto* Dat = Resources->GetDatSubsystem())
-				LinkStatusStrings.LoadStrings(Dat->GetDatDirectory(), 0x23000001);
-	}
-	const FString Body = LinkStatusStrings.Text(TEXT("ID_LinkStatus_Info"))
+	const auto& Strings = GetStatusPanelStrings();
+	const FString Body = Strings.Text(TEXT("ID_LinkStatus_Info"))
 		+ TEXT("\nGreen: under 300 ms ping and 2% packet loss. Yellow: 300 ms or 2% loss. Red: 1000 ms or 10% loss. No server packets for 5 seconds shows yellow; 20 seconds or disconnection shows red.\n")
-		+ LinkStatusStrings.Text(TEXT("ID_LinkStatus_Disconnect"))
-		+ LinkStatusStrings.FormatText(TEXT("ID_LinkStatus_PacketLoss"),
+		+ Strings.Text(TEXT("ID_LinkStatus_Disconnect"))
+		+ Strings.FormatText(TEXT("ID_LinkStatus_PacketLoss"),
 			{{TEXT("PACKET_LOSS"), FString::Printf(TEXT("%.2f"), LastLinkStatus.PacketLossPercent)}})
-		+ LinkStatusStrings.FormatText(TEXT("ID_LinkStatus_Ping"), {{TEXT("PING"), PingStr}});
+		+ Strings.FormatText(TEXT("ID_LinkStatus_Ping"), {{TEXT("PING"), PingStr}});
 	PlaceTextUnder(LinkStatusPanelLabel, TEXT("LinkStatusPanel_Field"), TEXT("LinkStatusText"),
 		Body, 10, StatusWhite, StatusOverlayZ + 1);
 }
@@ -588,9 +605,5 @@ void UACEUIGameplayBinder::TickStatusPanels(float /*DeltaSeconds*/)
 	else if (ActivePanelPage == TEXT("NegativeEffectsPanel_Field"))
 	{
 		RefreshEffectsOverlays(false);
-	}
-	else if (ActivePanelPage == TEXT("VitaePanel_Field"))
-	{
-		RefreshVitaePanelOverlays();
 	}
 }

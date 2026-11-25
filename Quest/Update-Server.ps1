@@ -1,8 +1,11 @@
 #requires -Version 7.0
 [CmdletBinding(SupportsShouldProcess)]
-param()
+param(
+    [string]$PublishDirectory = (Join-Path $PSScriptRoot '../Unreal/Saved/VRServer'),
+    [switch]$NoStart
+)
 $ErrorActionPreference = 'Stop'
-$sourceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../Unreal/Saved/VRServer'))
+$sourceRoot = (Resolve-Path -LiteralPath $PublishDirectory -ErrorAction Stop).Path
 $targetRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../Unreal/PackagedVR/Server'))
 $targetExe = Join-Path $targetRoot 'ACE.Server.exe'
 foreach ($name in 'ACE.Server.exe', 'ACE.Server.dll', 'ACE.Server.deps.json', 'ACE.Server.runtimeconfig.json') {
@@ -30,7 +33,9 @@ $changes = @(foreach ($file in Get-ChildItem -LiteralPath $sourceRoot -File -Rec
         [pscustomobject]@{ RelativePath = $relative; Source = $file.FullName; Destination = $destination; OldSHA256 = $oldHash; NewSHA256 = $newHash }
     }
 })
-if (!$PSCmdlet.ShouldProcess($targetRoot, "Back up and install $($changes.Count) changed server binaries, then start ACE")) { return }
+$operation = "Back up and install $($changes.Count) changed server binaries"
+if (!$NoStart) { $operation += ', then start ACE' }
+if (!$PSCmdlet.ShouldProcess($targetRoot, $operation)) { return }
 $backup = Join-Path $PSScriptRoot ('../Unreal/Saved/ServerBackups/' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 [void](New-Item -ItemType Directory -Path $backup -Force)
 foreach ($change in $changes) {
@@ -48,4 +53,4 @@ foreach ($change in $changes) {
     }
 }
 Write-Host "Server binaries verified. Backup: $([IO.Path]::GetFullPath($backup))"
-& (Join-Path $PSScriptRoot 'Start-Server.ps1')
+if (!$NoStart) { & (Join-Path $PSScriptRoot 'Start-Server.ps1') }

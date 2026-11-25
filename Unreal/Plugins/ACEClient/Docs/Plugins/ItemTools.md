@@ -39,6 +39,11 @@ the split must be confirmed before its new object can be sold. Free a pack slot
 if the server cannot split a funding stack. Custom currencies use the vendor's
 advertised currency count and do not redeem pyreal notes automatically.
 
+**Convert Peas to MMDs** sells eligible peas across your packs at a pyreal
+vendor that stocks Trade Note (250,000). It buys notes with the sale proceeds
+at the vendor's asking price and leaves any change in pyreals. Retained peas
+and items offered in trade stay in your inventory.
+
 ## Profiles (GiveVT)
 
 Choose a `.utl` file from the shared profile folder, or copy UCM's active loot
@@ -69,7 +74,8 @@ explanation; remaining items stay where the server last confirmed them.
 ## Restock
 
 Add selected inventory items or vendor stock and set **Keep this many** for each
-supply. The tool counts all owned packs and buys only the shortage. Lists are
+supply. The tool counts all owned packs and buys the shortage in batches.
+It checks space for the goods, split funding stacks and pyreal payouts before each exchange. Lists are
 saved separately by character GUID and server name. **Restock automatically**
 starts when a newly opened vendor stocks something in the list; enable this only
 when automatic purchases are wanted. Missing stock is reported after available

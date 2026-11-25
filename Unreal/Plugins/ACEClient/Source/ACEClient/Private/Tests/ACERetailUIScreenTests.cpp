@@ -5435,6 +5435,44 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             [](UTextBlock* Label){return Label && Label->GetText().ToString().StartsWith(TEXT("Bought:"));}));
         Client->Session->House=FACEHouseInfo();
 
+        TFunction<void()> CheckVitaePanel = [&]()
+        {
+            TGuardValue<TArray<FACEActiveEnchantment>> RestoreEffects(Session.ActiveEnchantments, {});
+            TGuardValue<int32> RestoreLevel(Session.DeathLevel, 100);
+            TGuardValue<int32> RestorePool(Session.VitaeCpPool, 1000);
+            Gameplay->ShowPanelPage(TEXT("VitaePanel_Field"));
+            const auto* Body = Cast<UACERetailTextBlock>(Gameplay->VitaePanelLabel);
+            const auto* Title = Cast<UACERetailTextBlock>(Gameplay->EffectsTitleLabel);
+            if (!TestNotNull(TEXT("Vitae body"), Body) || !TestNotNull(TEXT("Vitae title"), Title)) return;
+            TestEqual(TEXT("Retail full-strength message"), Body->GetText().ToString(),
+                FString(TEXT("Your Vitae, or life force, is at full strength.")));
+            TestTrue(TEXT("Vitae title uses centered white retail lettering"),
+                Title->GetText().ToString() == TEXT("Vitae") && Title->GetTextJustification() == ETextJustify::Center
+                && Title->GetColorAndOpacity().GetSpecifiedColor() == FLinearColor::White);
+            TestTrue(TEXT("Vitae body uses the centered, wrapping retail text field"),
+                Body->GetTextJustification() == ETextJustify::Center && Body->GetRetailElement()
+                && Body->GetRetailElement()->TextVerticalJustification == 1 && !Body->GetRetailElement()->bTextOneLine);
+            CaptureScreen(TEXT("GameplayVitaeFull"));
+
+            FACEActiveEnchantment Penalty;
+            Penalty.bVitae = true;
+            Penalty.StatModValue = .95f;
+            Session.ActiveEnchantments.Add(Penalty);
+            Gameplay->HandleEnchantmentsChanged();
+            const FString BodyText = Body->GetText().ToString();
+            TestTrue(TEXT("Vitae loss, affected stats and next 1% use three retail paragraphs"),
+                BodyText.Contains(TEXT("lost 5% of your Vitae, or life force.\n\nThis means that your health, stamina, mana, and skills are temporarily reduced by 5%."))
+                && BodyText.EndsWith(FString::Printf(TEXT("\n\nYou will regain 1%% of your Vitae once you earn %s more experience."), *FText::AsNumber(192461).ToString())));
+            CaptureScreen(TEXT("GameplayVitaePenalty"), 1.35f);
+            Session.VitaeCpPool += 100;
+            Gameplay->TickRefresh();
+            TestTrue(TEXT("Open Vitae screen reflects newly earned experience"), Body->GetText().ToString().Contains(FText::AsNumber(192361).ToString()));
+            Session.ActiveEnchantments[0].StatModValue = .999f;
+            Gameplay->HandleEnchantmentsChanged();
+            TestEqual(TEXT("A penalty rounding to zero displays the recovered state"), Body->GetText().ToString(),
+                FString(TEXT("Your Vitae, or life force, is at full strength.")));
+        };
+        CheckVitaePanel();
         Gameplay->ShowPanelPage(TEXT("SocialPanel_Field"));
 		{
 			const auto SavedEnchantments=Session.ActiveEnchantments;

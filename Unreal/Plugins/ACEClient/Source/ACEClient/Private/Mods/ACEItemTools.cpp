@@ -1,4 +1,5 @@
 #include "ACEItemTools.h"
+#include "ACEPluginCatalog.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEVTProfile.h"
 #include "ACEPlayerController.h"
@@ -48,10 +49,21 @@ void UACEPluginSubsystem::UpdateItemToolsCharacter()
 
 bool UACEPluginSubsystem::StartItemTools(const FString& Mode)
 {
-    if(!TArray<FString>{TEXT("give"),TEXT("shop"),TEXT("profile"),TEXT("chest"),TEXT("restock"),TEXT("merge")}.Contains(Mode))return false;
+    if(!TArray<FString>{TEXT("give"),TEXT("shop"),TEXT("profile"),TEXT("chest"),TEXT("restock"),TEXT("merge"),TEXT("convert_peas")}.Contains(Mode))return false;
     auto P=Find(TEXT("itemtools"));if(!P)return false;
     UpdateItemToolsCharacter();
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    if(Mode==TEXT("convert_peas"))
+    {
+        const auto Version=ACEPluginCatalog::CompareVersions(P->Version,TEXT("1.2.0"));
+        if(!Version.IsSet()||Version.GetValue()<0)
+        {
+            Notice=TEXT("Update Item Tools to 1.2.0 or newer in Plugin Manager to convert peas to MMDs.");
+            P->Status=Notice;
+            return false;
+        }
+        if(!HasMMDVendor(C)){Notice=TEXT("Open a pyreal vendor that stocks MMD trade notes.");return false;}
+    }
     P->Profile->SetStringField(TEXT("mode"),Mode);
     P->Profile->SetNumberField(TEXT("vendor_id"),uint32(C->GetOpenVendorGuid()));
     // Reuse profile validation before allowing any automation to start.
@@ -166,20 +178,7 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::ItemToolsSnapshot(FACEClientPlugin*
         Targets.Add(MakeShared<FJsonValueObject>(J));
     }
     S->SetArrayField(TEXT("it_objects"),Targets);
-    TSet<FString> Wanted;
-    if(P){Wanted.Add(String(P->Profile,TEXT("buy_name")));const TArray<TSharedPtr<FJsonValue>>* Supplies=nullptr;
-        if(P->Profile->TryGetArrayField(TEXT("restock"),Supplies))for(const auto& Row:*Supplies)Wanted.Add(String(Row->AsObject(),TEXT("name")));}
-    TArray<TSharedPtr<FJsonValue>> Stock;const auto Merchandise=C->GetVendorMerchandise();
-    for(const auto& V:S->GetArrayField(TEXT("vendor_stock")))
-    {
-        auto J=MakeShared<FJsonObject>(*V->AsObject());int32 Room=0;
-        for(const auto& Item:Merchandise)if(Item.Guid==Guid(J,TEXT("id"))&&Wanted.Contains(String(J,TEXT("name"))))
-        {
-            Room=PurchaseRoom(C,Item);break;
-        }
-        J->SetNumberField(TEXT("room"),Room);Stock.Add(MakeShared<FJsonValueObject>(J));
-    }
-    S->SetArrayField(TEXT("vendor_stock"),Stock);return S;
+    return S;
 }
 
 bool UACEPluginSubsystem::ExecuteItemTools(FACEClientPlugin& P,const TSharedPtr<FJsonObject>& I)
@@ -199,6 +198,10 @@ bool UACEPluginSubsystem::ExecuteItemTools(FACEClientPlugin& P,const TSharedPtr<
     const double RawAmount=Number(I,TEXT("amount"),1);
     if(RawAmount<1||RawAmount>100000||FMath::FloorToDouble(RawAmount)!=RawAmount)return Fail(TEXT("Invalid transfer quantity."));
     const int32 Amount=int32(RawAmount);const int32 Vendor=C->GetOpenVendorGuid();
+    const bool Converting=P.Id==TEXT("itemtools")&&String(P.Profile,TEXT("mode"))==TEXT("convert_peas");
+    if(Converting&&(!HasMMDVendor(C)||Vendor!=Guid(P.Profile,TEXT("vendor_id"))
+        ||((Action==TEXT("it_sell")||Action==TEXT("it_split"))&&(!Found||!IsPea(Item)))))
+        return Fail(TEXT("Pea or MMD vendor changed; conversion stopped."));
     if(Action==TEXT("it_refresh_chest"))
     {if(!Nearby()||!Target.IsOpenable())return Fail(TEXT("Chest is no longer available."));Appraisals.Remove(TargetId);C->RequestBackgroundAppraisal(TargetId);P.NextAction=FPlatformTime::Seconds()+1;return true;}
     if(Action==TEXT("it_close"))
@@ -214,13 +217,19 @@ bool UACEPluginSubsystem::ExecuteItemTools(FACEClientPlugin& P,const TSharedPtr<
         if(!Vendor||Vendor!=Guid(I,TEXT("vendor")))return Fail(TEXT("Vendor changed; purchase stopped."));
         const auto Stock=C->GetVendorMerchandise();const auto* V=Stock.FindByPredicate([&](const auto& O){return O.Guid==Id;});
         bool ServerBank=false;P.Profile->TryGetBoolField(TEXT("server_bank"),ServerBank);
-        if(!V||Amount>ACEInventoryRules::VendorPurchaseLimit(*V)||(!ServerBank&&ACEVendorPricing::VendorSellCost(*V,Amount,C->GetVendorSellRate())>uint32(FMath::Max(0,Session->GetVendorCurrencyCount()))))return Fail(TEXT("Vendor stock or currency changed; purchase stopped."));
+        const int32 Funds=Converting?FMath::Max(Session->GetVendorCurrencyCount(),Session->GetVendorPurchaseFunds()):Session->GetVendorCurrencyCount();
+        if(!V||(Converting&&!IsMMD(*V))||Amount>ACEInventoryRules::VendorPurchaseLimit(*V)||((!ServerBank||Converting)&&ACEVendorPricing::VendorSellCost(*V,Amount,C->GetVendorSellRate())>uint32(FMath::Max(0,Funds))))return Fail(TEXT("Vendor stock or currency changed; purchase stopped."));
         if(PurchaseRoom(C,*V)<Amount)return Fail(TEXT("Inventory space changed; purchase stopped."));
         C->SendBuyItems(Vendor,{{Amount,Id}});
     }
     else if(Action==TEXT("it_sell"))
     {
         if(!Found||!Transferable(C,Item)||!Vendor||Vendor!=Guid(I,TEXT("vendor"))||!Session->CanVendorBuyItem(Item)||Amount!=FMath::Max(1,Item.StackSize))return Fail(TEXT("Sale changed; no items sold. Partial stacks must be split first."));
+        const auto Space=VendorSpace(C);
+        const int32 Payout=ACEVendorPricing::VendorBuyPayout(Item,Amount,C->GetVendorBuyRate());
+        if(Payout>Space.PayoutRoom(false))
+            return Fail(FString::Printf(TEXT("Selling %d × %s for %d pyreals needs %d free pack slots. You have %d."),
+                Amount,*ACERetailObjectNames::Name(Item),Payout,1+(Payout-1)/Space.CoinStack,Space.ItemSlots));
         C->SendSellItems(Vendor,{{Amount,Id}});
     }
     else if(Action==TEXT("it_merge"))
@@ -232,6 +241,8 @@ bool UACEPluginSubsystem::ExecuteItemTools(FACEClientPlugin& P,const TSharedPtr<
     else if(Action==TEXT("it_split"))
     {
         if(!Found||!Transferable(C,Item)||Amount>=Item.StackSize)return Fail(TEXT("Split item changed."));
+        if(Converting&&(!Session->CanVendorBuyItem(Item)||ACEVendorPricing::VendorBuyPayout(Item,Amount,C->GetVendorBuyRate())>VendorSpace(C).PayoutRoom(true)))
+            return Fail(TEXT("Vendor or pack space changed; pea split cancelled."));
         const int32 Pack=C->PlanInventoryPickup(Id,0,Amount,false).Container;
         if(!Pack)return Fail(TEXT("Free one slot in any pack to split a funding stack."));
         C->SendStackableSplitToContainer(Id,Pack,0,Amount);
@@ -278,6 +289,8 @@ void UACEPluginSubsystem::ExtendItemInventorySnapshot(const TSharedPtr<FJsonObje
             const bool Allowed=Transferable(C,Item);J->SetBoolField(TEXT("transferable"),Allowed);J->SetBoolField(TEXT("attuned"),Item.Attuned!=0);
             J->SetBoolField(TEXT("can_sell"),Allowed&&Session->CanVendorBuyItem(Item));
             J->SetBoolField(TEXT("trade_note"),Item.ItemType==ACEItemType::PromissoryNote);
+            if(IsPea(Item))J->SetBoolField(TEXT("pea"),true);
+            J->SetNumberField(TEXT("payout_per_unit"),ACEVendorPricing::PayoutPerUnit(Item,C->GetVendorBuyRate()));
             J->SetNumberField(TEXT("sell_unit"),ACEVendorPricing::VendorBuyPayout(Item,1,C->GetVendorBuyRate()));
         }
         Inventory.Add(MakeShared<FJsonValueObject>(J));

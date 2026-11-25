@@ -257,6 +257,7 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             P->Permissions.Remove(TEXT("fellowship"));Dispatch(TEXT("leader"),Ally.Guid);TestTrue(TEXT("New operations still require fellowship capability"),Session.CachedC2SPackets.IsEmpty()&&P->ActivityFailure.IsValid());
         }
         FACEWorldObject Stock;Stock.Guid=501;Stock.Name=TEXT("Scarab");Stock.WeenieClassId=300;Stock.MaxStackSize=100;Stock.VendorQuantityAvailable=-1;
+        FACEWorldObject Buyer;Buyer.Guid=Session.PlayerGuid;Buyer.ItemsCapacity=102;Session.WorldObjects.Add(Buyer.Guid,Buyer);
         Session.OpenVendorGuid=Vendor.Guid;Session.WorldObjects.Add(Vendor.Guid,Vendor);Session.VendorMerchandise={Stock};
         auto Snapshot=MakeShared<FJsonObject>();H->ExtendSnapshot(Snapshot);
         TestEqual(TEXT("Vendor snapshot carries stable identity"),Snapshot->GetNumberField(TEXT("vendor_wcid")),200.);

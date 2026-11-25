@@ -11,6 +11,8 @@
 #include "HeadMountedDisplayFunctionLibrary.h"
 #include "IXRTrackingSystem.h"
 #include "DynamicRHI.h"
+#include "DeviceProfiles/DeviceProfile.h"
+#include "DeviceProfiles/DeviceProfileManager.h"
 #include "Engine/StaticMesh.h"
 
 class FACEQuestNativeCheck : public IAutomationLatentCommand
@@ -48,6 +50,10 @@ bool FACEQuestNativeCheck::Update()
     Test->AddInfo(FString::Printf(TEXT("Android DAT path: %s"), *Dat->GetDatDirectory()));
     Test->TestTrue(TEXT("Native Vulkan renderer"), GDynamicRHI && FString(GDynamicRHI->GetName()).Contains(TEXT("Vulkan")));
     Test->TestTrue(TEXT("Mobile feature level"), GMaxRHIFeatureLevel == ERHIFeatureLevel::ES3_1);
+    const auto* Profile = UDeviceProfileManager::Get().GetActiveProfile();
+    if (Test->TestNotNull(TEXT("Active Quest device profile"), Profile))
+        Test->TestTrue(TEXT("Quest world textures blend between mip levels"),
+            Profile->GetSamplerFilter(TEXTUREGROUP_World) == ETextureSamplerFilter::Trilinear);
     Test->TestTrue(TEXT("OpenXR runtime"), GEngine->XRSystem.IsValid() && GEngine->XRSystem->GetSystemName() == FName(TEXT("OpenXR")));
     Test->TestTrue(TEXT("HMD enabled"), UHeadMountedDisplayFunctionLibrary::IsHeadMountedDisplayEnabled());
     Test->TestTrue(TEXT("Portal DAT indexed"), Dat->IsDatReady());

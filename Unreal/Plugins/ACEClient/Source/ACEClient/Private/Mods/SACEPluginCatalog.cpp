@@ -282,7 +282,7 @@ private:
         UpdatingAll=false;
         Status=FString::Printf(TEXT("%d plugin%s updated."),Updated,Updated==1?TEXT(""):TEXT("s"));
         if(!FailedUpdates.IsEmpty())Status+=TEXT(" Failed: ")+FString::Join(FailedUpdates,TEXT(", "))+TEXT(". Retry individually.");
-        if(!PendingUpdates.IsEmpty())Status+=TEXT(" Return to Accounts to finish remaining updates.");
+        if(!PendingUpdates.IsEmpty())Status+=TEXT(" Open Plugin Manager on the login screen to finish remaining updates.");
         PendingUpdates.Reset();
         ReadInstallations();
     }

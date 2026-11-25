@@ -118,8 +118,14 @@ if ($anr.Text -match ('(?m)ANR in ' + [regex]::Escape($package) + '(?:\s|/|$)'))
 
 # App UID captures previous processes as well as a still-running one. System
 # lifecycle/ANR messages live under a different UID, captured separately below.
-if ($info.Text -match '\buserId=(\d+)') {
-    Save-Result 'app-logcat.txt' (Read-Device 'app logcat' @('logcat', '-d', '-b', 'main', '-b', 'system', '-b', 'crash', '-v', 'threadtime', '-t', '5000', ('--uid=' + $Matches[1])))
+$appUid = $null
+if ($info.Text -match '\buserId=(\d+)') { $appUid = $Matches[1] }
+else {
+    $uidQuery = Read-Device 'package UID' @('shell', 'pm', 'list', 'packages', '-U', '--user', 'current', $package)
+    if ($uidQuery.Code -eq 0 -and $uidQuery.Text -match ('(?m)^package:' + [regex]::Escape($package) + '\s+uid:(\d+)\s*$')) { $appUid = $Matches[1] }
+}
+if ($appUid) {
+    Save-Result 'app-logcat.txt' (Read-Device 'app logcat' @('logcat', '-d', '-b', 'main', '-b', 'system', '-b', 'crash', '-v', 'threadtime', '-t', '5000', ('--uid=' + $appUid)))
 } else { $notes.Add('App logcat could not be scoped because the installed UID was unavailable.') }
 $system = Read-Device 'Android launch messages' @('logcat', '-d', '-b', 'system', '-v', 'threadtime', '-t', '5000')
 ($system.Text -split '\r?\n' | Where-Object { $_ -match [regex]::Escape($package) }) |
@@ -131,8 +137,20 @@ if ($processId.Text.Trim()) {
     # Android's native backtrace command can identify the blocked game/render
     # thread while the app is still hung. Some OS builds deny it; retain that
     # error and the other evidence rather than requiring root or restarting.
-    if ($processId.Text.Trim() -match '^\d+$') {
-        Save-Result 'native-threads.txt' (Read-Device 'native thread stacks' @('shell', 'debuggerd', '-b', $processId.Text.Trim()))
+    $gamePid = $processId.Text.Trim()
+    if ($gamePid -match '^\d+(?:\s+\d+)+$') {
+        # Unreal's detached crash handler can have the same process name.
+        $pids = $gamePid -split '\s+'
+        $records = Read-Device 'game process record' @('shell', 'dumpsys', 'activity', 'processes')
+        $recordPattern = 'ProcessRecord\{\S+\s+(\d+):' + [regex]::Escape($package) + '/'
+        $active = @([regex]::Matches($records.Text, $recordPattern) | ForEach-Object { $_.Groups[1].Value } |
+            Where-Object { $_ -in $pids } | Sort-Object -Unique)
+        $gamePid = if ($active.Count -eq 1) { $active[0] }
+    }
+    if ($gamePid -match '^\d+$') {
+        Save-Result 'native-threads.txt' (Read-Device 'native thread stacks' @('shell', 'debuggerd', '-b', $gamePid))
+    } else {
+        $notes.Add('Could not identify a unique game process for the native thread capture.')
     }
 }
 

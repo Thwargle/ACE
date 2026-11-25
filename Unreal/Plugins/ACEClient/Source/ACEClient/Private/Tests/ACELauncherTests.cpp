@@ -121,6 +121,12 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     TStrongObjectPtr<UACELoginWidget> Owner(CreateWidget<UACELoginWidget>(GI,UACELoginWidget::StaticClass())); auto* W=Owner.Get();
     W->ProfilePath=FPaths::ProjectSavedDir()/TEXT("Automation/Launcher/Widget-")+FGuid::NewGuid().ToString()+TEXT(".dat");
     auto Slate=W->TakeWidget();
+    const auto* PluginNav=W->NavigationButtons.FindByPredicate([](const auto& Button){return Button->Action==TEXT("plugins");});
+    if(!TestTrue(TEXT("Plugin Manager shares the main navigation bar with Updates"),
+        PluginNav && (*PluginNav)->GetParent()==W->UpdateNavButton->GetParent()))return false;
+    (*PluginNav)->OnClicked.Broadcast();
+    TestEqual(TEXT("Plugin Manager opens directly from Play"),W->Pages->GetActiveWidgetIndex(),5);
+    W->RunAction(TEXT("play"));
     W->SetUseDatIntroBackdrop(true);
     TestEqual(TEXT("Launcher stays black when the intro/game world exists after logout"),W->BackdropBorder->GetBrushColor(),FLinearColor::Black);
     auto* RetailTitle=Cast<UACERetailTextBlock>(W->ServerTitle);
