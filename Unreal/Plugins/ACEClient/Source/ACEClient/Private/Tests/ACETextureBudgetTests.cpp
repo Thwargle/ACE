@@ -4,6 +4,8 @@
 #include "ACEDatSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Engine/Texture2D.h"
+#include "DeviceProfiles/DeviceProfile.h"
+#include "DeviceProfiles/DeviceProfileManager.h"
 #include "HAL/IConsoleManager.h"
 #include "UObject/StrongObjectPtr.h"
 #include "Misc/ScopeExit.h"
@@ -26,7 +28,12 @@ bool FACETextureBudgetTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("World texture respects the mobile size budget"), World->GetSizeX(), 512);
 	TestEqual(TEXT("World texture retains aspect ratio"), World->GetSizeY(), 256);
 	TestEqual(TEXT("Reduced world texture keeps the mip chain"), World->GetNumMips(), 10);
-	TestEqual(TEXT("World textures retain the native-tested trilinear filtering"), World->Filter.GetValue(), TF_Trilinear);
+	TestEqual(TEXT("Downsizing preserves the World texture group"), World->LODGroup.GetValue(), TEXTUREGROUP_World);
+	TestEqual(TEXT("Downsizing retains device-profile filtering"), World->Filter.GetValue(), TF_Default);
+	const auto* Profile = UDeviceProfileManager::Get().GetActiveProfile();
+	if (!TestNotNull(TEXT("Active texture device profile"), Profile)) return false;
+	TestEqual(TEXT("Reduced textures use the active World sampler"),
+		int32(Profile->GetSamplerFilter(World.Get())), int32(Profile->GetSamplerFilter(TEXTUREGROUP_World)));
 	TStrongObjectPtr<UTexture2D> UI(FACEDatTextureResolver::CreateTransientRgbaWithMips(1024, 512, Pixels, true,
 		TA_Wrap, TA_Wrap, false, true, 0, TF_Trilinear, false));
 	TestEqual(TEXT("UI atlas coordinates retain their authored dimensions"), UI->GetSizeX(), 1024);
