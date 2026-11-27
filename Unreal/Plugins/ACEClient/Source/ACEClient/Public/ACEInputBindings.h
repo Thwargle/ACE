@@ -4,6 +4,8 @@
 class APlayerController;
 namespace ACEInputBindings
 {
+constexpr int32 AlternateCameraContext = 16;
+constexpr int32 QuickslotContext = 32;
 constexpr int32 BindingSlots = 4; // Three retail mappings plus a separate controller mapping.
 ACECLIENT_API FKey StickDirectionKey(FKey Axis, float Value);
 ACECLIENT_API float Value(const APlayerController* PC, FKey ActionKey);
@@ -49,6 +51,8 @@ ACECLIENT_API float MovementAxis(const APlayerController* PC, FKey Positive, FKe
 // Controller buttons can be held as modifiers in addition to Shift/Ctrl/Alt/Cmd.
 // Supply the controller when matching live input (including immediate UI actions).
 ACECLIENT_API bool Matches(FKey ActionKey, const FInputChord& Input, const APlayerController* PC=nullptr);
+// Inspect or release combat bindings sharing a monster-cycling key in the edit draft.
+ACECLIENT_API TArray<FString> MonsterCycleConflicts(bool bRelease);
 ACECLIENT_API void BeginEdit();
 ACECLIENT_API void Defaults();
 ACECLIENT_API void Revert();

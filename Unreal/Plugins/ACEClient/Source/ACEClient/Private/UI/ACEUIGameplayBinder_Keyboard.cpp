@@ -183,7 +183,11 @@ bool UACEUIGameplayBinder::HandleKeyboardNamedClick(const FString& Name)
  if(!Manager)return false;
  const auto Root=Manager->FindElementByName(TEXT("RootGameplay_Keyboard_Field"));
  if(!Root||!Root->bVisible)return false;
- if(Name==TEXT("KeymapFileCancel")){bKeymapImportOpen=false;RefreshKeyboardOverlays();return true;}
+ if(Name==TEXT("KeymapFileCancel"))
+ {
+  if(bKeymapReport && bKeymapHasCycleConflict)ACEInputBindings::MonsterCycleConflicts(true);
+  bKeymapImportOpen=false;bKeymapReport=false;RefreshKeyboardOverlays();return true;
+ }
  if(Name==TEXT("KeymapFileOK")){HandleKeymapImport(FString());return true;}
  if(bKeymapImportOpen)return true;
  for(const TCHAR* P:{TEXT("Movement"),TEXT("Camera"),TEXT("Combat"),TEXT("UI"),TEXT("CharacterSettings"),TEXT("Emotes")})
@@ -242,7 +246,8 @@ void UACEUIGameplayBinder::RefreshKeymapDialog()
  const auto Box=KeymapChild(KeymapDialog,0x3d),Body=KeymapChild(KeymapDialog,0x3e);
  const auto Choice=KeymapChild(KeymapDialog,0x21),OK=KeymapChild(KeymapDialog,0x22),Cancel=KeymapChild(KeymapDialog,0x23);
  Choice->bVisible=!bKeymapReport;
- const FString Captions[]={KeymapDialogMessage,bKeymapReport?TEXT("Review"):KeymapOverwritePath.IsEmpty()?(bKeymapSave?TEXT("Save"):TEXT("Load")):TEXT("Overwrite"),TEXT("Cancel")};
+ Cancel->bVisible=!bKeymapReport || bKeymapHasCycleConflict;
+ const FString Captions[]={KeymapDialogMessage,bKeymapReport?TEXT("Review"):KeymapOverwritePath.IsEmpty()?(bKeymapSave?TEXT("Save"):TEXT("Load")):TEXT("Overwrite"),bKeymapReport?TEXT("Targeting"):TEXT("Cancel")};
  const TSharedPtr<FACEUIElement> Elements[]={Body,OK,Cancel};
  for(int32 I=0;I<3;++I)
  {
@@ -250,7 +255,7 @@ void UACEUIGameplayBinder::RefreshKeymapDialog()
   auto* Label=KeymapDialogLabels[I].Get();Label->SetText(FText::FromString(Captions[I]));Label->SetJustification(ETextJustify::Center);
   Label->SetAutoWrapText(I==0);
   Label->SetVisibility(ESlateVisibility::HitTestInvisible);Canvas->PlaceWidgetAtElement(Label,Elements[I],100501);
-  if(I==0 && bKeymapReport)Label->SetVisibility(ESlateVisibility::Collapsed);
+  if((I==0 && bKeymapReport) || (I==2 && !Cancel->bVisible))Label->SetVisibility(ESlateVisibility::Collapsed);
  }
  if(bKeymapReport)
  {
@@ -354,12 +359,17 @@ void UACEUIGameplayBinder::HandleKeymapImport(const FString& Path)
  }
  const auto Result=ACEInputBindings::ImportRetailKeymapFile(File);
  if(!Result.bSuccess){ShowKeymapImport(Result.Error);return;}
- if(!Result.Skipped.IsEmpty() || !Result.UnchangedContexts.IsEmpty())
+ const auto Conflicts=ACEInputBindings::MonsterCycleConflicts(false);
+ bKeymapHasCycleConflict=!Conflicts.IsEmpty();
+ if(!Result.Skipped.IsEmpty() || !Result.UnchangedContexts.IsEmpty() || bKeymapHasCycleConflict)
  {
   bKeymapReport=true;
-  FString Report=FString::Printf(TEXT("Loaded %d bindings into the draft. Review returns to Keyboard: OK applies them; Cancel discards them."),Result.BindingCount);
-  if(!Result.Skipped.IsEmpty())Report+=TEXT("\n\nNot imported:\n")+FString::Join(Result.Skipped,TEXT("\n"));
-  if(!Result.UnchangedContexts.IsEmpty())Report+=TEXT("\n\nSeparate UI/system maps (not remapped):\n")+FString::Join(Result.UnchangedContexts,TEXT("\n"));
+  FString Report=FString::Printf(TEXT("Imported %d bindings. Choose Review, then OK in Keyboard to apply."),Result.BindingCount);
+  if(bKeymapHasCycleConflict)
+   Report+=TEXT("\n\nMonster cycling shares keys with combat actions. Choose Targeting to free these keys, or Review to keep both bindings.\n")+FString::Join(Conflicts,TEXT("\n"));
+  if(!Result.Skipped.IsEmpty())Report+=TEXT("\n\nSkipped bindings\n")+FString::Join(Result.Skipped,TEXT("\n"));
+  if(!Result.UnchangedContexts.IsEmpty())
+   Report+=FString::Printf(TEXT("\n\nSeparate UI/system maps use built-in controls (%d maps)."),Result.UnchangedContexts.Num());
   UE_LOG(LogTemp,Display,TEXT("Retail keymap import: %s"),*Report);
   ShowKeymapImport(Report);return;
  }

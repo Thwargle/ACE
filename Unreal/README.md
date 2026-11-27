@@ -18,12 +18,18 @@ Android clients. Start here for a Windows editor build. See the [source build gu
 4. Press **Play**, connect to a server, and enter the world. For PC VR, use
    `Launch-VR.ps1`.
 
-## Optional AC2 sky
+Click **Apply** in the in-game Options panel whenever you want to refresh the interface, including when your settings are already saved.
+
+## Optional AC2 artwork
 
 In **Graphics Options**, browse to your Legions `portal.dat` or paste its path.
-Select **Import**, then **Use imported AC2 sky**. The import uses adjacent
-`highres.dat` textures when available and saves to `Saved/Skies/Legions.sky`.
-The AC1 clock and weather determine timing for both sky options.
+Select **Import** and choose the sky, ground textures, grass textures, interactive grass, tree models and boulder textures independently.
+Ground covers mapped rock, dirt, swamp, sand, snow and ice. Grass changes grassy ground cover.
+Interactive grass uses Legions' meadow clumps at their authored size. Blades bend underfoot on grassy terrain.
+The tree option fits Legions broadleaves, conifers, palms, bare trees and small cut stumps to matching AC1 scenery across Dereth.
+Outdoor changes refresh in game. The sky follows AC1 time and weather.
+Reimport an older DAT selection to unlock the new scenery. Boulder textures use the original rock shapes and collision. The import uses adjacent
+`highres.dat` when available and saves locally to `Saved/Skies/Legions.sky`.
 
 For controlled comparisons, the [admin sky preview mod](../Source/Mods/LocalSkyPreview/README.md)
 provides `/weather`, `/time set` and `/timelapse [multiplier]`.

@@ -447,6 +447,7 @@ void UACEVRComponent::EndPlay(const EEndPlayReason::Type Reason)
 		Client->SetVRFellowshipUpdates(false);
 		if (auto Session = Client->GetSession())
 		{
+			if (bTracking) Session->EndVRPoseStream();
 			Session->OnNPCSpeech.RemoveAll(this); Session->OnCombatFeedback.RemoveAll(this); Session->OnHealthFeedback.RemoveAll(this); Session->OnVitalsUpdated.RemoveAll(this); Session->OnObjectHealth.RemoveAll(this);
 		}
 		Client->OnVendorOpened.RemoveDynamic(this, &UACEVRComponent::RevealRetailDialog);
@@ -463,6 +464,8 @@ void UACEVRComponent::EndPlay(const EEndPlayReason::Type Reason)
 void UACEVRComponent::UpdateTrackingState(bool Tracked)
 {
 	if (Tracked == bTracking) return;
+	if (!Tracked && Client)
+		if (const auto Session = Client->GetSession()) Session->EndVRPoseStream();
 	HeldControllerActions.Reset();
 	InventoryReleased();
 	CancelGestures(); bTracking = Tracked;

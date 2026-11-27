@@ -3,6 +3,7 @@
 #include "UI/ACEVideoSettingsWidget.h"
 #include "ACEInputBindings.h"
 #include "Mods/ACEPluginSubsystem.h"
+#include "ACEPlayerController.h"
 #include "Engine/GameInstance.h"
 #include "ACERetailChat.h"
 #include "Components/HorizontalBox.h"
@@ -373,7 +374,7 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 	{
 		if (TSharedPtr<FACEUIElement> Btn = Manager->FindElementUnder(ActiveOptionsTab, Footer[i].Key))
 		{
-			Btn->bActivatable = i == 2 || bPending;
+			Btn->bActivatable = i != 1 || bPending;
 			Btn->bGhosted = !Btn->bActivatable;
 			Btn->Y = ListH + VideoHeight + 4;
 			Btn->X = 16 + i * 90;
@@ -771,9 +772,7 @@ bool UACEUIGameplayBinder::HandleOptionsNamedClick(const FString& Name)
 	}
 	if (Name == TEXT("GameplayOptions_Help_Button"))
 	{
-		PostInventorySystemMessage(TEXT("Type @help for client commands, @house_help for housing, ")
-			TEXT("@acehelp for server commands. Left-click to select, double-click to use, ")
-			TEXT("drag items to move them, right-click an item to examine it."));
+		if (PlayerController) PlayerController->OpenClientHelp();
 		return true;
 	}
 	if (Name == TEXT("GameplayOptions_UrgentAssistance_Button"))
@@ -790,7 +789,7 @@ bool UACEUIGameplayBinder::HandleOptionsNamedClick(const FString& Name)
 	{
 		if (auto Button = Manager->FindElementUnder(ActiveOptionsTab, Name); Button && !Button->bActivatable) return true;
 		if (ActiveOptionsTab == TEXT("ConfigPage"))
-			if (auto* Video = Cast<UACEVideoSettingsWidget>(VideoSettings)) Video->ApplyVideo();
+			if (auto* Video = Cast<UACEVideoSettingsWidget>(VideoSettings); Video && Video->HasPendingChanges()) Video->ApplyVideo();
 		if (Client)
 		{
 			if (ActiveOptionsTab == TEXT("CharacterSettingsPage"))
@@ -799,16 +798,27 @@ bool UACEUIGameplayBinder::HandleOptionsNamedClick(const FString& Name)
 				for (const auto& O:ACECharacterOptions::GetTable()) if(O.Page==ACECharacterOptions::PageCharacter)
 				{
 					uint32& Bits=O.bInOptions2 ? Two : One;
-					Bits=(Bits & ~O.Flag) | ((O.bInOptions2 ? OptionsDraft2 : OptionsDraft1) & O.Flag);
+					const uint32 Draft = O.bInOptions2 ? OptionsDraft2 : OptionsDraft1;
+					const uint32 Snapshot = O.bInOptions2 ? OptionsSnapshot2 : OptionsSnapshot1;
+					if ((Draft ^ Snapshot) & O.Flag) Bits = (Bits & ~O.Flag) | (Draft & O.Flag);
 				}
-				Client->SendCharacterOptions(One,Two);
+				if (One != Client->GetCharacterOptions1() || Two != Client->GetCharacterOptions2())
+					Client->SendCharacterOptions(One,Two);
 				OptionsSnapshot1=OptionsDraft1=One; OptionsSnapshot2=OptionsDraft2=Two;
 			}
-			MainChatFilterSnapshot = MainChatTypeFilter;
-			FloatyChatFilterSnapshot = FloatyChatFilters;
-			ChatOpacitySnapshot = FVector2D(ChatInactiveOpacity,ChatActiveOpacity);
-			PostInventorySystemMessage(TEXT("Options applied."));
+			if (ActiveOptionsTab == TEXT("ChatPage"))
+			{
+				MainChatFilterSnapshot = MainChatTypeFilter;
+				FloatyChatFilterSnapshot = FloatyChatFilters;
+				ChatOpacitySnapshot = FVector2D(ChatInactiveOpacity,ChatActiveOpacity);
+			}
+			PostInventorySystemMessage(TEXT("Options applied. Interface refreshed."));
 		}
+		// Let the regular HUD tick repaint these overlays from current session state.
+		LastInventoryOverlayHash = LastVendorOverlayHash = LastLootOverlayHash = ~uint64(0);
+		IconPaintCache.Reset();
+		bJournalFieldsDirty = true;
+		if (Canvas) Canvas->RefreshPresentation();
 		RefreshOptionsOverlays();
 		return true;
 	}

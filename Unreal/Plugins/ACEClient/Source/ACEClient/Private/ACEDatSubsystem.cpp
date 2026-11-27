@@ -1,4 +1,6 @@
 #include "ACEDatSubsystem.h"
+#include "Sky/ACELegionsEnvironment.h"
+#include "Sky/ACELegionsTreeFit.h"
 #include "ACERuntimeOptions.h"
 #include "Sky/ACELegionsSkyRenderer.h"
 #include "ACEProfiling.h"
@@ -98,7 +100,6 @@ UACEUIResourceResolver* UACEDatSubsystem::GetUiResources()
 #include "Materials/MaterialExpressionPower.h"
 #include "Materials/MaterialExpressionLinearInterpolate.h"
 #include "Materials/MaterialExpressionOneMinus.h"
-#include "Materials/MaterialExpressionSceneTexture.h"
 #include "Materials/MaterialExpressionSceneDepth.h"
 #include "Materials/MaterialExpression.h"
 #include "MaterialDomain.h"
@@ -137,7 +138,8 @@ namespace
 		/** Day-dome backdrop — opaque unlit (avoids full-screen translucent overdraw). */
 		VertexColorOpaque,
 		LegionsSkyAlpha,
-		LegionsSkyAdd
+		LegionsSkyAdd,
+		LegionsGrass
 	};
 
 	template<typename SurfaceType> bool IsDatPortalFillSurface(const SurfaceType& Decoded)
@@ -408,6 +410,8 @@ namespace
 		// PIE / SurfaceUnpack flush nulls the UPROPERTY but leaves the transient
 		// UMaterial. NewObject with the same name then fails → callers fall back
 		// (opaque day-dome → translucent × A=0 → black sky).
+		const bool bLegionsGrass = Kind == EACEAceMaterialKind::LegionsGrass;
+		if (bLegionsGrass) Kind=EACEAceMaterialKind::Masked;
 		const bool bLegionsSky=Kind==EACEAceMaterialKind::LegionsSkyAlpha || Kind==EACEAceMaterialKind::LegionsSkyAdd;
 		if (bLegionsSky)
 		{
@@ -1047,7 +1051,7 @@ namespace
             }
 		}
 
-		if (Kind == EACEAceMaterialKind::Opaque || Kind == EACEAceMaterialKind::Masked)
+		if (!bLegionsGrass && (Kind == EACEAceMaterialKind::Opaque || Kind == EACEAceMaterialKind::Masked))
 		{
 			// Per-primitive PixelDepthOffset (CustomPrimitiveData.0). EnvCell outdoor peeks
 			// push interiors behind Setup shells; default 0 leaves characters/furniture alone.
@@ -1126,6 +1130,54 @@ namespace
 				EditorOnly->Opacity.Expression=Cutout; EditorOnly->Opacity.OutputIndex=0;
 			}
 		}
+		if (bLegionsGrass)
+		{
+			auto VectorParam=[&](FName Param)
+			{
+				auto* P=NewObject<UMaterialExpressionVectorParameter>(Mat);
+				P->ParameterName=Param; P->DefaultValue=FLinearColor::Transparent;
+				EditorOnly->ExpressionCollection.AddExpression(P);
+				return P;
+			};
+			auto* View=VectorParam(TEXT("GrassView"));
+			auto* Contact=VectorParam(TEXT("GrassContact"));
+			auto* Trail=VectorParam(TEXT("GrassTrail"));
+			auto* Birth=NewObject<UMaterialExpressionScalarParameter>(Mat);
+			Birth->ParameterName=TEXT("GrassPatchBirth"); Birth->bUseCustomPrimitiveData=true; Birth->PrimitiveDataIndex=0;
+			auto* Weights=NewObject<UMaterialExpressionTextureCoordinate>(Mat);
+			Weights->CoordinateIndex=1;
+			auto* Pos=NewObject<UMaterialExpressionWorldPosition>(Mat);
+			Pos->WorldPositionShaderOffset=WPT_ExcludeAllShaderOffsets;
+			auto* Mask=NewObject<UMaterialExpressionCustom>(Mat);
+			auto* Bend=NewObject<UMaterialExpressionCustom>(Mat);
+			auto Input=[](UMaterialExpressionCustom* Node,FName Name,UMaterialExpression* Expr,int Output=0)
+			{
+				auto& Pin=Node->Inputs.AddDefaulted_GetRef();
+				Pin.InputName=Name; Pin.Input.Connect(Output,Expr);
+			};
+			Input(Mask,TEXT("World"),Pos); Input(Mask,TEXT("Viewer"),View,5); Input(Mask,TEXT("Birth"),Birth);
+			Input(Mask,TEXT("A"),Sample,4);
+			// Depth-writing coverage preserves the DAT's fractional alpha. A stable
+			// world-space threshold keeps camera pans from reshuffling the blades.
+			Mask->OutputType=CMOT_Float1;
+			Mask->Code=TEXT("float m=distance(World.xy,Viewer.xy)/max(Viewer.w,1); ")
+				TEXT("float a=A*(1-smoothstep(152,160,m))*smoothstep(0,.45,Viewer.z-Birth); ")
+				TEXT("uint3 p=uint3(int3(floor(World*.5))); uint h=p.x*73856093u^p.y*19349663u^p.z*83492791u; ")
+				TEXT("h^=h>>16; h*=2246822519u; h^=h>>13; return step((float(h&65535u)+.5)/65536.,a);");
+			Input(Bend,TEXT("World"),Pos); Input(Bend,TEXT("W"),Weights);
+			Input(Bend,TEXT("Body"),Contact,5); Input(Bend,TEXT("Tail"),Trail,5);
+			Bend->OutputType=CMOT_Float3;
+			Bend->Code=TEXT("if (any(abs(World.xy-Body.xy)>abs(Body.xy-Tail.xy)+Body.w)) return float3(0,0,0); ")
+				TEXT("float3 path=Body.xyz-Tail.xyz; float t=saturate(dot(World.xy-Tail.xy,path.xy)/max(dot(path.xy,path.xy),1)); ")
+				TEXT("float3 d=World-(Tail.xyz+path*t); float r=length(d.xy); float radius=max(Body.w,1); ")
+				TEXT("float a=(1-smoothstep(.15*radius,radius,r))*smoothstep(-25,0,d.z)*(1-smoothstep(Tail.w,Tail.w+60,d.z)); ")
+				TEXT("float2 dir=r>1 ? d.xy/r : normalize(path.xy+float2(.01,.01)); ")
+				TEXT("return float3(dir,-.2)*min(W.y*.85,75)*W.x*W.x*a;");
+			for (UMaterialExpression* Expr : TArray<UMaterialExpression*>{Birth,Weights,Pos,Mask,Bend})
+				EditorOnly->ExpressionCollection.AddExpression(Expr);
+			EditorOnly->OpacityMask.Connect(0,Mask);
+			EditorOnly->WorldPositionOffset.Connect(0,Bend);
+		}
 		Mat->PreEditChange(nullptr);
 		Mat->UpdateCachedExpressionData();
 		Mat->PostEditChange();
@@ -1203,6 +1255,12 @@ void UACEDatSubsystem::SetFarSceneryFadeRadius(UWorld* World, float RadiusCm, bo
 				Instance->SetVectorParameterValue(TEXT("FarSceneryLimits"), FLinearColor(FMath::Max(RadiusCm, 0.f), bEnabled ? 1.f : 0.f, Anchor.X, Anchor.Y));
 }
 
+static UMaterialInterface* LegionsGrassMaterialParent()
+{
+	return CreateAceOverlayMaterial(TEXT("M_ACELegionsGrass_v1"), EACEAceMaterialKind::LegionsGrass,
+		false, false, false, false, true, true);
+}
+
 TArray<UMaterialInterface*> UACEDatSubsystem::GetRuntimeMaterialParents()
 {
 	TArray<UMaterialInterface*> Parents = {
@@ -1216,7 +1274,7 @@ TArray<UMaterialInterface*> UACEDatSubsystem::GetRuntimeMaterialParents()
 		EnsureAceBatchedParticleMaterialBase(false), EnsureAceBatchedParticleMaterialBase(true),
 		EnsureAceSkyTranslucentMaterialBase(), EnsureAceSkyTranslucentWrapMaterialBase(), EnsureAceSkyOpaqueMaterialBase(),
 		EnsureAceSkyAdditiveMaterialBase(), EnsureAceSkyVertexColorMaterialBase(), EnsureAceSkyColorFillMaterialBase(),
-		FACELegionsSkyRenderer::MaterialParent(false), FACELegionsSkyRenderer::MaterialParent(true),
+		FACELegionsSkyRenderer::MaterialParent(false), FACELegionsSkyRenderer::MaterialParent(true), LegionsGrassMaterialParent(),
 		EnsureAceWeatherTranslucentMaterialBase(), EnsureAceWeatherAdditiveMaterialBase(), GetVRComfortMaterial(),
 		UACEVRWidgetComponent::GetFilteredMaterial(),
 		ACEVRPointerVisuals::GetMaterial(false), ACEVRPointerVisuals::GetMaterial(true)
@@ -1289,6 +1347,10 @@ bool UACEDatSubsystem::PrepareRuntimeMaterials()
 void UACEDatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
+	ACELegionsSky::RefreshEnvironment();
+	const auto InitialArtwork = ACELegionsSky::ActiveEnvironment();
+	LoadedTerrainArtwork = InitialArtwork->TerrainCacheKey(1);
+	LoadedSceneryArtwork = InitialArtwork->SceneryCacheKey();
 	DisplayView = CreateACEDisplayView(GetGameInstance());
 	PrepareRuntimeMaterials();
 #if PLATFORM_ANDROID || PLATFORM_LINUX
@@ -1410,6 +1472,7 @@ void UACEDatSubsystem::LogLandTextureMemory(const TCHAR* Phase) const
 void UACEDatSubsystem::ClearLoadedState()
 {
 	bPendingDiskCacheMaintenance = false;
+	if (CancelArtworkBake) CancelArtworkBake->Store(true);
 	// Invalidate in-flight landblock workers, then wait so they release DAT handles.
 	++LandblockBuildGeneration;
 	PendingLandblockBuilds.Reset();
@@ -1488,6 +1551,7 @@ void UACEDatSubsystem::ClearLoadedState()
 	FarSceneryMaterials.Reset();
 	FarSceneryFixedMaterials.Reset();
 	WorldLightingInstances.Reset();
+	ImportedSceneryMaterials.Reset();
 	InteriorObjectMaterialBases.Reset();
 	StaticMeshMaterialCache.Reset();
 	ResetSurfaceMaterialCache(BuildingShellMaterialCache,1);
@@ -1520,6 +1584,7 @@ void UACEDatSubsystem::ClearLoadedState()
 	CellDat.Reset();
 	TexturedMaterialBase = nullptr;
 	LandMaterialBase = nullptr;
+
 	BuildingShellMaterialBase = nullptr;
 	bLandLookOutClip = false;
 
@@ -1866,6 +1931,7 @@ bool UACEDatSubsystem::EnsureLoaded()
 			LiveResolvedMaterials.Reset();
 			TexturedMaterialBase = nullptr;
 			LandMaterialBase = nullptr;
+
 			LandLookOutMaterialBase = nullptr;
 			BuildingShellMaterialBase = nullptr;
 			PortalStencilWriterMaterial = nullptr;
@@ -2204,14 +2270,16 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceUnlitTexturedMaterialBase()
 UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
 {
 	// PDO / material graph bumps without a full landmesh wipe.
-	static constexpr int32 LandMatGraphVersion = 43;
+	static constexpr int32 LandMatGraphVersion = 44;
 	static int32 AppliedLandMatGraphVersion = 0;
 	if (AppliedLandMatGraphVersion != LandMatGraphVersion)
 	{
 		AppliedLandMatGraphVersion = LandMatGraphVersion;
 		LandMaterialBase = nullptr;
+
 		LandMaterialCache.Reset();
 	}
+	const TCHAR* Name = TEXT("M_ACELandLit_v44");
 	if (LandMaterialBase)
 	{
 		return LandMaterialBase;
@@ -2220,7 +2288,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
 #if WITH_EDITORONLY_DATA
 	// The aperture mask must run in the depth pass too. Clipping only BaseColor
 	// on an opaque material leaves invisible terrain depth occluding interiors.
-	UMaterial* Mat = NewObject<UMaterial>(GetTransientPackage(), TEXT("M_ACELandLit_v43"), RF_Public | RF_Transient);
+	UMaterial* Mat = NewObject<UMaterial>(GetTransientPackage(), Name, RF_Public | RF_Transient);
 	if (!Mat)
 	{
 		return nullptr;
@@ -2299,6 +2367,34 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
 	LandBaseMul->MaterialExpressionEditorY = 80;
 	EditorOnly->ExpressionCollection.AddExpression(LandLitFrac);
 	EditorOnly->ExpressionCollection.AddExpression(LandBaseMul);
+	auto* CellUV = NewObject<UMaterialExpressionTextureCoordinate>(Mat);
+	auto* RegionUV = NewObject<UMaterialExpressionTextureCoordinate>(Mat);
+	RegionUV->CoordinateIndex = 1;
+	auto* RegionTile = NewObject<UMaterialExpressionScalarParameter>(Mat);
+	RegionTile->ParameterName = TEXT("UseRegionTerrainUV");
+	// Complex palettes still share a sheet with one copy of the AC1 transition mask per cell.
+	// Keep the filtered footprint inside its mask at a tile edge, including at oblique angles.
+	auto* MaskCellUVSize = NewObject<UMaterialExpressionVectorParameter>(Mat);
+	MaskCellUVSize->DefaultValue = FLinearColor::Transparent;
+	MaskCellUVSize->ParameterName = TEXT("MaskCellUVSize");
+	auto* MaskUV = NewObject<UMaterialExpressionCustom>(Mat);
+	MaskUV->OutputType = CMOT_Float2;
+	for (const auto& Pin : TArray<TPair<FName, UMaterialExpression*>>{{TEXT("Region"),RegionUV},
+		{TEXT("Cell"),CellUV},{TEXT("CellScale"),MaskCellUVSize}})
+	{
+		auto& In = MaskUV->Inputs.AddDefaulted_GetRef();
+		In.InputName = Pin.Key;
+		In.Input.Connect(0, Pin.Value);
+	}
+	MaskUV->Code = TEXT("float2 inset=min(0.49, CellScale.y + 0.5*(abs(ddx(Cell))+abs(ddy(Cell)))); ")
+		TEXT("return Region + CellScale.x*(clamp(Cell,inset,1-inset)-Cell);");
+	auto* TerrainUV = NewObject<UMaterialExpressionLinearInterpolate>(Mat);
+	TerrainUV->A.Connect(0,CellUV);
+	TerrainUV->B.Connect(0,MaskUV);
+	TerrainUV->Alpha.Connect(0,RegionTile);
+	Sample->Coordinates.Connect(0,TerrainUV);
+	for (UMaterialExpression* Expr : TArray<UMaterialExpression*>{CellUV,RegionUV,RegionTile,MaskCellUVSize,MaskUV,TerrainUV})
+		EditorOnly->ExpressionCollection.AddExpression(Expr);
 	UMaterialExpressionWorldPosition* LandWorldPos = NewObject<UMaterialExpressionWorldPosition>(Mat);
 	// AC2 SurfaceDesc modulates terrain before fog, including its ambient term.
 	// One moving map across every tile. The stock sky skips the texture fetch.
@@ -2322,10 +2418,39 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
 	};
 	Input(TEXT("Land"),Sample); Input(TEXT("Position"),LandWorldPos); Input(TEXT("Motion"),Motion,5);
 	Input(TEXT("Offset"),CloudOffset); Input(TEXT("Mask"),Mask);
+	auto* Detail = NewObject<UMaterialExpressionTextureObjectParameter>(Mat);
+	Detail->ParameterName = TEXT("LegionsGroundDetail");
+	Detail->Texture = Sample->Texture;
+	auto* DetailScale = NewObject<UMaterialExpressionScalarParameter>(Mat);
+	DetailScale->ParameterName = TEXT("GroundDetailScale");
+	auto* DetailMean = NewObject<UMaterialExpressionScalarParameter>(Mat);
+	DetailMean->ParameterName = TEXT("GroundDetailMean");
+	DetailMean->DefaultValue = .5f;
+	Input(TEXT("Detail"),Detail); Input(TEXT("DetailScale"),DetailScale); Input(TEXT("DetailMean"),DetailMean);
+	auto* Overlay = NewObject<UMaterialExpressionTextureObjectParameter>(Mat);
+	Overlay->ParameterName = TEXT("TerrainOverlay");
+	Overlay->Texture = Sample->Texture;
+	auto* OverlayRepeat = NewObject<UMaterialExpressionScalarParameter>(Mat);
+	OverlayRepeat->ParameterName = TEXT("TerrainOverlayRepeat");
+	Input(TEXT("Overlay"),Overlay); Input(TEXT("OverlayRepeat"),OverlayRepeat);
+	EditorOnly->ExpressionCollection.AddExpression(Overlay);
+	EditorOnly->ExpressionCollection.AddExpression(OverlayRepeat);
+	Input(TEXT("TileUV"),RegionUV); Input(TEXT("Coverage"),Sample,4);
+	for (UMaterialExpression* Expr : TArray<UMaterialExpression*>{Detail,DetailScale,DetailMean})
+		EditorOnly->ExpressionCollection.AddExpression(Expr);
 	// Motion.a follows the cloud sheet's rendered opacity, including its native
 	// visibility window. Clear skies bypass the mask, and thinning clouds fade
 	// the same shadow uniformly across near and far terrain.
-	Shaded->Code = TEXT("[branch] if (Motion.x <= 0 || Motion.a <= 0) return Land; float2 uv=Position.xy*Motion.x+Offset.xy; return Land*lerp(1.0,Texture2DSample(Mask,MaskSampler,uv).rgb,saturate(Motion.a));");
+	// The microscopic relief is sampled independently of the diffuse repeat
+	// and road masks. Its own mip chain filters away at grazing angles.
+	Shaded->Code = TEXT("float3 ground=Land;")
+		TEXT("[branch] if(OverlayRepeat>0) ground=lerp(Land,Texture2DSample(Overlay,OverlaySampler,float2(-TileUV.x,TileUV.y)*OverlayRepeat).rgb,Coverage); ")
+		TEXT("[branch] if (DetailScale>0) { float2 uv=float2(-TileUV.x,TileUV.y)*DetailScale; ")
+		TEXT("float grain=Texture2DSample(Detail,DetailSampler,uv).a; ")
+		TEXT("float footprint=max(length(ddx(uv)),length(ddy(uv))); ")
+		TEXT("ground*=1.0+1.6*(grain-DetailMean)*Coverage*(1.0-smoothstep(.05,.25,footprint)); } ")
+		TEXT("[branch] if (Motion.x <= 0 || Motion.a <= 0) return ground; ")
+		TEXT("float2 uv=Position.xy*Motion.x+Offset.xy; return ground*lerp(1.0,Texture2DSample(Mask,MaskSampler,uv).rgb,saturate(Motion.a));");
 	auto* SkyTint = NewObject<UMaterialExpressionVectorParameter>(Mat);
 	SkyTint->ParameterName = TEXT("LandSkyTint");
 	SkyTint->DefaultValue = FLinearColor::White;
@@ -2528,30 +2653,9 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
 	EditorOnly->Roughness.Expression = Rough;
 	EditorOnly->Specular.Expression = Spec;
 	EditorOnly->Metallic.Expression = Metal;
-	// Outdoor water is a textured land polygon with no separate bottom mesh.
-	// Draw the texture at the authored surface but depth-test objects down to
-	// the wading bed. Keep the normal doorway bias on both dry and wet terrain.
-	auto* Depths = NewObject<UMaterialExpressionVectorParameter>(Mat);
-	Depths->ParameterName = TEXT("WaterBedDepthCm");
-	Depths->DefaultValue = FLinearColor::Transparent;
-	auto* TexCoords = NewObject<UMaterialExpressionTextureCoordinate>(Mat);
-	auto* View = NewObject<UMaterialExpressionCameraVectorWS>(Mat);
-	auto* WaterBias = NewObject<UMaterialExpressionCustom>(Mat);
-	WaterBias->OutputType = CMOT_Float1;
-	WaterBias->Code = TEXT("float d = UV.y >= .5 ? (UV.x >= .5 ? D.r : D.g) : (UV.x >= .5 ? NW : D.b); ")
-		TEXT("return Bias + d / max(.05f, ViewDir.z);");
-	auto BedInput = [WaterBias](const TCHAR* Name, UMaterialExpression* Expression, int32 Output = 0)
-	{
-		FCustomInput In; In.InputName = Name; In.Input.Expression = Expression; In.Input.OutputIndex = Output;
-		WaterBias->Inputs.Add(In);
-	};
-	BedInput(TEXT("D"), Depths); BedInput(TEXT("NW"), Depths, 4); // vector parameter outputs RGB and separate A
-	BedInput(TEXT("UV"), TexCoords); BedInput(TEXT("ViewDir"), View); BedInput(TEXT("Bias"), DepthBias);
-	EditorOnly->ExpressionCollection.AddExpression(Depths);
-	EditorOnly->ExpressionCollection.AddExpression(TexCoords);
-	EditorOnly->ExpressionCollection.AddExpression(View);
-	EditorOnly->ExpressionCollection.AddExpression(WaterBias);
-	EditorOnly->PixelDepthOffset.Expression = WaterBias;
+	// The DAT polygon is the visible surface. Its movement depth belongs to
+	// collision and targeting; the surface itself always writes its true depth.
+	EditorOnly->PixelDepthOffset.Expression = DepthBias;
 	WireRetailDistanceFog(Mat, EditorOnly, LandEmisClipped, 0, LandBaseClipped, 0);
 
 	Mat->PreEditChange(nullptr);
@@ -2562,10 +2666,10 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
 	Mat->ForceRecompileForRendering();
 #endif
 	LandMaterialBase = Mat;
-	UE_LOG(LogTemp, Log, TEXT("ACEDat: created Lit land material v43"));
+	UE_LOG(LogTemp, Log, TEXT("ACEDat: created %s"), Name);
 	return LandMaterialBase;
 #else
-	LandMaterialBase = LoadCookedAceMaterial(TEXT("M_ACELandLit_v43"));
+	LandMaterialBase = LoadCookedAceMaterial(Name);
 	return LandMaterialBase;
 #endif
 }
@@ -4490,7 +4594,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateLandMaterial(uint32 PCode, cons
 			if (!Copy->PrepareUploadMips()) return nullptr;
 			SharedBlend=Copy;
 		}
-		Tex = UACELandTextureMipProvider::CreateTexture(this,MoveTemp(SharedBlend));
+		Tex = UACELandTextureMipProvider::CreateTexture(this,SharedBlend);
 		if (!Tex)
 		{
 			return nullptr;
@@ -4499,7 +4603,6 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateLandMaterial(uint32 PCode, cons
 		LandTextureCache.Add(PCode, Tex);
 	}
 
-	// Always opaque outdoor land. Look-out CustomStencil MIDs render black — never bake them.
 	UMaterialInterface* LandBase = EnsureAceLandMaterialBase();
 	if (!LandBase)
 	{
@@ -4515,7 +4618,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateLandMaterial(uint32 PCode, cons
 	MID->SetTextureParameterValue(TEXT("Texture"), Tex);
 	MID->SetTextureParameterValue(TEXT("ACETexture"), Tex);
 	MID->SetScalarParameterValue(TEXT("LandDepthBias"), 0.f);
-	MID->SetVectorParameterValue(TEXT("WaterBedDepthCm"), FACELandblockMeshBuilder::GetWaterDepthsAc(PCode) * 100.f);
+	ApplyLegionsGroundMaterial(MID,PCode,SharedBlend.Get());
 	ApplyDistanceFogToMid(MID);
 	ApplyOutdoorPortalLandClipToMid(MID);
 	ApplyLandInteriorClipToMid(MID);
@@ -4691,6 +4794,94 @@ void UACEDatSubsystem::OnSetupBuildComplete(uint32 SetupId, float WorldScale, ui
 	PumpSetupBuildQueue();
 }
 
+void UACEDatSubsystem::ApplyLegionsGroundMaterial(UMaterialInstanceDynamic* Material, uint32 PCode, const FACETerrainBlend* Blend)
+{
+	const bool RegionTile = Blend && Blend->CellsAcross > 1;
+	const auto Art = ACELegionsSky::ActiveEnvironment();
+	if (BlendOverlayCrc != Art->ContentCrc)
+	{
+		LegionsBlendOverlays.Reset();
+		BlendOverlayCrc = Art->ContentCrc;
+	}
+	float OverlayRepeat = 0.f;
+	if (Blend && Blend->OverlaySurfaceId)
+	{
+		const uint32 Id = Blend->OverlaySurfaceId;
+		auto& Tex = LegionsBlendOverlays.FindOrAdd(Id);
+		if (!Tex)
+		{
+			if (const auto* Levels = Art->Surfaces.Find(Id); Levels && !Levels->IsEmpty())
+			{
+				ACELegionsSky::FImage Image;
+				Image.Width = (*Levels)[0].Width;
+				Image.Height = (*Levels)[0].Height;
+				for (const auto& Level : *Levels)
+					Image.Mips.AddDefaulted_GetRef().Append(reinterpret_cast<const uint8*>(Level.Pixels.GetData()), Level.Pixels.Num() * sizeof(FColor));
+				Tex = ACELegionsSky::CreateImportedTexture(Image);
+			}
+		}
+		if (Tex)
+		{
+			Material->SetTextureParameterValue(TEXT("TerrainOverlay"),Tex);
+			OverlayRepeat = Art->TerrainCellsAcross * FACELandblockMeshBuilder::CellSize / Art->TerrainRepeatMetres(Id);
+		}
+	}
+	Material->SetScalarParameterValue(TEXT("TerrainOverlayRepeat"),OverlayRepeat);
+	Material->SetScalarParameterValue(TEXT("UseRegionTerrainUV"),RegionTile ? 1.f : 0.f);
+	Material->SetVectorParameterValue(TEXT("MaskCellUVSize"), RegionTile && Art->UniformTerrainRepeats(PCode) == 1.f
+		? FLinearColor(1.f / Blend->CellsAcross, float(Blend->CellsAcross) / Blend->Width, 0, 0) : FLinearColor::Transparent);
+	float DetailScale = 0.f;
+	if ((RegionTile || OverlayRepeat > 0.f) && !Art->GroundDetail.Mips.IsEmpty())
+	{
+		if (!LegionsGroundDetailTexture || GroundDetailCrc != Art->ContentCrc)
+		{
+			LegionsGroundDetailTexture = ACELegionsSky::CreateImportedTexture(Art->GroundDetail);
+			GroundDetailCrc = Art->ContentCrc;
+		}
+		if (LegionsGroundDetailTexture)
+		{
+			Material->SetTextureParameterValue(TEXT("LegionsGroundDetail"),LegionsGroundDetailTexture);
+			Material->SetScalarParameterValue(TEXT("GroundDetailMean"),Art->DetailMean);
+			const float RegionMetres = Art->TerrainCellsAcross * FACELandblockMeshBuilder::CellSize;
+			DetailScale = RegionMetres / (Art->DetailRepeatMetres * Art->UniformTerrainRepeats(PCode));
+		}
+	}
+	Material->SetScalarParameterValue(TEXT("GroundDetailScale"),DetailScale);
+}
+
+UMaterialInstanceDynamic* UACEDatSubsystem::GetImportedSceneryMaterial(uint32 Id, bool bMasked)
+{
+	const auto Art = ACELegionsSky::ActiveEnvironment();
+	if (SceneryMaterialCrc != Art->ContentCrc)
+	{
+		ImportedSceneryMaterials.Reset();
+		SceneryMaterialCrc = Art->ContentCrc;
+	}
+	const uint32 MaterialKey = Id | (bMasked ? 0x80000000u : 0u);
+	if (auto* Existing = ImportedSceneryMaterials.FindRef(MaterialKey).Get()) return Existing;
+	const auto* Image = Id == 0x40000008 ? &Art->GrassCards : Art->SceneryTextures.Find(Id);
+	auto* Base = Id == 0x40000008 ? LegionsGrassMaterialParent()
+		: bMasked ? EnsureAceOutdoorLitMaskedMaterialBase() : EnsureAceOutdoorLitMaterialBase();
+	if (!Image || Image->Mips.IsEmpty() || !Base) return nullptr;
+	auto* Texture = ACELegionsSky::CreateImportedTexture(*Image);
+	if (!Texture) return nullptr;
+	if (ACELegionsSky::IsBoulderTexture(Id))
+	{
+		Texture->AddressX = TA_Mirror;
+		Texture->RefreshSamplerStates();
+	}
+	auto* Material = UMaterialInstanceDynamic::Create(Base, this);
+	Material->SetTextureParameterValue(TEXT("ACETexture"), Texture);
+	Material->SetScalarParameterValue(TEXT("OpacityMul"), 1.f);
+	Material->SetScalarParameterValue(TEXT("DiffuseStrength"), 1.f);
+	Material->SetScalarParameterValue(TEXT("EmissiveStrength"), SceneryEmissiveScale);
+	Material->SetVectorParameterValue(TEXT("WorldAmbientTint"), WorldAmbientTint);
+	ApplyDistanceFogToMid(Material);
+	WorldLightingInstances.Add(Material, EObjectLightEnvironment::Outdoors);
+	ImportedSceneryMaterials.Add(MaterialKey, Material);
+	return Material;
+}
+
 UStaticMesh* UACEDatSubsystem::GetOrCreateSetupStaticMesh(uint32 SetupId, float WorldScale, bool bEnableCollision, int32 PlacementId, bool bParticleGfx, bool bStencilHoleClip, bool bOutdoorLit, bool bPhysicsCollisionOnly)
 {
 	// Finalize cache format invalidation before taking pointers into SetupMeshCache.
@@ -4842,6 +5033,134 @@ UStaticMesh* UACEDatSubsystem::GetOrCreateSetupStaticMesh(uint32 SetupId, float 
 		return nullptr;
 	}
 
+	const auto& Artwork = ACELegionsSky::ActiveEnvironment();
+	const bool bOutdoorScenery = bOutdoorLit && !bPhysicsCollisionOnly && !bParticleGfx && !bStencilHoleClip;
+	const uint32 StoneId = bOutdoorScenery ? Artwork->BoulderTexture(SetupId) : 0;
+	UMaterialInterface* Stone = StoneId ? GetImportedSceneryMaterial(StoneId, false) : nullptr;
+	if (Stone)
+	{
+		FBox Bounds(ForceInit);
+		for (const auto& Section : Flat)
+			for (const FVector& P : Section.Verts) Bounds += P;
+		const FVector Center = Bounds.GetCenter();
+		const FVector Extent = Bounds.GetExtent().ComponentMax(FVector(UE_SMALL_NUMBER));
+		for (FFlatSection& Section : Flat)
+		{
+			Section.Mat = Stone;
+			Section.UVs.SetNumUninitialized(Section.Verts.Num());
+			for (int32 I = 0; I < Section.Verts.Num(); ++I)
+			{
+				// The two mirrored repeats meet on the same texel at each meridian.
+				const FVector P = (Section.Verts[I] - Center) / Extent;
+				const double U = 1. + FMath::Atan2(P.Y, P.X) / UE_DOUBLE_PI;
+				Section.UVs[I] = FVector2D(U, FMath::Atan2(P.Size2D(), P.Z) / UE_DOUBLE_PI);
+			}
+		}
+	}
+	if (const auto* Imported = bOutdoorScenery ? Artwork->FindTree(SetupId) : nullptr)
+	{
+		FBox Original(ForceInit);
+		for (const auto& Section : Flat)
+			for (const FVector& P : Section.Verts) Original += P;
+		const auto& Tree = *Imported;
+		TArray<UMaterialInterface*, TInlineAllocator<3>> Materials;
+		for (const auto& Section : Tree.Sections)
+			Materials.Add(GetImportedSceneryMaterial(Section.Texture,Section.Masked));
+		if (Original.GetSize().GetMin() > UE_SMALL_NUMBER && !Materials.Contains(nullptr))
+		{
+			auto OriginalTriangles = [&](auto Visit)
+			{
+				for (const auto& S : Flat)
+					for (int32 I=0; I+2<S.Tris.Num(); I+=3)
+						if (S.Verts.IsValidIndex(S.Tris[I]) && S.Verts.IsValidIndex(S.Tris[I+1]) && S.Verts.IsValidIndex(S.Tris[I+2]))
+							Visit(S.Verts[S.Tris[I]],S.Verts[S.Tris[I+1]],S.Verts[S.Tris[I+2]]);
+			};
+			auto ImportedTriangles = [&](auto Visit)
+			{
+				for (const auto& S : Tree.Sections)
+					for (int32 I=0; I<S.Indices.Num(); I+=3)
+						Visit(Tree.Vertices[S.Indices[I]],Tree.Vertices[S.Indices[I+1]],Tree.Vertices[S.Indices[I+2]]);
+			};
+			const ACELegionsSky::FTreeSilhouette TargetShape(Original,OriginalTriangles), SourceShape(Tree.Bounds,ImportedTriangles);
+			const FQuat Rotation = TargetShape.RotationFrom(SourceShape);
+			// Fit the planted tree inside its AC1 height and crown footprint using one
+			// scale. Independently fitting X/Y/Z turns palms into flat fans or spears.
+			FBox Turned(ForceInit);
+			for (const auto& S : Tree.Sections)
+				for (int32 Index : S.Indices) Turned += Rotation.RotateVector(Tree.Vertices[Index]);
+			const FVector Fit = Original.GetSize() / Turned.GetSize();
+			const bool Planted = Tree.Bounds.Min.Z < 0 && Original.Min.Z < 0 &&
+				Tree.Bounds.Max.Z > UE_SMALL_NUMBER && Original.Max.Z > 0;
+			const double Scale = FMath::Min3(Fit.X, Fit.Y, Planted ? Original.Max.Z / Tree.Bounds.Max.Z : Fit.Z);
+			const FVector Base = Rotation.RotateVector(FVector(SourceShape.Trunk,0)) * Scale;
+			const FVector Offset(TargetShape.Trunk.X-Base.X,TargetShape.Trunk.Y-Base.Y,
+				Planted ? 0. : Original.Min.Z - Scale * Tree.Bounds.Min.Z);
+			// The planting point can be on a roof. Some AC2 trunks have a long buried
+			// spike that would otherwise pass through the ceiling of the room below.
+			const double RootBottom = Turned.Min.Z * Scale + Offset.Z;
+			const bool bShortenRoot = Planted && RootBottom < Original.Min.Z - UE_SMALL_NUMBER;
+			double RootHinge = 0.;
+			if (bShortenRoot)
+			{
+				// Keep the lowest ring above the AC1 base fixed, along with everything above it.
+				for (const auto& S : Tree.Sections)
+					for (int32 Index : S.Indices)
+					{
+						const double Z = Tree.Vertices[Index].Z * Scale;
+						if (Z > Original.Min.Z && Z < RootHinge) RootHinge = Z;
+					}
+			}
+			const double RootScale = bShortenRoot ? (RootHinge - Original.Min.Z) / (RootHinge - RootBottom) : 1.;
+			Flat.Reset();
+			for (int32 Slot = 0; Slot < Tree.Sections.Num(); ++Slot)
+			{
+				auto& Section = Flat.AddDefaulted_GetRef();
+				Section.Mat = Materials[Slot];
+				TMap<int32, int32> Local;
+				for (int32 Index : Tree.Sections[Slot].Indices)
+				{
+					if (const int32* Existing = Local.Find(Index))
+						Section.Tris.Add(*Existing);
+					else
+					{
+						FVector P = Rotation.RotateVector(Tree.Vertices[Index]) * Scale + Offset;
+						FVector N = Rotation.RotateVector(Tree.Normals[Index]);
+						if (bShortenRoot && P.Z < RootHinge)
+						{
+							P.Z = Original.Min.Z + (P.Z - RootBottom) * RootScale;
+							N.Z /= RootScale;
+							N.Normalize();
+						}
+						const int32 NewIndex = Section.Verts.Add(P);
+						Section.Norms.Add(N);
+						Section.UVs.Add(Tree.UVs[Index]);
+						Local.Add(Index, NewIndex);
+						Section.Tris.Add(NewIndex);
+					}
+				}
+				if (Tree.Sections[Slot].Masked && !Section.Mat->IsTwoSided())
+				{
+					// AC2 leaf cards can be seen from below. The cooked AC1 cutout
+					// material culls backfaces, so give the reverse face its own normal.
+					const int32 Count = Section.Tris.Num(), OffsetIndex = Section.Verts.Num();
+					for (int32 I = 0; I < OffsetIndex; ++I)
+					{
+						const FVector P = Section.Verts[I], N = -Section.Norms[I];
+						const FVector2D UV = Section.UVs[I];
+						Section.Verts.Add(P);
+						Section.Norms.Add(N);
+						Section.UVs.Add(UV);
+					}
+					for (int32 I = 0; I < Count; I += 3)
+					{
+						const int32 A = Section.Tris[I], B = Section.Tris[I+1], C = Section.Tris[I+2];
+						Section.Tris.Append({A + OffsetIndex, C + OffsetIndex, B + OffsetIndex});
+					}
+				}
+			}
+		}
+	}
+
 	// When PhysicsPolygons exist, drop soft-alpha draw tris from the complex body by
 	// excluding non-colliding sections from the collision-enabled mesh description.
 	// Keep them in the visual mesh: BuildFromMeshDescriptions uses one desc, so instead
@@ -4884,12 +5203,17 @@ UStaticMesh* UACEDatSubsystem::GetOrCreateSetupStaticMesh(uint32 SetupId, float 
 			{
 				continue;
 			}
+			// Unwrap across the longitude seam before the GPU interpolates UVs.
+			const bool WrapStone = Stone && FMath::Max3(Sec.UVs[I0].X,Sec.UVs[I1].X,Sec.UVs[I2].X)
+				- FMath::Min3(Sec.UVs[I0].X,Sec.UVs[I1].X,Sec.UVs[I2].X) > 1.;
 			TArray<FVertexInstanceID, TInlineAllocator<3>> CornerIds;
 			auto AddCorner = [&](int32 Idx)
 			{
 				const FVertexInstanceID Inst = MeshDesc.CreateVertexInstance(VertMap[Idx]);
 				Normals[Inst] = Sec.Norms.IsValidIndex(Idx) ? FVector3f(Sec.Norms[Idx]) : FVector3f::UpVector;
-				UVs.Set(Inst, 0, Sec.UVs.IsValidIndex(Idx) ? FVector2f(Sec.UVs[Idx]) : FVector2f::ZeroVector);
+				FVector2f UV = Sec.UVs.IsValidIndex(Idx) ? FVector2f(Sec.UVs[Idx]) : FVector2f::ZeroVector;
+				if (WrapStone && UV.X < 1.f) UV.X += 2.f;
+				UVs.Set(Inst, 0, UV);
 				CornerIds.Add(Inst);
 			};
 			AddCorner(I0);
@@ -5875,6 +6199,7 @@ void UACEDatSubsystem::PumpLandblockBuildQueue()
 
 		const int32 Generation = LandblockBuildGeneration;
 		const uint64 Fingerprint = ComputeDatFingerprint();
+		const auto Artwork = ACELegionsSky::ActiveEnvironment();
 		const auto BlendCache = LandBuilder->GetBlendCache();
 		const FString CachePath = ACELandblockMeshCache::MakeCacheFilePath(Job.LandblockId, Job.WorldScale, Fingerprint);
 
@@ -5889,7 +6214,7 @@ void UACEDatSubsystem::PumpLandblockBuildQueue()
 		ActiveLandblockBuilds.Increment();
 		FThreadSafeCounter* ActiveCounter = &ActiveLandblockBuilds;
 		AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask,
-			[WeakThis, Job, Generation, Fingerprint, CachePath, PortalPtr, HighResPtr, CellPtr, AtlasPtr, ActiveCounter, BlendCache]()
+			[WeakThis, Job, Generation, Fingerprint, CachePath, PortalPtr, HighResPtr, CellPtr, AtlasPtr, ActiveCounter, BlendCache, Artwork]()
 			{
 				TSharedPtr<FACEBuiltLandblockMesh> Built = MakeShared<FACEBuiltLandblockMesh>();
 				bool bOk = false;
@@ -5901,7 +6226,7 @@ void UACEDatSubsystem::PumpLandblockBuildQueue()
 					if (PortalPtr && CellPtr)
 					{
 						FACEDatTextureResolver WorkerTextures(PortalPtr, HighResPtr);
-						FACELandblockMeshBuilder WorkerBuilder(PortalPtr, CellPtr, &WorkerTextures, BlendCache);
+						FACELandblockMeshBuilder WorkerBuilder(PortalPtr, CellPtr, &WorkerTextures, BlendCache, Artwork);
 						WorkerBuilder.SetCacheFingerprint(Fingerprint);
 						WorkerBuilder.SetLandSurfaceAtlas(AtlasPtr);
 						WorkerBuilder.HydrateSectionBakes(*Built, Fingerprint);
@@ -5911,7 +6236,7 @@ void UACEDatSubsystem::PumpLandblockBuildQueue()
 				else if (PortalPtr && CellPtr)
 				{
 					FACEDatTextureResolver WorkerTextures(PortalPtr, HighResPtr);
-					FACELandblockMeshBuilder WorkerBuilder(PortalPtr, CellPtr, &WorkerTextures, BlendCache);
+					FACELandblockMeshBuilder WorkerBuilder(PortalPtr, CellPtr, &WorkerTextures, BlendCache, Artwork);
 					WorkerBuilder.SetCacheFingerprint(Fingerprint);
 					WorkerBuilder.SetLandSurfaceAtlas(AtlasPtr);
 					if (WorkerBuilder.BuildLandblock(Job.LandblockId, Job.WorldScale, *Built))
@@ -5967,6 +6292,75 @@ void UACEDatSubsystem::OnLandblockBuildComplete(uint32 LandblockId, float WorldS
 	PumpLandblockBuildQueue();
 }
 
+void UACEDatSubsystem::RefreshResidentTerrainArtwork()
+{
+	// Keep the heightfield, building collision and portal masks in place while the
+	// existing material instances receive new pixels. Streaming workers pin their selection.
+	if (CancelArtworkBake) CancelArtworkBake->Store(true);
+	++LandblockBuildGeneration;
+	PendingLandblockBuilds.Reset();
+	PendingLandblockIds.Reset();
+	CancelledLandblockIds.Reset();
+	FailedLandblockMeshIds.Reset();
+	auto Art = ACELegionsSky::ActiveEnvironment();
+	LandBuilder = MakeUnique<FACELandblockMeshBuilder>(PortalDat.Get(),CellDat.Get(),TextureResolver.Get(),nullptr,Art);
+	TSet<uint32> Codes;
+	for (const auto& Pair : LandMaterialCache)
+		if (Pair.Value.IsValid()) Codes.Add(Pair.Key);
+	for (const auto& Pair : LandblockCache)
+		for (const auto& Section : Pair.Value->Sections)
+			if (!Section.bGpuTexMerge) Codes.Add(Section.PCode);
+	if (Codes.IsEmpty() || !PortalDat) return;
+
+	CancelArtworkBake = MakeShared<TAtomic<bool>,ESPMode::ThreadSafe>(false);
+	auto* Active = &ActiveLandblockBuilds;
+	Active->Increment();
+	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask,
+		[Weak = TWeakObjectPtr<UACEDatSubsystem>(this), Active, Cancel = CancelArtworkBake,
+		Portal = PortalDat.Get(), High = HighResDat.Get(), Cache = LandBuilder->GetBlendCache(),
+		Key = ComputeDatFingerprint(), Art, Codes = MoveTemp(Codes)]()
+	{
+		FACEDatTextureResolver Textures(Portal,High);
+		FACELandblockMeshBuilder Worker(Portal,nullptr,&Textures,Cache,Art);
+		Worker.SetCacheFingerprint(Key);
+		if (Worker.EnsureTexMerge())
+			for (const uint32 Code : Codes)
+			{
+				if (Cancel->Load()) break;
+				FACEBuiltLandblockSection Section;
+				Section.PCode = Code;
+				if (!Worker.FillSectionBake(Section)) continue;
+				AsyncTask(ENamedThreads::GameThread,[Weak,Cancel,Code,Blend = Section.SharedBake]()
+				{
+					auto* Self = Weak.Get();
+					if (!Self || Cancel->Load()) return;
+					for (const auto& Pair : Self->LandblockCache)
+						for (auto& Sec : Pair.Value->Sections)
+							if (Sec.PCode == Code && !Sec.bGpuTexMerge)
+							{
+								Sec.SharedBake = Blend;
+								Sec.BakeWidth = Blend->Width;
+								Sec.BakeHeight = Blend->Height;
+								Sec.BakedPixels.Reset();
+							}
+					if (auto* Mid = Self->LandMaterialCache.FindRef(Code).Get())
+					{
+						if (auto* Tex = UACELandTextureMipProvider::CreateTexture(Self,Blend))
+						{
+							Self->LandTextureCache.Add(Code,Tex);
+							Self->ApplyLegionsGroundMaterial(Mid,Code,Blend.Get());
+							for (const TCHAR* Name : {TEXT("ACETexture"),TEXT("Texture"),TEXT("SlateUI")})
+								Mid->SetTextureParameterValue(Name,Tex);
+						}
+					}
+					else Self->LandTextureCache.Remove(Code);
+				});
+			}
+		Active->Decrement();
+		AsyncTask(ENamedThreads::GameThread,[Weak](){ if (auto* Self = Weak.Get()) Self->PumpLandblockBuildQueue(); });
+	});
+}
+
 bool UACEDatSubsystem::ConsumeLandMeshReloadRequest(bool* bOutClearEnvCells)
 {
 	if (bOutClearEnvCells)
@@ -5977,6 +6371,26 @@ bool UACEDatSubsystem::ConsumeLandMeshReloadRequest(bool* bOutClearEnvCells)
 	// Rebuild land + EnvCells + Setup. Do NOT ReleaseTextureObjects.
 	static constexpr uint32 LandMeshFormatVersion = 121u;
 	static uint32 AppliedLandMeshFormatVersion = 0u;
+	const auto Artwork = ACELegionsSky::ActiveEnvironment();
+	const uint64 TerrainArtwork = Artwork->TerrainCacheKey(1);
+	const uint64 SceneryArtwork = Artwork->SceneryCacheKey();
+	if (SceneryArtwork != LoadedSceneryArtwork)
+	{
+		LoadedSceneryArtwork = SceneryArtwork;
+		for (auto It = SetupStaticMeshCache.CreateIterator(); It; ++It)
+			if (ACELegionsSky::IsMappedScenery(uint32(It.Key() >> 32)))
+			{
+				SetupStaticMeshSlotMaterials.Remove(It.Key());
+				It.RemoveCurrent();
+			}
+		if (UWorld* World = GetWorld())
+			for (TActorIterator<AACELandblockActor> Land(World); Land; ++Land) Land->RefreshImportedScenery(*this);
+	}
+	if (TerrainArtwork != LoadedTerrainArtwork)
+	{
+		LoadedTerrainArtwork = TerrainArtwork;
+		if (LandBuilder) RefreshResidentTerrainArtwork();
+	}
 	if (AppliedLandMeshFormatVersion != LandMeshFormatVersion)
 	{
 		UE_LOG(LogTemp, Warning,
@@ -6010,6 +6424,7 @@ bool UACEDatSubsystem::ConsumeLandMeshReloadRequest(bool* bOutClearEnvCells)
 		BuildingInteriorFootprints.Reset();
 		LandMaterialCache.Reset();
 		LandMaterialBase = nullptr;
+
 		LookOutLandMaterialCache.Reset();
 		LandLookOutMaterialBase = nullptr;
 		BuildingShellMaterialBase = nullptr;
@@ -6923,6 +7338,16 @@ namespace
 	}
 }
 
+static FVector2D LegionsLandUV(uint32 Block, const FVector& Local, float WorldScale)
+{
+	constexpr double Period = FACELandblockMeshBuilder::CellSize * ACELegionsSky::FEnvironment::TerrainCellsAcross;
+	// Reduce the block origin before interpolation to retain UV precision at Dereth's edges.
+	const double X = (((Block >> 24) & 255) * 8) % ACELegionsSky::FEnvironment::TerrainCellsAcross;
+	const double Y = (((Block >> 16) & 255) * 8) % ACELegionsSky::FEnvironment::TerrainCellsAcross;
+	return FVector2D(Local.X/WorldScale - X*FACELandblockMeshBuilder::CellSize,
+		-Local.Y/WorldScale - Y*FACELandblockMeshBuilder::CellSize) / Period;
+}
+
 bool UACEDatSubsystem::ApplyLandblockToProceduralMesh(UProceduralMeshComponent* ProcMesh, int32 LandblockId, float WorldScale, int32 PolySize, int32 TransDir)
 {
 	if (!IsValid(ProcMesh))
@@ -6991,6 +7416,7 @@ bool UACEDatSubsystem::ApplyLandblockToProceduralMesh(UProceduralMeshComponent* 
 		TArray<FVector> KeepVerts;
 		TArray<int32> KeepTris;
 		TArray<FVector> KeepNorms;
+		const float RegionRepeats = ACELegionsSky::FEnvironment::UniformTerrainRepeats(Sec.PCode);
 		TArray<FVector2D> KeepUVs;
 		TArray<FVector2D> KeepUV1, KeepUV2, KeepUV3;
 		TArray<FLinearColor> KeepColors;
@@ -7026,6 +7452,7 @@ bool UACEDatSubsystem::ApplyLandblockToProceduralMesh(UProceduralMeshComponent* 
 				KeepUV2.Add(Sec.UV2.IsValidIndex(SrcIdx) ? Sec.UV2[SrcIdx] : FVector2D::ZeroVector);
 				KeepUV3.Add(Sec.UV3.IsValidIndex(SrcIdx) ? Sec.UV3[SrcIdx] : FVector2D::ZeroVector);
 			}
+			else KeepUV1.Add(LegionsLandUV(Mesh.LandblockId,Sec.Vertices[SrcIdx],WorldScale)*RegionRepeats);
 			if (Sec.VertexColors.IsValidIndex(SrcIdx))
 			{
 				KeepColors.Add(Sec.VertexColors[SrcIdx]);
@@ -7062,18 +7489,9 @@ bool UACEDatSubsystem::ApplyLandblockToProceduralMesh(UProceduralMeshComponent* 
 		AcePrepareLandSectionLighting(KeepNorms, KeepTris, KeepTangents);
 
 		// Full heightfield — do not omit building-footprint tris (that punched streets into voids).
-		if (Sec.bGpuTexMerge && KeepUV1.Num() == KeepVerts.Num())
-		{
-			ProcMesh->CreateMeshSection_LinearColor(
-				SectionIndex, KeepVerts, KeepTris, KeepNorms, KeepUVs, KeepUV1, KeepUV2, KeepUV3, KeepColors,
-				KeepTangents, /*bCreateCollision*/ true);
-		}
-		else
-		{
-			ProcMesh->CreateMeshSection_LinearColor(
-				SectionIndex, KeepVerts, KeepTris, KeepNorms, KeepUVs, KeepColors,
-				KeepTangents, /*bCreateCollision*/ true);
-		}
+		ProcMesh->CreateMeshSection_LinearColor(
+			SectionIndex, KeepVerts, KeepTris, KeepNorms, KeepUVs, KeepUV1, KeepUV2, KeepUV3, KeepColors,
+			KeepTangents, /*bCreateCollision*/ true);
 		ProcMesh->SetMaterial(SectionIndex, Mat);
 		++SectionIndex;
 	}
@@ -7199,7 +7617,8 @@ bool UACEDatSubsystem::ApplyLandblockChunkToProceduralMesh(UProceduralMeshCompon
 			TArray<FVector> Verts;
 			TArray<int32> Tris;
 			TArray<FVector> Norms;
-			TArray<FVector2D> UVs;
+			const float RegionRepeats = ACELegionsSky::FEnvironment::UniformTerrainRepeats(Sec.PCode);
+			TArray<FVector2D> UVs, RegionUVs;
 			TArray<FLinearColor> Colors;
 			TMap<int32, int32> Remap;
 			auto Emit = [&](int32 SrcIdx) -> int32
@@ -7212,6 +7631,7 @@ bool UACEDatSubsystem::ApplyLandblockChunkToProceduralMesh(UProceduralMeshCompon
 				Verts.Add(Sec.Vertices[SrcIdx] + LbOriginUnreal);
 				Norms.Add(Sec.Normals.IsValidIndex(SrcIdx) ? Sec.Normals[SrcIdx] : FVector::UpVector);
 				UVs.Add(Sec.UVs.IsValidIndex(SrcIdx) ? Sec.UVs[SrcIdx] : FVector2D::ZeroVector);
+				RegionUVs.Add(LegionsLandUV(Mesh.LandblockId,Sec.Vertices[SrcIdx],WorldScale)*RegionRepeats);
 				Colors.Add(Sec.VertexColors.IsValidIndex(SrcIdx) ? Sec.VertexColors[SrcIdx] : FLinearColor::White);
 				Remap.Add(SrcIdx, Dst);
 				return Dst;
@@ -7249,7 +7669,7 @@ bool UACEDatSubsystem::ApplyLandblockChunkToProceduralMesh(UProceduralMeshCompon
 			TArray<FProcMeshTangent> Tangents;
 			AcePrepareLandSectionLighting(Norms, Tris, Tangents);
 			ProcMesh->CreateMeshSection_LinearColor(
-				SectionIndex, Verts, Tris, Norms, UVs, Colors,
+				SectionIndex, Verts, Tris, Norms, UVs, RegionUVs, {}, {}, Colors,
 				Tangents, /*bCreateCollision*/ true);
 			ProcMesh->SetMaterial(SectionIndex, Mat);
 			++SectionIndex;
@@ -7689,63 +8109,6 @@ bool UACEDatSubsystem::CollectRegionScenery(uint32 LandblockId, float WorldScale
 		return static_cast<float>(A) * 2.3283064e-10f;
 	};
 
-	auto GetRoadBits = [&](int32 Vx, int32 Vy) -> uint32
-	{
-		Vx = FMath::Clamp(Vx, 0, CellDim);
-		Vy = FMath::Clamp(Vy, 0, CellDim);
-		const int32 Idx = Vx * VertexDim + Vy;
-		return (Idx >= 0 && Idx < 81) ? (static_cast<uint32>(Mesh->Terrain[Idx]) & 0x3u) : 0u;
-	};
-
-	// ACE Landblock.OnRoad — cull placements on road ribbons, not whole road cells.
-	auto OnRoad = [&](float AcX, float AcY) -> bool
-	{
-		constexpr float RoadWidth = 5.f;
-		constexpr float TileLength = CellSize; // 24
-		const int32 X = FMath::FloorToInt(AcX / TileLength);
-		const int32 Y = FMath::FloorToInt(AcY / TileLength);
-		const float RMin = RoadWidth;
-		const float RMax = TileLength - RoadWidth;
-		const uint32 R0 = GetRoadBits(X, Y);
-		const uint32 R1 = GetRoadBits(X, Y + 1);
-		const uint32 R2 = GetRoadBits(X + 1, Y);
-		const uint32 R3 = GetRoadBits(X + 1, Y + 1);
-		if (R0 == 0 && R1 == 0 && R2 == 0 && R3 == 0)
-		{
-			return false;
-		}
-		const float Dx = AcX - X * TileLength;
-		const float Dy = AcY - Y * TileLength;
-		if (R0 > 0)
-		{
-			if (R1 > 0)
-			{
-				if (R2 > 0)
-				{
-					return (R3 > 0) ? true : (Dx < RMin || Dy < RMin);
-				}
-				return (R3 > 0) ? (Dx < RMin || Dy > RMax) : (Dx < RMin);
-			}
-			if (R2 > 0)
-			{
-				return (R3 > 0) ? (Dx > RMax || Dy < RMin) : (Dy < RMin);
-			}
-			return (R3 > 0) ? (FMath::Abs(Dx - Dy) < RMin) : (Dx + Dy < RMin);
-		}
-		if (R1 > 0)
-		{
-			if (R2 > 0)
-			{
-				return (R3 > 0) ? (Dx > RMax || Dy > RMax) : (FMath::Abs(Dx + Dy - TileLength) < RMin);
-			}
-			return (R3 > 0) ? (Dy > RMax) : (TileLength + Dx - Dy < RMin);
-		}
-		if (R2 > 0)
-		{
-			return (R3 > 0) ? (Dx > RMax) : (TileLength - Dx + Dy < RMin);
-		}
-		return (R3 > 0) && (TileLength * 2.f - Dx - Dy < RMin);
-	};
 
 	for (int32 CellX = 0; CellX < CellDim; ++CellX)
 	{
@@ -7848,7 +8211,7 @@ bool UACEDatSubsystem::CollectRegionScenery(uint32 LandblockId, float WorldScale
 
 				const float Lx = static_cast<float>(CellX) * CellSize + Displaced.X;
 				const float Ly = static_cast<float>(CellY) * CellSize + Displaced.Y;
-				if (Lx < 0.f || Ly < 0.f || Lx >= BlockLength || Ly >= BlockLength || OnRoad(Lx, Ly))
+				if (Lx < 0.f || Ly < 0.f || Lx >= BlockLength || Ly >= BlockLength || FACELandblockMeshBuilder::IsOnRoad(*Mesh, Lx, Ly))
 				{
 					++BoundsOrRoadSkip;
 					continue;

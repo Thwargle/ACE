@@ -756,10 +756,20 @@ bool FACEMovementReviewTest::RunTest(const FString&)
    RatActor->SetActorLocation(RatFeet);RatActor->RemoteAnchorLocation=RatActor->RemotePredictLocation=RatFeet;
    Session.PlayerPosition.SetLocationFromUnreal(RatFeet+Offset,100);
    ReceiveSticky(Self.Guid);
+   FACEPosition Correction = Session.PlayerPosition;
+   Correction.SetLocationFromUnreal(RatFeet + FVector(0,100,0),100);
+   Correction.bHasContactState = Correction.bIsGrounded = true;
+   Correction.SetAceFacingFromUnrealDir2D(-Offset);
+   RatActor->ApplyACEPosition(Correction);
+   RatActor->Tick(1.f/90);
+   TestTrue(TEXT("A position correction cannot turn a melee attacker away from its live target"),
+    FVector::DotProduct(RatActor->GetActorQuat().RotateVector(FVector::YAxisVector),Offset.GetSafeNormal()) > .99);
    for(int32 I=0;I<45;++I)RatActor->Tick(1.f/90);
    TestTrue(TEXT("Stationary attack tracks nearby live player, not stale object echo"),FVector::DotProduct(RatActor->GetActorQuat().RotateVector(FVector::YAxisVector),Offset.GetSafeNormal())>.99);
    const float Gap=FVector::Dist2D(RatFeet+Offset,RatActor->GetActorLocation())-RatActor->GetMeleeBodyRadius()-HumanRadius*100;
    TestTrue(TEXT("Retail sticky melee backs away to 0.3m body-edge spacing"),FMath::Abs(Gap-30.f)<.2f);
+   Correction.SetLocationFromUnreal(RatActor->GetActorLocation(),100);
+   RatActor->ApplyACEPosition(Correction);
   }
   // Sticky displacement uses the same authored body sweep as normal movement.
   // A wall or another blocker behind the attacker must limit its retreat.

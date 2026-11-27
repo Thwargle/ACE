@@ -9,12 +9,13 @@ bool FACEVRPoseBufferTest::RunTest(const FString&)
  for(uint32 I=0;I<20;++I)
  {
   FACEVRPose P;P.Sequence=I+1;P.Version=2;P.ReceivedAt=10.+I*.05;
-  P.Root=FVector(I*.5,0,I*.1);P.Poses[0].SetLocation(FVector(0,0,1.7));
+  P.Flags=7;P.Root=FVector(I*.5,0,I*.1);P.Poses[0].SetLocation(FVector(0,0,1.7));
   TestTrue(TEXT("Ordered pose accepted"),Buffer.Add(P));
   if(I>=2)for(int Frame=0;Frame<4;++Frame)
   {
    const double Now=P.ReceivedAt+Frame*.0125;
    const auto Rendered=Buffer.Sample(Now);
+   TestTrue(TEXT("Sample timestamp follows the displayed frame"), FMath::IsNearlyEqual(Rendered.ReceivedAt,Now-.075,.000001));
    TestTrue(TEXT("20Hz roots interpolate continuously at render cadence"),
     FMath::IsNearlyEqual(Rendered.Root.X,(Now-10.-.075)*10.,.0001));
    TestTrue(TEXT("Root height follows the same interpolation on stairs"),
@@ -37,6 +38,17 @@ bool FACEVRPoseBufferTest::RunTest(const FString&)
  Buffer.Add(Portal);TestEqual(TEXT("Teleport clears interpolation history"),Buffer.History.Num(),1);
  TestTrue(TEXT("No slide across portal"),Buffer.Sample(Portal.ReceivedAt).Root==Portal.Root);
  TestTrue(TEXT("Packet loss holds the last safe root"),Buffer.Sample(Portal.ReceivedAt+.4).Root==Portal.Root);
+ auto Lost=Portal;++Lost.Sequence;Lost.ReceivedAt+=.05;Lost.Flags=0;Buffer.Add(Lost);
+ auto Back=Lost;++Back.Sequence;Back.ReceivedAt+=.05;Back.Flags=7;Back.Root+=FVector(10,0,0);Buffer.Add(Back);
+ TestEqual(TEXT("Quick reacquisition starts a new timeline"),Buffer.History.Num(),1);
+ TestTrue(TEXT("First restored pose does not rewind to the last inactive root"),Buffer.Sample(Back.ReceivedAt).Root==Back.Root);
+ auto Hand=Back;++Hand.Sequence;Hand.ReceivedAt+=.05;Hand.Flags=5;Buffer.Add(Hand);
+ ++Hand.Sequence;Hand.ReceivedAt+=.05;Hand.Flags=7;Hand.Poses[2].SetLocation(FVector(.6,.3,1));Buffer.Add(Hand);
+ TestTrue(TEXT("A recovered hand starts at its tracked grip"),Buffer.Sample(Hand.ReceivedAt+.05).Poses[2].Equals(Hand.Poses[2]));
+ auto Earlier=Hand;++Earlier.Sequence;Earlier.ReceivedAt-=.03;Earlier.Root+=FVector(1,0,0);
+ Buffer.Add(Earlier);
+ TestTrue(TEXT("Recovered ordered packets retain increasing sample times"),
+  Buffer.History.Num()>=2 && Buffer.Previous.ReceivedAt<Earlier.ReceivedAt && Buffer.Sample(Earlier.ReceivedAt+.0751).Root==Earlier.Root);
  return !HasAnyErrors();
 }
 #endif

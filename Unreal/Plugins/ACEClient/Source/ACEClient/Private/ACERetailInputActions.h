@@ -3,14 +3,14 @@
 #include "ACEInputBindings.h"
 
 // Retail action names remain stable across import, export, settings and dispatch.
-// Use nonconflicting gmDefaultMap defaults. Additional actions stay unbound when
-// their retail chord conflicts with an existing AC:Unreal shortcut or chat key.
-inline TArray<ACEInputBindings::FAction> ACERetailAdditionalActions()
+// Defaults come from the retail gmDefaultMap and DefaultMap resources.
+inline const TArray<ACEInputBindings::FAction>& ACERetailAdditionalActions()
 {
  using namespace ACEInputBindings;
- return {
+ static const TArray<FAction> Actions={
+  {Action(TEXT("SelectionPreviousSelection")),TEXT("Previous selection"),TEXT("UI"),{FInputChord(EKeys::P)}},
   {Action(TEXT("SelectionSelf")),TEXT("Select yourself"),TEXT("UI"),{}},
-  {Action(TEXT("SelectionClosestPlayer")),TEXT("Closest player"),TEXT("UI"),{}},
+  {Action(TEXT("SelectionClosestPlayer")),TEXT("Closest player"),TEXT("UI"),{FInputChord(EKeys::Slash)}},
   {Action(TEXT("SelectionPreviousPlayer")),TEXT("Previous player"),TEXT("UI"),{FInputChord(EKeys::Comma)}},
   {Action(TEXT("SelectionNextPlayer")),TEXT("Next player"),TEXT("UI"),{FInputChord(EKeys::Period)}},
   {Action(TEXT("SelectionPreviousFellow")),TEXT("Previous fellowship member"),TEXT("UI"),{FInputChord(EKeys::N)}},
@@ -22,6 +22,8 @@ inline TArray<ACEInputBindings::FAction> ACERetailAdditionalActions()
   {Action(TEXT("SelectionDrop")),TEXT("Drop selected item"),TEXT("UI"),{}},
   {Action(TEXT("SelectionGive")),TEXT("Give selected item"),TEXT("UI"),{}},
   {Action(TEXT("SelectionSplitStack")),TEXT("Split selected stack"),TEXT("UI"),{FInputChord(EKeys::T)}},
+  {Action(TEXT("ToggleHelp")),TEXT("Help"),TEXT("UI"),{FInputChord(EKeys::F1)}},
+  {Action(TEXT("TogglePluginManager")),TEXT("Plugin Manager"),TEXT("UI"),{FInputChord(EKeys::F1,true,true,false,false)}},
   {Action(TEXT("ToggleKeyboardPanel")),TEXT("Keyboard settings"),TEXT("UI"),{}},
   {Action(TEXT("TogglePositiveEffectsPanel")),TEXT("Beneficial spells in effect"),TEXT("UI"),{}},
   {Action(TEXT("ToggleNegativeEffectsPanel")),TEXT("Harmful spells in effect"),TEXT("UI"),{}},
@@ -33,12 +35,17 @@ inline TArray<ACEInputBindings::FAction> ACERetailAdditionalActions()
   {Action(TEXT("TogglePageListPanel")),TEXT("Journal page list"),TEXT("UI"),{}},
   {Action(TEXT("ToggleFriendsPanel")),TEXT("Friends"),TEXT("CharacterSettings"),{}},
   {Action(TEXT("ToggleHousePanel")),TEXT("House"),TEXT("UI"),{}},
-  {Action(TEXT("ToggleFloatingChatWindow1")),TEXT("Chat window 1"),TEXT("UI"),{}},
-  {Action(TEXT("ToggleFloatingChatWindow2")),TEXT("Chat window 2"),TEXT("UI"),{}},
-  {Action(TEXT("ToggleFloatingChatWindow3")),TEXT("Chat window 3"),TEXT("UI"),{}},
-  {Action(TEXT("ToggleFloatingChatWindow4")),TEXT("Chat window 4"),TEXT("UI"),{}},
+  {Action(TEXT("ToggleFloatingChatWindow1")),TEXT("Chat window 1"),TEXT("UI"),{FInputChord(EKeys::One,false,false,true,false)}},
+  {Action(TEXT("ToggleFloatingChatWindow2")),TEXT("Chat window 2"),TEXT("UI"),{FInputChord(EKeys::Two,false,false,true,false)}},
+  {Action(TEXT("ToggleFloatingChatWindow3")),TEXT("Chat window 3"),TEXT("UI"),{FInputChord(EKeys::Three,false,false,true,false)}},
+  {Action(TEXT("ToggleFloatingChatWindow4")),TEXT("Chat window 4"),TEXT("UI"),{FInputChord(EKeys::Four,false,false,true,false)}},
   {Action(TEXT("LOGOUT")),TEXT("Log out"),TEXT("UI"),{FInputChord(EKeys::Escape,true,false,false,false)}},
   {Action(TEXT("CaptureScreenshot")),TEXT("Capture screenshot"),TEXT("UI"),{FInputChord(EKeys::Multiply)}},
+  {Action(TEXT("CameraActivateAlternateMode")),TEXT("Hold alternate camera"),TEXT("Camera"),{FInputChord(EKeys::Divide),FInputChord(EKeys::F2)}},
+  {Action(TEXT("Alternate.CameraRotateLeft")),TEXT("Alternate camera: rotate left"),TEXT("Camera"),{FInputChord(EKeys::Left)},AlternateCameraContext},
+  {Action(TEXT("Alternate.CameraRotateRight")),TEXT("Alternate camera: rotate right"),TEXT("Camera"),{FInputChord(EKeys::Right)},AlternateCameraContext},
+  {Action(TEXT("Alternate.CameraRotateUp")),TEXT("Alternate camera: rotate up"),TEXT("Camera"),{FInputChord(EKeys::Up)},AlternateCameraContext},
+  {Action(TEXT("Alternate.CameraRotateDown")),TEXT("Alternate camera: rotate down"),TEXT("Camera"),{FInputChord(EKeys::Down)},AlternateCameraContext},
   {Action(TEXT("CameraInstantMouseLook")),TEXT("Hold mouse look"),TEXT("Camera"),{FInputChord(EKeys::MiddleMouseButton)}},
   {Action(TEXT("CameraViewMapMode")),TEXT("Bird's-eye camera"),TEXT("Camera"),{FInputChord(NumpadEnterKey())}},
   {Action(TEXT("AFKState")),TEXT("AFK pose"),TEXT("Emotes"),{}},
@@ -51,4 +58,5 @@ inline TArray<ACEInputBindings::FAction> ACERetailAdditionalActions()
   {Action(TEXT("Woah")),TEXT("Woah"),TEXT("Emotes"),{}},
   {Action(TEXT("YMCA")),TEXT("YMCA"),TEXT("Emotes"),{}}
  };
+ return Actions;
 }

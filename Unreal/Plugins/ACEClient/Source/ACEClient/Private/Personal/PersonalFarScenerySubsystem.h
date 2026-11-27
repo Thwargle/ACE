@@ -216,6 +216,7 @@ private:
 
 	/** A worker is placing landblocks. */
 	bool bPlacing = false;
+	uint64 BuiltSceneryArtwork = 0;
 	float BuiltWorldScale = 0.f;
 	/** The units have to be planned again: the player moved, landblocks came or went, a setting changed, or a mesh was pending. */
 	bool bPlanDirty = true;

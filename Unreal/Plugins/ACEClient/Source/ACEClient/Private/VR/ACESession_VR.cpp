@@ -81,7 +81,8 @@ bool FACESession::SendVRDrop(uint32 Cell, int32 Item, int32 SplitAmount, const F
 
 bool FACESession::SendVRPose(FACEVRPose Pose)
 {
-	if (State != EACESessionState::InWorld || !SupportsVRPoses()) return false;
+	if (State != EACESessionState::InWorld || !SupportsVRPoses() || bLogOffPending || bPositionReportingSuspended
+		|| !PlayerPosition.IsValid() || Pose.Cell != uint32(PlayerPosition.CellId)) return false;
 	const uint32 Version=(VRCapabilities & 32768u) ? 2u : 1u;
 	FACEBinaryWriter W; W.WriteUInt32(Version); W.WriteUInt32(++VRPoseSequence); W.WriteUInt32(Pose.Cell);
 	W.WriteUInt32(TeleportSeq); W.WriteUInt32(Pose.Flags); W.WriteFloat(Pose.EyeHeight); W.WriteFloat(Pose.Draw);
@@ -93,27 +94,38 @@ bool FACESession::SendVRPose(FACEVRPose Pose)
 		if (P.ContainsNaN() || Q.ContainsNaN()) return false;
 		for (double V : {P.X, P.Y, P.Z, Q.X, Q.Y, Q.Z, Q.W}) W.WriteFloat(V);
 	}
-	// Keep the authoritative feet report on the pose cadence. Independent
-	// timers can otherwise attach fresh hands to the previous position.
-	FlushAutonomousPosition(bAutoPosContact, true);
+	// The server attaches hands to its validated feet. Send changed feet first,
+	// including contact and heading changes, and seed the root when tracking resumes.
+	const double Now = FPlatformTime::Seconds();
+	if ((Pose.Flags & 4u) && (HasPositionReportChanged() || Now - LastVRPoseSent >= .5))
+		FlushAutonomousPosition(bAutoPosContact, true);
 	SendGameAction(0xF7D1, W.GetData(), ACEQueue::WeenieQueue);
-	LastVRPoseSent=FPlatformTime::Seconds();
+	LastVRPoseSent=Now;
 	if (VRPoseSequence == 1) Log(TEXT("VR pose stream started: head and both hands, 20 Hz"));
 	return true;
 }
 
-void FACESession::HandleVRPose(FACEBinaryReader& R)
+void FACESession::EndVRPoseStream()
+{
+	if (LastVRPoseSent < 0.) return;
+	FACEVRPose Stop;
+	Stop.Cell = PlayerPosition.CellId;
+	SendVRPose(Stop);
+	LastVRPoseSent = -100.;
+}
+
+void FACESession::HandleVRPose(FACEBinaryReader& R, double ReceivedAt)
 {
 	if (State != EACESessionState::InWorld || !SupportsVRPoses() || (R.Remaining() != 116 && R.Remaining()!=192)) return;
 	const int32 Size=R.Remaining();
 	const int32 Guid = static_cast<int32>(R.ReadUInt32());
 	const auto* Object = WorldObjects.Find(Guid);
 	const uint32 Version=R.ReadUInt32();
-	if (!Object || !Object->bIsPlayer || Guid == PlayerGuid || (Version!=1 && Version!=2)
-		|| Size!=(Version==2 ? 192 : 116)) return;
+	if (!Object || !Object->bIsPlayer || Object->bDying || Guid == PlayerGuid || (Version!=1 && Version!=2)
+		|| (Version == 2 && !(VRCapabilities & 32768u)) || Size!=(Version==2 ? 192 : 116)) return;
 	FACEVRPose P; P.Version=Version; P.Sequence = R.ReadUInt32(); P.Cell = R.ReadUInt32(); P.Teleport = R.ReadUInt32(); P.Flags = R.ReadUInt32();
 	P.EyeHeight = R.ReadFloat(); P.Draw = R.ReadFloat();
-	if ((P.Flags & ~31u) || !FMath::IsFinite(P.EyeHeight) || P.EyeHeight < 1 || P.EyeHeight > 2.1f || !FMath::IsFinite(P.Draw)) return;
+	if (P.Teleport > MAX_uint16 || P.Draw < 0.f || P.Draw > 1.f || (P.Flags & ~31u) || !FMath::IsFinite(P.EyeHeight) || P.EyeHeight < 1 || P.EyeHeight > 2.1f || !FMath::IsFinite(P.Draw)) return;
 	for (int32 I=0;I<(Version==2 ? 5 : 3);++I)
 	{
 		if (I==3) { P.Weapon=R.ReadInt32(); P.Ammo=R.ReadInt32(); }
@@ -129,7 +141,9 @@ void FACESession::HandleVRPose(FACEBinaryReader& R)
 		const float X=R.ReadFloat(),Y=R.ReadFloat(),Z=R.ReadFloat(); P.Root=FVector(X,Y,Z);
 		if (P.Root.ContainsNaN() || P.Root.GetAbsMax()>100000.f) return;
 	}
-	P.ReceivedAt = FPlatformTime::Seconds();
+	// A reliable event can wait for a missing predecessor. Dequeuing an
+	// old sample must not grant it a new half-second of authority over the root.
+	P.ReceivedAt = ReceivedAt;
 	auto& Samples = VRPoses.FindOrAdd(Guid);
 	if (Samples.Current.ReceivedAt == 0) Log(FString::Printf(TEXT("VR pose stream received from 0x%08X"), Guid));
 	Samples.Add(P);
@@ -139,18 +153,17 @@ bool FACESession::GetVRPose(int32 Guid, FACEVRPose& P) const
 {
 	const auto* S = VRPoses.Find(Guid); const auto* Object = WorldObjects.Find(Guid);
 	const double Now = FPlatformTime::Seconds();
-	if (!S || !Object || !Object->bHasPosition || !(S->Current.Flags & 4u) || Now - S->Current.ReceivedAt > .5) return false;
+	if (!SupportsVRPoses() || !S || !Object || Object->bDying || !Object->bHasPosition || !(S->Current.Flags & 4u) || Now - S->Current.ReceivedAt > .5) return false;
 	if (Object->bHasPhysicsTimestamps && Object->PhysicsTimestamps[ACEPhysicsTimeStamp::Teleport] != S->Current.Teleport) return false;
 	P = S->Sample(Now);
 	return true;
 }
 
-void FACESession::ApplyVRWorldSnapshot(FACEBinaryReader& Reader)
+bool FACESession::ApplyVRWorldSnapshot(FACEBinaryReader& Reader, uint32 TrailerBytes)
 {
-	if (!Reader.CanRead(8)) return;
+	if (!Reader.CanRead(8)) return false;
 	const uint32 Epoch = Reader.ReadUInt32(), Count = Reader.ReadUInt32();
-	const uint32 Trailer = (VRCapabilities & 32u) ? 8u : 0u;
-	if (Epoch != TeleportSeq || Count > 10000u || Reader.Remaining() != Count * 4u + Trailer) return;
+	if (Epoch != TeleportSeq || Count > 10000u || Reader.Remaining() != Count * 4u + TrailerBytes) return false;
 	TSet<int32> Live;
 	for (uint32 I = 0; I < Count; ++I) Live.Add(static_cast<int32>(Reader.ReadUInt32()));
 	auto Owned = [&](const FACEWorldObject& Object)
@@ -163,13 +176,9 @@ void FACESession::ApplyVRWorldSnapshot(FACEBinaryReader& Reader)
 	};
 	TArray<int32> Removed;
 	for (const auto& Pair : WorldObjects) if (!Live.Contains(Pair.Key) && !Owned(Pair.Value)) Removed.Add(Pair.Key);
-	for (int32 Guid : Removed)
-	{
-		if (SelectedObject.Guid == Guid) SelectObject(0);
-		VRPoses.Remove(Guid);
-		WorldObjects.Remove(Guid); RemoveFromContainerLists(Guid); OnObjectDeleted.Broadcast(Guid);
-	}
+	for (int32 Guid : Removed) DeleteWorldObject(Guid);
 	Log(FString::Printf(TEXT("VR world snapshot: live=%d removed=%d epoch=%u"), Live.Num(), Removed.Num(), Epoch));
+	return true;
 }
 #include "Protocol/ACEBinaryWriter.h"
 

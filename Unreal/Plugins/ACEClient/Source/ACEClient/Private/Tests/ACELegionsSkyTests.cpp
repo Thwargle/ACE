@@ -703,6 +703,47 @@ bool FACELegionsSkyTest::RunTest(const FString&)
 		TestTrue(TEXT("Imported moon keeps its native bright crescent on the right"),CrescentOffset>.5);
 		SaveView(Disc,TEXT("moon-primary-isolated.png"));
 
+		// Measure the halo in the composed night sky, where a dim blue card can
+		// pass the body/orientation test without producing a readable edge.
+		{
+			const float PreviousFOV=Camera->FOVAngle;
+			ON_SCOPE_EXIT
+			{
+				Camera->FOVAngle=PreviousFOV;
+				Camera->PrimitiveRenderMode=ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
+				Moon->SetMeshSectionVisible(1,GlowVisible);
+			};
+			Camera->FOVAngle=40.f;
+			Camera->PrimitiveRenderMode=PreviousMode;
+			TArray<FColor> WithHalo,WithoutHalo;
+			if (!ReadView(WithHalo)) return false;
+			Moon->SetMeshSectionVisible(1,false);
+			if (!ReadView(WithoutHalo)) return false;
+			const double CardRadius=Target->SizeX*.5*FMath::Tan(FMath::DegreesToRadians(ImportedSize.GetSize().X*.5))
+				/ FMath::Tan(FMath::DegreesToRadians(Camera->FOVAngle*.5));
+			auto MeanHaloLight=[&](double Inner,double Outer)
+			{
+				double Sum=0.;
+				int32 Count=0;
+				for (int32 I=0; I<WithHalo.Num(); ++I)
+				{
+					const double X=(I%Target->SizeX+.5)-Target->SizeX*.5, Y=(I/Target->SizeX+.5)-Target->SizeY*.5;
+					const double R2=X*X+Y*Y;
+					if (R2<FMath::Square(Inner*CardRadius) || R2>=FMath::Square(Outer*CardRadius)) continue;
+					const FColor A=WithHalo[I], B=WithoutHalo[I];
+					Sum+=.2126*(A.R-B.R)+.7152*(A.G-B.G)+.0722*(A.B-B.B);
+					++Count;
+				}
+				return Sum/FMath::Max(1,Count);
+			};
+			// The solid DAT disc occupies about 77% of the card radius.
+			const double Rim=MeanHaloLight(.80,.88), Outer=MeanHaloLight(1.01,1.10), Sky=MeanHaloLight(1.60,1.75);
+			AddInfo(FString::Printf(TEXT("Moon halo display luminance above background: rim %.2f, outer %.2f, sky %.2f"),Rim,Outer,Sky));
+			TestTrue(TEXT("Moon glow is visible past the limb and fades into the night sky"),
+				Rim>6. && Outer>1. && Outer<.8*Rim && FMath::Abs(Sky)<.75);
+			SaveView(WithHalo,TEXT("moon-night-halo.png"));
+		}
+
 		auto* CloudPtr=Parts.FindByPredicate([](auto* Part)
 		{
 			for (int32 Section=0; Section<Part->GetNumMaterials(); ++Section)

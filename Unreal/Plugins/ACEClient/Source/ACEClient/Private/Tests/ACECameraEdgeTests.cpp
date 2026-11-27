@@ -469,6 +469,23 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
         FMath::IsNearlyEqual(Boom->TargetArmLength,SavedArm,.01f)
         && Boom->GetRelativeRotation().Equals(SavedRotation,.01) && Boom->bDoCollisionTest);
     Controller->PredictedPose.CellId=0x7D640014;
+    for (FKey HoldKey : {EKeys::F2, EKeys::Divide})
+    {
+        const FRotator Before=Boom->GetRelativeRotation();
+        for(FKey Key:{HoldKey,EKeys::Left})
+            Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(Key,IE_Pressed,1.f));
+        Controller->PlayerInput->ProcessInputStack({},1.f/60,false);
+        Controller->UpdateOrbitCamera(1.f/60);
+        const FRotator Rotated=Boom->GetRelativeRotation();
+        TestTrue(TEXT("Held alternate camera rotates the actual camera boom"),!FMath::IsNearlyEqual(Before.Yaw,Rotated.Yaw,.01));
+        TestTrue(TEXT("Alternate camera holds instant mouse look"),Controller->bInstantMouseLookHeld);
+        Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(HoldKey,IE_Released,0.f));
+        Controller->PlayerInput->ProcessInputStack({},1.f/60,false);
+        Controller->UpdateOrbitCamera(1.f/60);
+        TestFalse(TEXT("Releasing alternate camera releases mouse look"),Controller->bInstantMouseLookHeld);
+        TestTrue(TEXT("Still-held movement arrow stops rotating the boom"),FMath::IsNearlyEqual(Rotated.Yaw,Boom->GetRelativeRotation().Yaw,.01));
+        Controller->PlayerInput->FlushPressedKeys();
+    }
     for (const int32 FPS : {30,90})
     {
         Controller->ResetCameraToRetailDefaults(Boom);

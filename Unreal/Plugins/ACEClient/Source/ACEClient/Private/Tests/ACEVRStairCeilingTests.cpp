@@ -294,7 +294,7 @@ bool FACEVRStairCeilingTest::RunTest(const FString&)
   // User report: standing on the rendered water at DC56001F, 95.269531/147.908203/6.
   // Retain the independently found Rithwic river and exercise this exact location too.
   const FVector River=Water;const float RiverDepth=Depth;const uint32 RiverBlock=WetBlock;
-  for(int32 Reported:{0,1,2,3})
+  for(int32 Reported:{0,1,2,3,4,5})
   {
    Water=River;Depth=RiverDepth;WetBlock=RiverBlock;
    if(Reported==1)
@@ -306,7 +306,18 @@ bool FACEVRStairCeilingTest::RunTest(const FString&)
     float Bed=0;TestTrue(TEXT("Reported water has DAT ground support"),Dat->SampleOutdoorGroundZ(Water.X,Water.Y,100,Bed));
     Water.Z=Bed;
    }
-   if(Reported>=2)
+   if(Reported>=4)
+   {
+    WetBlock=0x7C630000; Dat->GetOrBuildLandblockMesh(WetBlock,100);
+    // Yaraq pier, 22.16S 2.33W and 22.13S 2.35W from the two HUD captures.
+    const FVector Local=Reported==4 ? FVector(100.8,141.6,0) : FVector(96,148.8,0);
+    Water=FACEPosition::AceVectorToUnreal(FVector(124*192,99*192,0)+Local,100);
+    Depth=Dat->GetOutdoorWaterDepthCm(Water.X,Water.Y,100);
+    float Bed=0; TestTrue(TEXT("Yaraq pier has a wading bed"),Dat->SampleOutdoorGroundZ(Water.X,Water.Y,100,Bed));
+    TestEqual(TEXT("Retail depth at the reported Yaraq shore"),Depth,45.f);
+    Water.Z=Bed;
+   }
+   if(Reported==2 || Reported==3)
    {
     WetBlock=0xA8B40000;
     // The scene streamer normally prepares neighboring blocks. This fixture

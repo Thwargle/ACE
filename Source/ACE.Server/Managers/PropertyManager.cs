@@ -583,6 +583,7 @@ namespace ACE.Server.Managers
                 ("pk_server_safe_training_academy", new Property<bool>(false, "set this to TRUE to disable pk fighting in training academy and time to exit starter town safely")),
                 ("pkl_server", new Property<bool>(false, "set this to TRUE for pink servers")),
                 ("quest_info_enabled", new Property<bool>(false, "toggles the /myquests player command")),
+                ("quest_lookup_enabled", new Property<bool>(false, "Allows players to check one of their own quest flags with /myquest <questflag>.")),
                 ("rares_real_time", new Property<bool>(true, "allow for second chance roll based on an rng seeded timestamp for a rare on rare eligible kills that do not generate a rare, rares_max_seconds_between defines maximum seconds before second chance kicks in")),
                 ("rares_real_time_v2", new Property<bool>(false, "chances for a rare to be generated on rare eligible kills are modified by the last time one was found per each player, rares_max_days_between defines maximum days before guaranteed rare generation")),
                 ("runrate_add_hooks", new Property<bool>(false, "if TRUE, adds some runrate hooks that were missing from retail (exhaustion done, raise skill/attribute")),

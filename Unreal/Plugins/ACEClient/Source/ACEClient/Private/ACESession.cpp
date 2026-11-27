@@ -614,6 +614,15 @@ void FACESession::Tick(float DeltaSeconds)
 	TickPositionReporting(DeltaSeconds);
 }
 
+bool FACESession::HasPositionReportChanged() const
+{
+	return !bHaveReportedPosition || LastReportedPosition.CellId != PlayerPosition.CellId
+		|| bLastReportedContact != bAutoPosContact
+		|| !LastReportedPosition.Location.Equals(PlayerPosition.Location, .0002)
+		|| !LastReportedPosition.RotationXYZ.Equals(PlayerPosition.RotationXYZ, .0002)
+		|| !FMath::IsNearlyEqual(LastReportedPosition.RotationW, PlayerPosition.RotationW, .0002f);
+}
+
 void FACESession::TickPositionReporting(float DeltaSeconds)
 {
 	if (State == EACESessionState::InWorld && !bLogOffPending && !bPositionReportingSuspended)
@@ -624,11 +633,7 @@ void FACESession::TickPositionReporting(float DeltaSeconds)
 		// change the final pose after StopMovement has cleared those axes.
 		const bool CellOrContactChanged = bHaveReportedPosition
 			&& (LastReportedPosition.CellId != PlayerPosition.CellId || bLastReportedContact != bAutoPosContact);
-		const bool PoseChanged = !bHaveReportedPosition || CellOrContactChanged
-			|| !LastReportedPosition.Location.Equals(PlayerPosition.Location, .0002)
-			|| !LastReportedPosition.RotationXYZ.Equals(PlayerPosition.RotationXYZ, .0002)
-			|| !FMath::IsNearlyEqual(LastReportedPosition.RotationW, PlayerPosition.RotationW, .0002f);
-		// SendVRPose now pairs each tracked sample with its feet. Do not send a
+		// SendVRPose reports changed feet before their tracked sample. Do not send a
 		// second timed report in the same frame; retain normal reporting if the
 		// tracking stream pauses or the headset is disabled.
 		const bool PoseReportsFeet=SupportsVRPoses() && FPlatformTime::Seconds()-LastVRPoseSent<.5;
@@ -636,7 +641,7 @@ void FACESession::TickPositionReporting(float DeltaSeconds)
 		// and MoveToState describe airborne motion; rendering cannot inject extra
 		// airborne placement or unchanged-position heartbeats into retail combat.
 		if (!PoseReportsFeet && bAutoPosContact && (CellOrContactChanged
-			|| (AutoPosTimer >= AutonomousPositionInterval && PoseChanged)))
+			|| (AutoPosTimer >= AutonomousPositionInterval && HasPositionReportChanged())))
 		{
 			SendAutonomousPosition(bAutoPosContact);
 		}
@@ -1110,7 +1115,7 @@ void FACESession::ProcessOrderedS2CPacket(uint32 Sequence, EACEPacketHeaderFlags
 		LastTimeSyncPacketSequence = FMath::Max(LastTimeSyncPacketSequence, Sequence);
 		ApplyServerTime(ServerTicks, ReceivedAt, TEXT("TimeSync"));
 	}
-	for (const FReceivedFragment& Fragment : Fragments) ProcessReceivedFragment(Fragment);
+	for (const FReceivedFragment& Fragment : Fragments) ProcessReceivedFragment(Fragment, ReceivedAt);
 }
 
 void FACESession::RequestMissingS2CPackets(double Now)
@@ -1215,7 +1220,7 @@ void FACESession::ExpireEphemeralMessages(double Now)
 		if (Now - It.Value().UpdatedAt > 5.) It.RemoveCurrent();
 }
 
-void FACESession::ProcessReceivedFragment(const FReceivedFragment& Fragment)
+void FACESession::ProcessReceivedFragment(const FReceivedFragment& Fragment, double ReceivedAt)
 {
 	if (State == EACESessionState::Failed) return;
 	// PacketController::AddReceivedBlobToQueue accepts queues 1..11. Discard
@@ -1249,7 +1254,7 @@ void FACESession::ProcessReceivedFragment(const FReceivedFragment& Fragment)
 	{
 		// A conflicting single-fragment body must not bypass an existing assembly.
 		if (PartialFragments.Contains(Fragment.BlobId)) return;
-		ReceiveGameMessage(Fragment.Data);
+		ReceiveGameMessage(Fragment.Data, ReceivedAt);
 		return;
 	}
 	if (const FPartialMessage* Existing = PartialFragments.Find(Fragment.BlobId))
@@ -1272,6 +1277,7 @@ void FACESession::ProcessReceivedFragment(const FReceivedFragment& Fragment)
 	FPartialMessage& Partial = PartialFragments.FindOrAdd(Fragment.BlobId);
 	Partial.Count = Fragment.Count;
 	Partial.Queue = Fragment.Queue;
+	Partial.FirstReceivedAt = Partial.Parts.IsEmpty() ? ReceivedAt : FMath::Min(Partial.FirstReceivedAt, ReceivedAt);
 	Partial.Parts.Add(Fragment.Index, Fragment.Data);
 	Partial.Bytes += Fragment.Data.Num();
 	PartialMessageBytes += Fragment.Data.Num();
@@ -1283,8 +1289,9 @@ void FACESession::ProcessReceivedFragment(const FReceivedFragment& Fragment)
 		if (!Part) return;
 		Message.Append(*Part);
 	}
+	const double FirstReceivedAt = Partial.FirstReceivedAt;
 	RemovePartialMessage(Fragment.BlobId);
-	ReceiveGameMessage(Message);
+	ReceiveGameMessage(Message, FirstReceivedAt);
 }
 
 void FACESession::SendRequestRetransmit(const TArray<uint32>& MissingSequences)
@@ -1693,7 +1700,7 @@ void FACESession::SendEchoResponse(float ClientTime)
 		Body.GetData(), {}, false, true, ClientId);
 }
 
-void FACESession::HandleGameMessage(const TArray<uint8>& MessageBytes)
+void FACESession::HandleGameMessage(const TArray<uint8>& MessageBytes, double ReceivedAt)
 {
 	const uint64 InventoryBefore = InventoryDataRevision;
 	const int32 ContainerBefore = OpenExternalContainerGuid;
@@ -1862,7 +1869,7 @@ void FACESession::HandleGameMessage(const TArray<uint8>& MessageBytes)
 		HandleTurbineChat(Reader);
 		break;
 	case ACEOpcode::GameEvent:
-		HandleGameEvent(Reader);
+		HandleGameEvent(Reader, ReceivedAt);
 		break;
 	case ACEOpcode::PrivateUpdateAttribute:
 		HandlePrivateUpdateAttribute(Reader);
@@ -2038,7 +2045,11 @@ void FACESession::UpsertWorldObject(const FACEWorldObject& Object, bool bForceRe
 	const bool bSameInstance = Existing && (Existing->bPhysicsDescriptionPending
 		|| !Object.bHasPhysicsTimestamps || !Existing->bHasPhysicsTimestamps
 		|| Object.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance] == Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]);
-	if (Existing && !bSameInstance) PropertyStamps.Remove(Object.Guid);
+	if (Existing && !bSameInstance)
+	{
+		PropertyStamps.Remove(Object.Guid);
+		ForgetObjectEventOrder(Object.Guid);
+	}
 	if (!bSameInstance || bForceRecreate) EquipmentRemovalEvidence.Remove(Object.Guid);
 	if (Existing && bSameInstance && !bForceRecreate)
 	{
@@ -2324,6 +2335,16 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecrea
 		Obj.bHasPhysicsTimestamps = true;
 	}
 
+	// SmartBox dispatches each physics category of a repeated description
+	// independently. A newer visual description need not contain a new position.
+	const bool RemoteCreature = !Obj.bIsSelf && (Obj.bIsPlayer || (Obj.ItemType & ACEItemType::Creature)) && !Obj.IsCorpse();
+	const bool Repeated = bSameInstance && !bForceRecreate;
+	bool ApplyPosition = false, ApplyVector = false;
+	bool ApplyMotion = RemoteCreature && Decoded.MovementLength > 0;
+	uint16 ActionStamp = Repeated ? Existing->ReceivedActionStamp : 0;
+	bool HaveActionStamp = Repeated && Existing->bHasReceivedActionStamp;
+	FACEObjectMotionState DescriptorMotion;
+
 	if (bSameInstance && !bForceRecreate)
 	{
 		// A repeated CreateObject is a collection of timestamped physics updates,
@@ -2343,6 +2364,18 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecrea
 		{
 			return ACEPhysicsTimeStamp::IsNewer(Existing->PhysicsTimestamps[Index], Obj.PhysicsTimestamps[Index]);
 		};
+		ApplyPosition = RemoteCreature && !Obj.ParentGuid && Obj.bHasPosition && IsNewer(ACEPhysicsTimeStamp::Position);
+		ApplyVector = RemoteCreature && IsNewer(ACEPhysicsTimeStamp::Vector);
+		if (RemoteCreature && (!ApplyMotion || !IsNewer(ACEPhysicsTimeStamp::Movement)))
+		{
+			// Retail only touches either movement stamp when a movement buffer
+			// is present and its movement number advances.
+			Obj.PhysicsTimestamps[ACEPhysicsTimeStamp::Movement] = Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Movement];
+			Obj.PhysicsTimestamps[ACEPhysicsTimeStamp::ServerControl] = Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::ServerControl];
+			ApplyMotion = false;
+		}
+		ApplyMotion = ApplyMotion && !ACEPhysicsTimeStamp::IsNewer(Obj.PhysicsTimestamps[ACEPhysicsTimeStamp::ServerControl],
+			Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::ServerControl]);
 		if (!IsNewer(ACEPhysicsTimeStamp::ObjDesc)) Obj.Appearance = Existing->Appearance;
 		if (!IsNewer(ACEPhysicsTimeStamp::State)) Obj.PhysicsState = Existing->PhysicsState;
 		if (!IsNewer(ACEPhysicsTimeStamp::Vector))
@@ -2365,6 +2398,7 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecrea
 		if (bStaleTeleport || (!IsNewer(ACEPhysicsTimeStamp::Position)
 			&& !(Obj.bIsSelf && IsNewer(ACEPhysicsTimeStamp::ForcePosition))))
 		{
+			ApplyPosition = false;
 			Obj.Position = Existing->Position;
 			Obj.bHasPosition = Existing->bHasPosition;
 			Obj.ParentGuid = Existing->ParentGuid;
@@ -2379,6 +2413,19 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecrea
 			if (!IsNewer(Index)) Obj.PhysicsTimestamps[Index] = Existing->PhysicsTimestamps[Index];
 		}
 	}
+	if (ApplyMotion)
+	{
+		FACEBinaryReader Body(Reader.GetData() + Decoded.MovementOffset, Decoded.MovementLength);
+		if (!DecodeMotionBody(Body, Obj.bHasPosition ? &Obj.Position : nullptr, false,
+			ActionStamp, HaveActionStamp, DescriptorMotion)) return;
+	}
+	if (ApplyPosition)
+	{
+		// HandleCreateObject passes contact=true for a repeated world position.
+		Obj.Position.bHasContactState = Obj.Position.bIsGrounded = true;
+		Obj.Position.bHasTeleportSequence = true;
+		Obj.Position.TeleportSequence = Obj.PhysicsTimestamps[ACEPhysicsTimeStamp::Teleport];
+	}
 	if (Existing && (bForceRecreate || (bComparableInstance && !bSameInstance)))
 	{
 		// Retail destroys the prior physics object before publishing the replacement.
@@ -2391,6 +2438,22 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecrea
 	}
 
 	UpsertWorldObject(Obj, bForceRecreate);
+	if (ApplyPosition) OnPositionUpdate.Broadcast(Obj.Guid, Obj.Position);
+	if (ApplyMotion)
+	{
+		// A newly created resting/dead body already starts in its held pose.
+		const bool InitialRest = !Repeated && DescriptorMotion.MovementType == 0
+			&& DescriptorMotion.Forward == 0.f && DescriptorMotion.Strafe == 0.f && DescriptorMotion.Turn == 0.f
+			&& ACEMotion::IsHeldRestCommand(Obj.InitialMotionCommand);
+		if (!InitialRest)
+			ApplyReceivedMotion(Obj.Guid, DescriptorMotion, ActionStamp, HaveActionStamp);
+		else if (auto* Created = WorldObjects.Find(Obj.Guid))
+		{
+			Created->ReceivedActionStamp = ActionStamp;
+			Created->bHasReceivedActionStamp = HaveActionStamp;
+		}
+	}
+	if (ApplyVector) OnVectorUpdate.Broadcast(Obj.Guid, Obj.Velocity, Obj.Omega);
 	ReplayObjectPhysicsEvents(Obj.Guid);
 	Log(FString::Printf(TEXT("ObjectCreate '%s' guid=0x%08X setup=0x%08X parent=0x%08X loc=%d animParts=%d wcid=%d type=0x%08X desc=0x%08X physics=0x%08X placement=%d motionTable=0x%08X motion=0x%08X style=0x%08X usable=0x%08X"),
 		*Obj.Name, Obj.Guid, Obj.SetupId, Obj.ParentGuid, Obj.ParentLocation,
@@ -2591,7 +2654,7 @@ void FACESession::DeleteWorldObject(int32 Guid)
 		if (SelectedObject.Guid == Guid) SelectObject(0);
 		VRPoses.Remove(Guid);
 		ConfirmStackCount(Guid, MAX_int32);
-		WorldObjects.Remove(Guid);
+		if (WorldObjects.Remove(Guid)) ForgetObjectEventOrder(Guid);
 		PropertyStamps.Remove(Guid);
 		RemoveFromContainerLists(Guid);
 	}
@@ -2892,7 +2955,7 @@ bool FACESession::RespondToConfirmation(uint32 Type, uint32 Context, bool Accept
 	return true;
 }
 
-void FACESession::HandleGameEvent(FACEBinaryReader& Reader)
+void FACESession::HandleGameEvent(FACEBinaryReader& Reader, double ReceivedAt)
 {
 	if (!Reader.CanRead(12))
 	{
@@ -2926,7 +2989,7 @@ void FACESession::HandleGameEvent(FACEBinaryReader& Reader)
 	case 0x0276: // CharacterConfirmationDone
 		HandleServerDialog(EventType, Reader);
 		break;
-	case 0xF7D1: HandleVRPose(Reader); break;
+	case 0xF7D1: HandleVRPose(Reader, ReceivedAt); break;
 	case 0xF7D2: HandleHealthFeedback(Reader); break;
 	case 0xF7D4: HandleVRRecovery(Reader); break;
 	case 0xF7D5: HandleVRCasting(Reader); break;
@@ -2948,9 +3011,16 @@ void FACESession::HandleGameEvent(FACEBinaryReader& Reader)
 		{
 			const uint32 Version = Reader.ReadUInt32();
 			const uint32 Flags = Reader.ReadUInt32();
-			VRCapabilities = Version == 1 ? Flags & 524287u : 0u;
+			const uint32 Capabilities = Version == 1 ? Flags & 524287u : 0u;
+			const uint32 TrailerBytes = (Capabilities & 32u) ? 8u : 0u;
+			if (Capabilities & 8u)
+			{
+				if (!ApplyVRWorldSnapshot(Reader, TrailerBytes)) break;
+			}
+			else if (!Reader.CanRead(TrailerBytes)) break;
+			if (!(Capabilities & 16u) || ((VRCapabilities ^ Capabilities) & 32768u)) VRPoses.Reset();
+			VRCapabilities = Capabilities;
 			SendVRSubscriptions();
-            if ((VRCapabilities & 8u) != 0) ApplyVRWorldSnapshot(Reader);
 			VRMissileWeapon = 0; VRMissileSpeed = 0.f;
 			if ((VRCapabilities & 32u) && Reader.CanRead(8))
 			{
@@ -7960,7 +8030,7 @@ void FACESession::RemoveInventoryObject(int32 ItemGuid)
 	{
 		ShiftContainerPlacementsAfterRemove(PrevContainer, PrevPlacement, bPackSlots);
 	}
-	WorldObjects.Remove(ItemGuid);
+	if (WorldObjects.Remove(ItemGuid)) ForgetObjectEventOrder(ItemGuid);
 	PropertyStamps.Remove(ItemGuid);
 	ObjectVisibilityDeadlines.Remove(ItemGuid);
 	ClosedContainerItemDeadlines.Remove(ItemGuid);
@@ -8704,32 +8774,61 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 	{
 		if (Obj->bHasPhysicsTimestamps && IncomingInstance == Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance])
 		{
-			// CPhysics::SetObjectMovement requires a newer movement number AND
-			// a server-control epoch that has not gone backwards.
-			if (!ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Movement], IncomingMovement)
-				|| ACEPhysicsTimeStamp::IsNewer(IncomingServerControl, Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::ServerControl]))
+			if (!ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Movement], IncomingMovement))
 			{
 				return;
 			}
 		}
 	}
 
+	uint16 ActionStamp=0;
+	bool bHaveActionStamp=false;
+	if(const auto* Obj=WorldObjects.Find(Guid);Obj && !Obj->bPhysicsDescriptionPending
+		&& (!Obj->bHasPhysicsTimestamps || Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]==IncomingInstance))
+	{ActionStamp=Obj->ReceivedActionStamp;bHaveActionStamp=Obj->bHasReceivedActionStamp;}
+	const FACEWorldObject* Mover = WorldObjects.Find(Guid);
+	FACEObjectMotionState Motion;
+	if (!DecodeMotionBody(Reader, Mover && Mover->bHasPosition ? &Mover->Position : nullptr,
+		Guid == PlayerGuid, ActionStamp, bHaveActionStamp, Motion)) return;
+	if (DeferObjectPhysicsEvent(Guid, IncomingInstance, ACEOpcode::UpdateMotion, Reader, PayloadStart)) return;
+	// Commit only after the entire movement body has validated. A malformed
+	// update must not prevent a valid retransmission with the same timestamps.
+	if (FACEWorldObject* Obj = WorldObjects.Find(Guid); Obj && Obj->bHasPhysicsTimestamps)
+	{
+		if (ACEPhysicsTimeStamp::IsNewer(IncomingServerControl, Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::ServerControl]))
+		{
+			// Retail consumes superseded remote commands. Local prediction must
+			// still accept its server-control acknowledgement with the same number.
+			if (Guid != PlayerGuid) Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Movement] = IncomingMovement;
+			return;
+		}
+		Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Movement] = IncomingMovement;
+		Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::ServerControl] = IncomingServerControl;
+	}
+
+	if (Guid == PlayerGuid)
+	{
+		ServerControlSeq = IncomingServerControl;
+		// Retail acknowledges its own autonomous echo without restarting local
+		// movement. Remote players still need the same autonomous motion body.
+		if (bAutonomous) return;
+	}
+	ApplyReceivedMotion(Guid, Motion, ActionStamp, bHaveActionStamp);
+}
+
+bool FACESession::DecodeMotionBody(FACEBinaryReader& Reader, const FACEPosition* Origin, bool bLocalPlayer,
+	uint16& ActionStamp, bool& bHaveActionStamp, FACEObjectMotionState& Motion)
+{
 	if (!Reader.CanRead(4))
 	{
-		return;
+		return false;
 	}
 
 	const uint8 MovementType = Reader.ReadUInt8();
 	const uint8 MotionFlags = Reader.ReadUInt8();
 	const uint16 HeaderStyleRaw = Reader.ReadUInt16(); // MovementData.CurrentStyle (MotionStance)
 
-	FACEObjectMotionState Motion;
 	Motion.MovementType = MovementType;
-	uint16 ActionStamp=0;
-	bool bHaveActionStamp=false;
-	if(const auto* Obj=WorldObjects.Find(Guid);Obj && !Obj->bPhysicsDescriptionPending
-		&& (!Obj->bHasPhysicsTimestamps || Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]==IncomingInstance))
-	{ActionStamp=Obj->ReceivedActionStamp;bHaveActionStamp=Obj->bHasReceivedActionStamp;}
 	if (HeaderStyleRaw != 0)
 	{
 		Motion.CurrentStyle = static_cast<int32>(ACEMotion::ExpandPackedCommand(HeaderStyleRaw));
@@ -8739,12 +8838,12 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 	{
 		if (!Reader.CanRead(4))
 		{
-			return;
+			return false;
 		}
 
 		const uint32 Packed = Reader.ReadUInt32();
 		const uint32 Flags = Packed & 0x7Fu;
-		const uint32 CommandCount = Packed >> 7;
+		const uint32 CommandCount = (Packed >> 7) & 0x1Fu;
 		uint16 ForwardCommand = 0x0003; // Ready
 		uint16 SideStepCommand = 0;
 		float ForwardSpeed = 1.f;
@@ -8788,7 +8887,7 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 			|| !ReadFloatIf(0x10u, SideStepSpeed)
 			|| !ReadFloatIf(0x40u, TurnSpeed))
 		{
-			return;
+			return false;
 		}
 
 		if (StyleRaw != 0)
@@ -8800,7 +8899,7 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 		const int64 CommandBytes = static_cast<int64>(CommandCount) * 8;
 		if (CommandBytes > MAX_int32 || !Reader.CanRead(static_cast<int32>(CommandBytes)))
 		{
-			return;
+			return false;
 		}
 		auto IsLocoOrDoorOrReady = [](uint16 Low) -> bool
 		{
@@ -8814,12 +8913,12 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 			const uint16 RawCmd = Reader.ReadUInt16();
 			const uint16 PackedActionStamp=Reader.ReadUInt16(); // 15-bit stamp + autonomous bit
 			const float Speed = Reader.ReadFloat();
-			if (!FMath::IsFinite(Speed)) return;
+			if (!FMath::IsFinite(Speed)) return false;
 			// CMotionInterp::HandleMovement processes each action once, independent
 			// of the movement packet sequence, and retains that action's own speed.
 			const uint16 IncomingAction=PackedActionStamp & 0x7FFFu;
 			const uint16 ActionDelta=(IncomingAction-ActionStamp) & 0x7FFFu;
-			if ((Guid==PlayerGuid && (PackedActionStamp & 0x8000u))
+			if ((bLocalPlayer && (PackedActionStamp & 0x8000u))
 				|| (bHaveActionStamp && (ActionDelta==0 || ActionDelta>=0x4000u))) continue;
 			ActionStamp=IncomingAction;bHaveActionStamp=true;
 			const uint32 Full = ACEMotion::ExpandPackedCommand(RawCmd);
@@ -8848,7 +8947,7 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 		Reader.Align();
 		if ((MotionFlags & 0x01u) != 0)
 		{
-			if (!Reader.CanRead(4)) return;
+			if (!Reader.CanRead(4)) return false;
 			Motion.StickyTargetGuid = static_cast<int32>(Reader.ReadUInt32());
 		}
 
@@ -8944,14 +9043,14 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 		{
 			if (!Reader.CanRead(4))
 			{
-				return;
+				return false;
 			}
 			Motion.MoveToTargetGuid = static_cast<int32>(Reader.ReadUInt32());
 		}
 		// Origin (cell + xyz), MoveToParameters (flags + six floats), RunRate.
 		if (!Reader.CanRead(16 + 28 + 4))
 		{
-			return;
+			return false;
 		}
 		Motion.MoveToCellId = static_cast<int32>(Reader.ReadUInt32());
 		Motion.MoveToLocalAce.X = Reader.ReadFloat();
@@ -8976,9 +9075,8 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 		Motion.Forward = FMath::Clamp(FMath::Abs(MoveSpeed), 0.f, 1.f);
 		Motion.MoveToRunRate = RunRate;
 		FACEPosition MoveDestination; MoveDestination.CellId = Motion.MoveToCellId; MoveDestination.Location = Motion.MoveToLocalAce;
-		const FACEWorldObject* Mover = WorldObjects.Find(Guid);
-		const float Distance = Mover && Mover->bHasPosition
-			? FVector::Dist2D(Mover->Position.ToUnrealLocation(1.f), MoveDestination.ToUnrealLocation(1.f)) : 0.f;
+		const float Distance = Origin
+			? FVector::Dist2D(Origin->ToUnrealLocation(1.f), MoveDestination.ToUnrealLocation(1.f)) : 0.f;
 		Motion.UpdateMoveToGait(Distance);
 		// Appearance keys off Forward amount + run flag — ensure a non-zero loco signal
 		// whenever the server is actually moving us (Speed can be tiny but RunRate high).
@@ -8995,7 +9093,7 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 		// TargetGuid, DesiredHeading, TurnToParameters (flags, speed, desiredHeading).
 		if (!Reader.CanRead(4 + 4 + 4 + 4 + 4))
 		{
-			return;
+			return false;
 		}
 		Motion.MoveToTargetGuid = static_cast<int32>(Reader.ReadUInt32());
 		Motion.TurnToFallbackHeading = Reader.ReadFloat();
@@ -9007,41 +9105,28 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 	{
 		if (!Reader.CanRead(4 + 4 + 4))
 		{
-			return;
+			return false;
 		}
 		Motion.TurnToFlags = Reader.ReadUInt32();
 		Motion.TurnToSpeed = Reader.ReadFloat();
 		Motion.MoveToDesiredHeading = Reader.ReadFloat();
 	}
 
-	else return; // Unknown movement bodies must not consume a valid sequence.
+	else return false; // Unknown movement bodies must not consume a valid sequence.
 
 	if (Motion.MoveToLocalAce.ContainsNaN() || !FMath::IsFinite(Motion.MoveToDistance)
 		|| !FMath::IsFinite(Motion.MoveToMinDistance)
 		|| !FMath::IsFinite(Motion.MoveToSpeed) || !FMath::IsFinite(Motion.MoveToRunRate)
 		|| !FMath::IsFinite(Motion.MoveToWalkRunThreshold) || !FMath::IsFinite(Motion.MoveToDesiredHeading)
 		|| !FMath::IsFinite(Motion.TurnToSpeed) || Motion.TurnToSpeed < 0.f
-		|| !FMath::IsFinite(Motion.TurnToFallbackHeading)) return;
-	if (DeferObjectPhysicsEvent(Guid, IncomingInstance, ACEOpcode::UpdateMotion, Reader, PayloadStart)) return;
-	// Commit only after the entire movement body has validated. A malformed
-	// update must not prevent a valid retransmission with the same timestamps.
-	if (FACEWorldObject* Obj = WorldObjects.Find(Guid); Obj && Obj->bHasPhysicsTimestamps)
-	{
-		for (const auto& Stamp : {TPair<int32, uint16>(ACEPhysicsTimeStamp::Movement, IncomingMovement),
-			TPair<int32, uint16>(ACEPhysicsTimeStamp::ServerControl, IncomingServerControl)})
-			if (ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[Stamp.Key], Stamp.Value))
-				Obj->PhysicsTimestamps[Stamp.Key] = Stamp.Value;
-	}
+		|| !FMath::IsFinite(Motion.TurnToFallbackHeading)) return false;
+	return true;
+}
 
-	if (Guid == PlayerGuid)
-	{
-		ServerControlSeq = IncomingServerControl;
-		// Retail acknowledges its own autonomous echo without restarting local
-		// movement. Remote players still need the same autonomous motion body.
-		if (bAutonomous) return;
-		if (Motion.MovementType == 0)
-			CurrentForwardCommand = ACEMotion::NormalizeCommand(Motion.ForwardCommand);
-	}
+void FACESession::ApplyReceivedMotion(int32 Guid, FACEObjectMotionState& Motion, uint16 ActionStamp, bool bHaveActionStamp)
+{
+	if (Guid == PlayerGuid && Motion.MovementType == 0)
+		CurrentForwardCommand = ACEMotion::NormalizeCommand(Motion.ForwardCommand);
 	if(auto* Obj=WorldObjects.Find(Guid))
 	{Obj->ReceivedActionStamp=ActionStamp;Obj->bHasReceivedActionStamp=bHaveActionStamp;}
 
@@ -9084,6 +9169,7 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 		Obj->bDying = bDeath && !Obj->IsCorpse() && !Obj->AllowsDeadPoseInteraction();
 		if (bDeath)
 		{
+			VRPoses.Remove(Guid);
 			Obj->InitialMotionCommand = ACEMotion::Dead;
 			Obj->InitialMotionStyle = ACEMotion::StanceNonCombat;
 			Obj->Velocity = FVector::ZeroVector;

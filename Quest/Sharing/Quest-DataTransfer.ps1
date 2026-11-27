@@ -45,8 +45,8 @@ function Resolve-QuestSkySource {
     $file = Get-Item -LiteralPath $Path -ErrorAction Stop
     $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($file.FullName))
     try {
-        if ($file.Extension -ieq '.sky' -and $file.Length -ge 12 -and $file.Length -le (40MB + 2048)) {
-            if ($reader.ReadUInt32() -in @(0x314b534c, 0x324b534c, 0x334b534c)) { return $file.FullName }
+        if ($file.Extension -ieq '.sky' -and $file.Length -ge 12 -and $file.Length -le (40MB + 512 * 8 + 12)) {
+            if ($reader.ReadUInt32() -in @(0x314b534c, 0x324b534c, 0x334b534c, 0x344b534c, 0x354b534c, 0x364b534c, 0x374b534c, 0x384b534c, 0x394b534c)) { return $file.FullName }
         } elseif ($file.Name -ieq 'portal.dat' -and $file.Length -ge 380) {
             $reader.BaseStream.Position = 300
             $magic = $reader.ReadUInt32()
@@ -66,7 +66,7 @@ function Install-QuestSky {
     Invoke-Adb -Arguments ($deviceArgs + @('shell', 'am', 'force-stop', $package)) | Out-Host
     Invoke-Adb -Arguments ($deviceArgs + @('shell', 'run-as', $package, 'mkdir', '-p', $folder)) | Out-Host
     Install-QuestFile $Source $folder 'Legions.source' $DiagnosticDirectory 'Install-AC2-Sky.cmd'
-    Write-Host 'Transfer verified. In the headset, open Options > VR settings > Graphics and choose Import and use AC2 sky.'
+    Write-Host 'Transfer verified. In the headset, open Options > VR settings > Graphics and choose Import AC2 artwork.'
 }
 
 function Install-QuestFile {

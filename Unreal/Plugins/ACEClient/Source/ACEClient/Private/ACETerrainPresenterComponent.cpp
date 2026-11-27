@@ -1,5 +1,7 @@
 #include "ACETerrainPresenterComponent.h"
 #include "ACEProfiling.h"
+#include "Sky/ACELegionsGroundCover.h"
+#include "Sky/ACELegionsEnvironment.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "ACELandblockActor.h"
@@ -1255,6 +1257,36 @@ void UACETerrainPresenterComponent::TickComponent(
 			if (UACEDatSubsystem* Dat = GI->GetSubsystem<UACEDatSubsystem>())
 			{
 				UpdateCameraVisibility();
+				GrassTickTime += DeltaTime;
+				if (GrassTickTime >= 1.f/30)
+				{
+					const FACEPosition Position = GetPresentationPosition();
+					if (bHasKnownCell && Position.IsValid() && !IsIndoorCellId(Position.CellId) && !Dat->IsInPortalSpace()
+						&& !Dat->IsLightweightStreaming() && !ACELegionsSky::ActiveEnvironment()->GrassCards.Mips.IsEmpty())
+					{
+						if (!LegionsGrass) LegionsGrass = MakeShared<FACELegionsGroundCover>();
+						FVector Feet = Position.ToUnrealLocation(WorldScale), Viewer = Feet;
+						float Radius = .35f*WorldScale, Height = 1.8f*WorldScale;
+						if (auto* PC = World->GetFirstPlayerController())
+						{
+							if (APawn* Pawn = PC->GetPawn())
+								if (auto* Capsule = Cast<UCapsuleComponent>(Pawn->GetRootComponent()))
+								{
+									Radius = Capsule->GetScaledCapsuleRadius();
+									Height = Capsule->GetScaledCapsuleHalfHeight()*2.f;
+									Feet = Capsule->GetComponentLocation()-FVector(0,0,Height*.5f);
+								}
+							Viewer = PC->PlayerCameraManager ? PC->PlayerCameraManager->GetCameraLocation() : Feet;
+						}
+						LegionsGrass->Update(*Dat,*GetOwner(),Feet,Radius,Height,Viewer,WorldScale,GrassTickTime);
+					}
+					else if (LegionsGrass)
+					{
+						LegionsGrass->Clear();
+						LegionsGrass.Reset();
+					}
+					GrassTickTime = 0;
+				}
 				if (Dat->IsInPortalSpace() && Dat->IsWorldStreamingAllowed()
 					&& !Dat->IsLightweightStreaming() && bHasKnownCell && !bLastSyncComplete)
 					SyncAroundCell(LastKnownCellId);
@@ -1484,6 +1516,7 @@ void UACETerrainPresenterComponent::EndPlay(const EEndPlayReason::Type EndPlayRe
 
 void UACETerrainPresenterComponent::ClearLandblocks()
 {
+	if (LegionsGrass) LegionsGrass->Clear();
 	for (auto& Pair : Spawned)
 	{
 		if (Pair.Value)

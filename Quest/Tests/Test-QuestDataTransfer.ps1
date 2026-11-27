@@ -129,7 +129,7 @@ try {
     if (@(Get-ChildItem -LiteralPath $deviceDir -Filter 'ace-dat-*.tmp').Count) { throw 'Staging file leaked' }
     '' | Set-Content -LiteralPath (Join-Path $deviceDir 'mode')
     $sky = Join-Path $sourceDir 'Legions.sky'
-    foreach ($header in @('LSK1','LSK2','LSK3')) {
+    foreach ($header in @('LSK1','LSK2','LSK3','LSK4','LSK5','LSK6','LSK7','LSK8','LSK9')) {
         [Text.Encoding]::ASCII.GetBytes($header).CopyTo($bytes,0)
         [IO.File]::WriteAllBytes($sky,$bytes)
         if ((Resolve-QuestSkySource $sky) -ne $sky) { throw "Rejected $header sky cache" }

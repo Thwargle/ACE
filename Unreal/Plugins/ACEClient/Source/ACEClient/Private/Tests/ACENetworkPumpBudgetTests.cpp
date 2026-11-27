@@ -80,6 +80,27 @@ bool FACENetworkPumpBudgetTest::RunTest(const FString&)
  TestEqual(TEXT("Retransmitted messages are not dispatched twice"),Delivered.Num(),65);
  TestEqual(TEXT("ACK cursor covers only delivered packets"),Backlog.LastReceivedPacketSequence,66u);
 
+ // Destroy a remote owner after receipt but before its budgeted dispatch,
+ // then reuse its GUID. Only events for the new weenie may be delivered.
+ FACESession Reused;
+ Reused.PlayerGuid=2;Reused.UpsertWorldObject(Owner);
+ TArray<int32> ReusedLines;
+ Reused.OnChatMessage.AddLambda([&](const FString& Line,const FString&,int32){ReusedLines.Add(FCString::Atoi(*Line));});
+ auto QueueLine=[&](uint32 Stamp,int32 Value)
+ {
+  FACEBinaryWriter W;W.WriteUInt32(ACEOpcode::GameEvent);W.WriteUInt32(Owner.Guid);W.WriteUInt32(Stamp);
+  W.WriteUInt32(ACEGameEvent::CommunicationTransientString);W.WriteString16L(FString::FromInt(Value));
+  Reused.ReceiveGameMessage(W.GetData());
+ };
+ QueueLine(1,11);Reused.DispatchReadyGameEvent();QueueLine(2,12);QueueLine(4,14);
+ Reused.DeleteWorldObject(Owner.Guid);
+ TestEqual(TEXT("Remote owner deletion releases queued event bytes"),Reused.PendingGameEventBytes,0);
+ QueueLine(1,21);Reused.DispatchReadyGameEvent();
+ TestEqual(TEXT("A leftover ready entry cannot dispatch before recreation"),ReusedLines.Num(),1);
+ Reused.UpsertWorldObject(Owner);Reused.DispatchReadyGameEvent();
+ TestTrue(TEXT("Reused owner starts at its first stamp and drops its previous backlog"),ReusedLines==TArray<int32>({11,21}));
+ TestEqual(TEXT("Reused owner has no pending events"),Reused.PendingGameEventCount,0);
+
  FACESession Slow;
  Slow.WorldObjects.Add(1,Owner);
  int32 SlowDelivered=0;

@@ -1048,7 +1048,7 @@ void UACEWorldPresenterComponent::SpawnOrUpdateEntity(const FACEWorldObject& Obj
 			// Appearance rebuild resets DoorTransition — re-apply latest On/Off or held pose.
 			if (const FACEObjectMotionState* Motion = LatestMotion.Find(Object.Guid))
 			{
-				if (!bExistingActor || bSetupChanged || Revision == 0) Actor->ApplyMotionState(*Motion);
+				if (!bExistingActor || bSetupChanged || Revision == 0) Actor->RestoreMotionAfterAppearance(*Motion);
 			}
 			else if (Object.UsesOnOffMotion() && Actor->Appearance && Actor->Appearance->HasAppearance()
 				&& Object.MotionTableId != 0)
@@ -1293,7 +1293,7 @@ void UACEWorldPresenterComponent::DrainPendingDatAppearance()
 		// ApplyWorldObject resets DoorTransition — restore server On/Off resting pose.
 		if (const FACEObjectMotionState* Motion = LatestMotion.Find(Guid))
 		{
-			if (RestoreMotion) Actor->ApplyMotionState(*Motion);
+			if (RestoreMotion) Actor->RestoreMotionAfterAppearance(*Motion);
 		}
 		else if (Obj.UsesOnOffMotion() && Actor->Appearance && Obj.MotionTableId != 0)
 		{

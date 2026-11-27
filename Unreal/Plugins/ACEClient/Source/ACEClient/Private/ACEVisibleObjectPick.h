@@ -77,6 +77,7 @@ namespace ACEVisibleObjectPick
                 && (!Entity->bReceivedDeathMotion || Entity->IsCorpse())) Candidates.Add(Entity);
         }
         double Closest = FVector::Distance(Start, End);
+        double WaterSurface = Closest;
         // Retail selection tests drawing polygons, not PhysicsBSP. A building
         // can have a continuous collision face across a visible window. Refine
         // those hits without weakening movement/camera collision or allowing a
@@ -90,6 +91,7 @@ namespace ACEVisibleObjectPick
             double BedDistance;
             if (!Candidates.IsEmpty() && ACEWaterSight::RefineTerrainHit(World, Wall, Start, TraceEnd, 0, BedDistance))
             {
+                WaterSurface = FMath::Min(WaterSurface, double(Wall.Distance));
                 Closest = FMath::Min(Closest, BedDistance);
                 Refined = true;
             }
@@ -107,6 +109,11 @@ namespace ACEVisibleObjectPick
             }
             Params.AddIgnoredComponent(Wall.GetComponent());
         }
+        auto PickLimit = [&](AActor* Actor)
+        {
+            const auto* Entity = Cast<AACEWorldEntityActor>(Actor);
+            return Entity && Entity->CanBeTargetedThroughWater() ? Closest : FMath::Min(Closest,WaterSurface);
+        };
         AActor* Selected = nullptr;
         TArray<AActor*, TInlineAllocator<16>> Fallback;
         for (AActor* Actor : Candidates)
@@ -114,8 +121,9 @@ namespace ACEVisibleObjectPick
             if (Actor->IsHidden()) continue;
             bool HasGeometry = false;
             TInlineComponentArray<UProceduralMeshComponent*> Meshes(Actor);
+            double Limit=PickLimit(Actor);
             for (UProceduralMeshComponent* Mesh : Meshes)
-                if (TraceMesh(*Mesh, Start, End, Closest, &HasGeometry)) Selected = Actor;
+                if (TraceMesh(*Mesh, Start, End, Limit, &HasGeometry)) { Closest=Limit; Selected=Actor; }
             if (!HasGeometry) Fallback.Add(Actor);
         }
         // Retail keeps the nearest drawing-sphere miss, but a direct polygon
@@ -124,8 +132,9 @@ namespace ACEVisibleObjectPick
         if (!Selected) for (AActor* Actor : Candidates)
         {
             if (Actor->IsHidden()) continue;
+            double Limit=PickLimit(Actor);
             if (const auto* Appearance = Actor->FindComponentByClass<UACECharacterAppearanceComponent>())
-                if (Appearance->TraceDrawingSpheres(Start, End, Closest)) Selected = Actor;
+                if (Appearance->TraceDrawingSpheres(Start, End, Limit)) { Closest=Limit; Selected=Actor; }
         }
         // Effect-only portals and still-loading models have no drawing sphere.
         if (!Selected) for (AActor* Actor : Fallback)
@@ -133,7 +142,7 @@ namespace ACEVisibleObjectPick
             if (Actor->IsHidden()) continue;
             FHitResult Hit;
             if (Actor->ActorLineTraceSingle(Hit, Start, End, ECC_Visibility, FCollisionQueryParams())
-                && Hit.Distance < Closest)
+                && Hit.Distance < PickLimit(Actor))
             { Closest = Hit.Distance; Selected = Actor; }
         }
         if (Selected)

@@ -214,6 +214,7 @@ private:
 	{
 		bool bVRHandFeedback = false;
 		float MaxDegradeDistance = 100.f;
+		bool bCreatureBodyEffect = false;
 		bool bDegraded = false;
 		uint32 InstanceId = 0;
 		/** ParticleEmitterInfo DID (0x32…). */
@@ -286,7 +287,7 @@ private:
 	USceneComponent* GetVRFeedbackAnchor(uint32 ScriptType) const;
 	uint32 ExecutingPlayScript = 0;
 	void CleanupFinishedAudio();
-	void CreateEmitter(const FACEDatAnimationHook& Hook, bool bBlocking, float Intensity, uint32 SourcePlayScript = 0);
+	void CreateEmitter(const FACEDatAnimationHook& Hook, bool bBlocking, float Intensity, uint32 SourcePlayScript = 0, bool bSetupScript = false);
 	void ResolveEmitterParent(FActiveEmitter& Emitter) const;
 	void StartDefaultScripts(bool bIsDoor);
 	/** Map a hook's numbered slot to its active visual instance. */

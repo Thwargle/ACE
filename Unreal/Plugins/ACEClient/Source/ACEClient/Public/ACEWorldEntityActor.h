@@ -51,6 +51,7 @@ public:
 	/** Apply server UpdateMotion locomotion to this entity's DAT animation. */
 	UFUNCTION(BlueprintCallable, Category = "ACE")
 	void ApplyMotionState(const FACEObjectMotionState& Motion);
+	void RestoreMotionAfterAppearance(const FACEObjectMotionState& LastPacket);
 
 	/** Apply ACE-space linear/angular velocity (ObjectCreate / VectorUpdate) for projectiles. */
 	UFUNCTION(BlueprintCallable, Category = "ACE")
@@ -133,8 +134,17 @@ public:
 	bool IsCellVisible() const { return bCellVisible; }
 	bool bCellVisible = true;
 	bool bReceivedDeathMotion = false;
-	bool bAllowsDeadPoseInteraction = false;
+	bool bRemoteUseNoncombatant = false;
 	int32 GetWielderId() const { return WielderId; }
+
+	/** Underwater creatures can be picked for combat or remote use (e.g. a fishing rod). */
+	bool CanBeTargetedThroughWater() const
+	{
+		return !bIsPlayer && !bIsSelf && !IsCorpse() && !bReceivedDeathMotion && IsStandingCreatureOrPlayer()
+			&& ((ObjectDescriptionFlags & ACEObjectDescFlag::Attackable) || bRemoteUseNoncombatant)
+			&& !(ObjectDescriptionFlags & ACEObjectDescFlag::UiHidden)
+			&& !IsMeshSuppressed();
+	}
 
 	/** Standing creature/player (not a parented wielded mesh). */
 	bool IsStandingCreatureOrPlayer() const
@@ -356,9 +366,14 @@ protected:
 	FQuat RemoteAnchorRotation = FQuat::Identity;
 	/** A confirmed correction must not remain stuck on a different floor forever. */
 	bool bRemoteCorrectionPending = false;
+	// The active correction is in RemoteAnchor. Retail retains up to 20 ordered
+	// position nodes, including that head, so burst delivery preserves corners.
+	TArray<TPair<FVector,FQuat>> RemoteCorrectionQueue;
+	bool bRemoteCorrectionKeepHeading = false;
+	int32 RemoteCorrectionFailures = 0;
 	int32 RemoteCorrectionFrames = 0;
-	float RemoteCorrectionRequested = 0.f;
-	float RemoteCorrectionBlocked = 0.f;
+	float RemoteCorrectionStartDistance = 0.f;
+	float RemoteCorrectionTravelBudget = 0.f;
 	FACEObjectMotionState RemoteMotion;
 	// Physics owns link timing even while the mesh is deferred or culled.
 	ACEWalkingMotion::FSequence RemoteWalkingMotion;

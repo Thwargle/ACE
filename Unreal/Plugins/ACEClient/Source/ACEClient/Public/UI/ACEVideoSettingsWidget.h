@@ -45,6 +45,8 @@ public:
  UFUNCTION() void ChangeObjectGlow(bool bEnabled);
  UFUNCTION() void ChangeUniformDungeonLighting(bool bEnabled);
  UFUNCTION() void ChangeLegionsSky(bool bEnabled);
+ UFUNCTION() void ChangeLegionsEnvironment(bool bEnabled);
+ void RefreshLegionsOptions();
  UFUNCTION() void ImportLegionsSky();
  UFUNCTION() void BrowseLegionsDat();
  UFUNCTION() void ChangeScreenBrightness(float Value);
@@ -76,6 +78,7 @@ private:
  UPROPERTY() TObjectPtr<UCheckBox> ObjectGlow;
  UPROPERTY() TObjectPtr<UCheckBox> UniformDungeonLighting;
  UPROPERTY() TObjectPtr<UCheckBox> LegionsSky;
+ UPROPERTY() TMap<FString,TObjectPtr<UCheckBox>> LegionsEnvironmentChecks;
  UPROPERTY() TObjectPtr<UEditableTextBox> LegionsDirectory;
  UPROPERTY() TObjectPtr<UButton> LegionsImport;
  UPROPERTY() TObjectPtr<UButton> LegionsBrowse;

@@ -1,4 +1,5 @@
 #include "Dat/ACELandblockMeshBuilder.h"
+#include "Sky/ACELegionsEnvironment.h"
 #include "Dat/ACELandSurfaceAtlas.h"
 #include "Dat/ACEDatCursor.h"
 #include "Dat/ACEDatTextureResolver.h"
@@ -49,6 +50,15 @@ namespace
 		};
 		return Colors[TerrainType & 0x1F];
 	}
+}
+
+FACELandblockMeshBuilder::FACELandblockMeshBuilder(FACEDatDatabase* InPortal, FACEDatDatabase* InCell,
+	FACEDatTextureResolver* InTextures, TSharedPtr<FACETerrainBlendCache, ESPMode::ThreadSafe> InBlendCache,
+	ACELegionsSky::FEnvironmentPtr InArtwork)
+	: Portal(InPortal), Cell(InCell), Textures(InTextures),
+	  BlendCache(InBlendCache ? InBlendCache : MakeShared<FACETerrainBlendCache, ESPMode::ThreadSafe>()),
+	  Artwork(InArtwork ? InArtwork : ACELegionsSky::ActiveEnvironment())
+{
 }
 
 bool FACELandblockMeshBuilder::EnsureHeightTable()
@@ -509,6 +519,63 @@ bool FACELandblockMeshBuilder::SampleHeightAc(const FACEBuiltLandblockMesh& Mesh
 	return true;
 }
 
+bool FACELandblockMeshBuilder::IsOnRoad(const FACEBuiltLandblockMesh& Mesh, float AcX, float AcY)
+{
+	auto GetRoadBits = [&](int32 Vx, int32 Vy) -> uint32
+	{
+		Vx = FMath::Clamp(Vx, 0, CellDim);
+		Vy = FMath::Clamp(Vy, 0, CellDim);
+		const int32 Idx = Vx * VertexDim + Vy;
+		return (Idx >= 0 && Idx < 81) ? (static_cast<uint32>(Mesh.Terrain[Idx]) & 0x3u) : 0u;
+	};
+
+	constexpr float RoadWidth = 5.f;
+	constexpr float TileLength = CellSize; // 24
+	const int32 X = FMath::FloorToInt(AcX / TileLength);
+	const int32 Y = FMath::FloorToInt(AcY / TileLength);
+	const float RMin = RoadWidth;
+	const float RMax = TileLength - RoadWidth;
+	const uint32 R0 = GetRoadBits(X, Y);
+	const uint32 R1 = GetRoadBits(X, Y + 1);
+	const uint32 R2 = GetRoadBits(X + 1, Y);
+	const uint32 R3 = GetRoadBits(X + 1, Y + 1);
+	if (R0 == 0 && R1 == 0 && R2 == 0 && R3 == 0)
+	{
+		return false;
+	}
+	const float Dx = AcX - X * TileLength;
+	const float Dy = AcY - Y * TileLength;
+	if (R0 > 0)
+	{
+		if (R1 > 0)
+		{
+			if (R2 > 0)
+			{
+				return (R3 > 0) ? true : (Dx < RMin || Dy < RMin);
+			}
+			return (R3 > 0) ? (Dx < RMin || Dy > RMax) : (Dx < RMin);
+		}
+		if (R2 > 0)
+		{
+			return (R3 > 0) ? (Dx > RMax || Dy < RMin) : (Dy < RMin);
+		}
+		return (R3 > 0) ? (FMath::Abs(Dx - Dy) < RMin) : (Dx + Dy < RMin);
+	}
+	if (R1 > 0)
+	{
+		if (R2 > 0)
+		{
+			return (R3 > 0) ? (Dx > RMax || Dy > RMax) : (FMath::Abs(Dx + Dy - TileLength) < RMin);
+		}
+		return (R3 > 0) ? (Dy > RMax) : (TileLength + Dx - Dy < RMin);
+	}
+	if (R2 > 0)
+	{
+		return (R3 > 0) ? (Dx > RMax) : (TileLength - Dx + Dy < RMin);
+	}
+	return (R3 > 0) && (TileLength * 2.f - Dx - Dy < RMin);
+}
+
 uint32 FACELandblockMeshBuilder::GetPalCode(int32 R1, int32 R2, int32 R3, int32 R4, int32 T1, int32 T2, int32 T3, int32 T4)
 {
 	const uint32 TerrainBits = (static_cast<uint32>(T1) << 15) | (static_cast<uint32>(T2) << 10)
@@ -519,17 +586,16 @@ uint32 FACELandblockMeshBuilder::GetPalCode(int32 R1, int32 R2, int32 R3, int32 
 	return SizeBits | RoadBits | TerrainBits;
 }
 
-bool FACELandblockMeshBuilder::LoadTerrainSurface(uint32 TerrainType, FACEDatDecodedSurface& Out, uint32& OutTiling)
+const FACEDatDecodedSurface* FACELandblockMeshBuilder::LoadTerrainSurface(uint32 TerrainType, float& OutTiling, int32 CellsAcross)
 {
 	OutTiling = 1;
-	if (const FACEDatDecodedSurface* Cached = TerrainSurfCache.Find(TerrainType))
+	if (const auto* Cached = TerrainSurfCache.Find(TerrainType))
 	{
-		Out = *Cached;
 		if (const uint32* Tile = TerrainTilingCache.Find(TerrainType))
 		{
 			OutTiling = *Tile;
 		}
-		return Out.bHasPixels;
+		return Cached->Get();
 	}
 
 	const FACEDatTerrainTex* Tex = nullptr;
@@ -547,23 +613,37 @@ bool FACELandblockMeshBuilder::LoadTerrainSurface(uint32 TerrainType, FACEDatDec
 	}
 	if (!Tex || !Textures || Tex->TexGID == 0)
 	{
-		return false;
+		return nullptr;
 	}
 
 	OutTiling = FMath::Max(1u, Tex->TexTiling);
-	if (!Textures->DecodeSurfaceTexture(Tex->TexGID, Out))
+	const int32 Size = TexMerge.BaseTexSize ? int32(TexMerge.BaseTexSize) : BakeSize;
+	if (const auto* Imported = Artwork->Terrain(TerrainType))
 	{
-		return false;
+		// Region 13000000 gives grey sand a 10 m repeat and the other
+		// imported base materials a 20 m repeat. AC1 cells span 24 m.
+		OutTiling = CellSize / ACELegionsSky::FEnvironment::TerrainRepeatMetres(Imported->SurfaceId);
+		return Artwork->Terrain(TerrainType,FMath::CeilToInt(Size / (OutTiling*CellsAcross)));
 	}
-	TerrainSurfCache.Add(TerrainType, Out);
-	TerrainTilingCache.Add(TerrainType, OutTiling);
-	return true;
+	auto Surface = MakeShared<FACEDatDecodedSurface, ESPMode::ThreadSafe>();
+	if (!Textures->DecodeSurfaceTexture(Tex->TexGID, *Surface) || !Surface->bHasPixels) return nullptr;
+	TerrainTilingCache.Add(TerrainType, Tex->TexTiling ? Tex->TexTiling : 1u);
+	return TerrainSurfCache.Add(TerrainType, MoveTemp(Surface)).Get();
 }
 
-FColor FACELandblockMeshBuilder::SampleTiled(const FACEDatDecodedSurface& Surf, float U, float V, uint32 Tiling) const
+FColor FACELandblockMeshBuilder::SampleTiled(const FACEDatDecodedSurface& Surf, float U, float V, float Tiling) const
 {
-	const float Tile = static_cast<float>(FMath::Max(1u, Tiling));
-	return Surf.SampleUV(U * Tile, V * Tile);
+	U *= Tiling;
+	V *= Tiling;
+	if ((Surf.SurfaceId >> 24) != 0x40) return Surf.SampleUV(U,V);
+	// Legions' diffuse stage uses linear filtering. A nearest-neighbour
+	// upscale here would permanently bake square texels into close terrain.
+	const float X = FMath::Frac(U)*Surf.Width-.5f, Y = FMath::Frac(V)*Surf.Height-.5f;
+	const int32 IX=FMath::FloorToInt(X), IY=FMath::FloorToInt(Y);
+	const int32 X0=(IX+Surf.Width)%Surf.Width, X1=(X0+1)%Surf.Width;
+	const int32 Y0=(IY+Surf.Height)%Surf.Height, Y1=(Y0+1)%Surf.Height;
+	const auto At=[&](int32 Col,int32 Row){return Surf.Pixels[Row*Surf.Width+Col].ReinterpretAsLinear();};
+	return FMath::BiLerp(At(X0,Y0),At(X1,Y0),At(X0,Y1),At(X1,Y1),X-IX,Y-IY).ToFColor(false);
 }
 
 void FACELandblockMeshBuilder::RotateUV(float U, float V, int32 Rot, float& OutU, float& OutV)
@@ -587,7 +667,7 @@ FColor FACELandblockMeshBuilder::SampleAlpha(const FACEDatDecodedSurface& Alpha,
 	return Alpha.SampleUV(RU, RV);
 }
 
-void FACELandblockMeshBuilder::MergeOverlay(TArray<FColor>& Pixels, int32 Size, const FACEDatDecodedSurface& Overlay, uint32 OverlayTiling, const FACEDatDecodedSurface& Alpha, int32 Rot) const
+void FACELandblockMeshBuilder::MergeOverlay(TArray<FColor>& Pixels, int32 Size, const FACEDatDecodedSurface& Overlay, float OverlayTiling, const FACEDatDecodedSurface& Alpha, int32 Rot, int32 CellsAcross) const
 {
 	if (!Overlay.bHasPixels || !Alpha.bHasPixels || Size <= 0)
 	{
@@ -596,12 +676,12 @@ void FACELandblockMeshBuilder::MergeOverlay(TArray<FColor>& Pixels, int32 Size, 
 	for (int32 Y = 0; Y < Size; ++Y)
 	{
 		// Texture row 0 = V=0 = north (ACE LandUVs NW/NE).
-		const float V = (static_cast<float>(Y) + 0.5f) / static_cast<float>(Size);
+		const float V = (static_cast<float>(Y) + 0.5f) * CellsAcross / static_cast<float>(Size);
 		for (int32 X = 0; X < Size; ++X)
 		{
 			// Sample in ACE UV (U=0 west). Write column mirrored so the bake matches
 			// mesh UVs that are U-mirrored for AceVectorToUnreal(-X).
-			const float U = (static_cast<float>(X) + 0.5f) / static_cast<float>(Size);
+			const float U = (static_cast<float>(X) + 0.5f) * CellsAcross / static_cast<float>(Size);
 			const FColor A = SampleAlpha(Alpha, U, V, Rot);
 			// ImgTex::MergeTexture blends the encoded RGB bytes, not linear-light
 			// colors. Linearizing first brightens road/grass transition bands.
@@ -619,7 +699,8 @@ void FACELandblockMeshBuilder::MergeOverlay(TArray<FColor>& Pixels, int32 Size, 
 			Pixels[Idx] = FColor(
 				static_cast<uint8>((BaseWeight * Base.R + OverlayWeight * Over.R) >> 8),
 				static_cast<uint8>((BaseWeight * Base.G + OverlayWeight * Over.G) >> 8),
-				static_cast<uint8>((BaseWeight * Base.B + OverlayWeight * Over.B) >> 8), 255);
+				static_cast<uint8>((BaseWeight * Base.B + OverlayWeight * Over.B) >> 8),
+				CellsAcross > 1 ? (BaseWeight * Base.A + OverlayWeight * ((Overlay.SurfaceId >> 24) == 0x40 ? 255u : 0u)) >> 8 : 255u);
 		}
 	}
 }
@@ -888,7 +969,7 @@ bool FACELandblockMeshBuilder::ResolveGpuBlend(uint32 PCode, FACELandGpuBlend& O
 	return true;
 }
 
-bool FACELandblockMeshBuilder::BakePCode(uint32 PCode, TArray<FColor>& OutPixels, int32& OutW, int32& OutH)
+bool FACELandblockMeshBuilder::BakePCode(uint32 PCode, TArray<FColor>& OutPixels, int32& OutW, int32& OutH, int32 CellsAcross)
 {
 	OutW = 0;
 	OutH = 0;
@@ -909,40 +990,25 @@ bool FACELandblockMeshBuilder::BakePCode(uint32 PCode, TArray<FColor>& OutPixels
 	bool bAllRoad = false;
 	GetRoadCodes(PCode, RCodes, bAllRoad);
 
-	FACEDatDecodedSurface RoadSurf;
-	uint32 RoadTile = 1;
-	const bool bHaveRoadSurf = LoadTerrainSurface(RoadTerrainType, RoadSurf, RoadTile);
-
-	FACEDatDecodedSurface BaseSurf;
-	uint32 BaseTile = 1;
-	if (bAllRoad)
-	{
-		if (!bHaveRoadSurf)
-		{
-			return false;
-		}
-		BaseSurf = RoadSurf;
-		BaseTile = RoadTile;
-	}
-	else
-	{
-		if (!LoadTerrainSurface(TerrainTypes[0], BaseSurf, BaseTile))
-		{
-			return false;
-		}
-	}
+	float RoadTile = 1, BaseTile = 1;
+	const auto* RoadSurf = LoadTerrainSurface(RoadTerrainType, RoadTile,CellsAcross);
+	const auto* BaseSurf = bAllRoad ? RoadSurf : LoadTerrainSurface(TerrainTypes[0], BaseTile,CellsAcross);
+	if (!BaseSurf) return false;
+	if (bAllRoad) BaseTile = RoadTile;
 
 	OutW = Size;
 	OutH = Size;
 	OutPixels.SetNumUninitialized(Size * Size);
 	for (int32 Y = 0; Y < Size; ++Y)
 	{
-		const float V = (static_cast<float>(Y) + 0.5f) / static_cast<float>(Size);
+		const float V = (static_cast<float>(Y) + 0.5f) * CellsAcross / static_cast<float>(Size);
 		for (int32 X = 0; X < Size; ++X)
 		{
-			const float U = (static_cast<float>(X) + 0.5f) / static_cast<float>(Size);
+			const float U = (static_cast<float>(X) + 0.5f) * CellsAcross / static_cast<float>(Size);
 			// U-flip write to match mesh LandUVs mirrored for AceVectorToUnreal(-X).
-			OutPixels[Y * Size + (Size - 1 - X)] = SampleTiled(BaseSurf, U, V, BaseTile);
+			FColor& Pixel = OutPixels[Y * Size + (Size - 1 - X)];
+			Pixel = SampleTiled(*BaseSurf, U, V, BaseTile);
+			if (CellsAcross > 1) Pixel.A = (BaseSurf->SurfaceId >> 24) == 0x40 ? 255 : 0;
 		}
 	}
 
@@ -954,10 +1020,10 @@ bool FACELandblockMeshBuilder::BakePCode(uint32 PCode, TArray<FColor>& OutPixels
 			{
 				break;
 			}
-			FACEDatDecodedSurface Overlay;
-			uint32 OverlayTile = 1;
+			float OverlayTile = 1;
 			const uint32 OverlayType = TerrainTypes[FMath::Min(i + 1, 3)];
-			if (!LoadTerrainSurface(OverlayType, Overlay, OverlayTile))
+			const auto* Overlay = LoadTerrainSurface(OverlayType, OverlayTile,CellsAcross);
+			if (!Overlay)
 			{
 				continue;
 			}
@@ -967,10 +1033,10 @@ bool FACELandblockMeshBuilder::BakePCode(uint32 PCode, TArray<FColor>& OutPixels
 			{
 				continue;
 			}
-			MergeOverlay(OutPixels, Size, Overlay, OverlayTile, Alpha, Rot);
+			MergeOverlay(OutPixels, Size, *Overlay, OverlayTile, Alpha, Rot,CellsAcross);
 		}
 
-		if (bHaveRoadSurf)
+		if (RoadSurf)
 		{
 			for (int32 i = 0; i < 2; ++i)
 			{
@@ -984,7 +1050,7 @@ bool FACELandblockMeshBuilder::BakePCode(uint32 PCode, TArray<FColor>& OutPixels
 				{
 					continue;
 				}
-				MergeOverlay(OutPixels, Size, RoadSurf, RoadTile, Alpha, Rot);
+				MergeOverlay(OutPixels, Size, *RoadSurf, RoadTile, Alpha, Rot,CellsAcross);
 			}
 		}
 	}
@@ -994,16 +1060,66 @@ bool FACELandblockMeshBuilder::BakePCode(uint32 PCode, TArray<FColor>& OutPixels
 
 bool FACELandblockMeshBuilder::FillSectionBake(FACEBuiltLandblockSection& Section)
 {
-    Section.SharedBake = BlendCache->GetOrBuild(Section.PCode, CacheFingerprint, [&]() -> FACETerrainBlendCache::FBlendPtr
+    const uint64 ArtworkKey = Artwork->TerrainCacheKey(CacheFingerprint);
+    uint32 NativeType = 0;
+    const uint32 OverlayId = Artwork->TerrainBlendPair(Section.PCode, NativeType);
+    Section.SharedBake = BlendCache->GetOrBuild(Section.PCode, ArtworkKey, [&]() -> FACETerrainBlendCache::FBlendPtr
     {
         auto Blend = MakeShared<FACETerrainBlend, ESPMode::ThreadSafe>();
-        if (!(CacheFingerprint != 0 && ACEPCodeTileCache::LoadPrepared(Section.PCode, CacheFingerprint, *Blend)))
+        if (!(CacheFingerprint != 0 && ACEPCodeTileCache::LoadPrepared(Section.PCode, CacheFingerprint, *Blend, ArtworkKey)))
         {
-            if (!BakePCode(Section.PCode, Blend->Pixels, Blend->Width, Blend->Height)) return nullptr;
+            const int32 Cells = Artwork->TerrainTileCells(Section.PCode);
+            if (OverlayId)
+            {
+                uint32 Types[4] = {}, Codes[3] = {};
+                int32 Count = 0, Rotation = 0;
+                GetTerrainLayers(Section.PCode, Types, Codes, Count);
+                FACEDatDecodedSurface Mask;
+                float Tiling = 1.f;
+                const auto* Native = LoadTerrainSurface(NativeType, Tiling, 1);
+                if (!Native || !FindTerrainAlpha(Section.PCode, Codes[0], Mask, Rotation))
+                {
+                    // Custom DATs may omit a transition. Keep the ordinary TexMerge
+                    // fallback in memory and retry the split on the next disk-cache build.
+                    if (!BakePCode(Section.PCode, Blend->Pixels, Blend->Width, Blend->Height, Cells)
+                        || !Blend->PrepareUploadMips()) return nullptr;
+                    Blend->CellsAcross = Cells;
+                    return Blend;
+                }
+                const int32 Size = TexMerge.BaseTexSize ? int32(TexMerge.BaseTexSize) : BakeSize;
+                Blend->Width = Blend->Height = Size;
+                Blend->Pixels.SetNumUninitialized(Size * Size);
+                for (int Y = 0; Y < Size; ++Y)
+                    for (int X = 0; X < Size; ++X)
+                    {
+                        const float U = (X + .5f) / Size, V = (Y + .5f) / Size;
+                        FColor& Pixel = Blend->Pixels[Y * Size + Size - 1 - X];
+                        Pixel = SampleTiled(*Native, U, V, Tiling);
+                        const uint8 BaseWeight = SampleAlpha(Mask, U, V, Rotation).R;
+                        Pixel.A = Types[0] == NativeType ? 255 - BaseWeight : BaseWeight;
+                    }
+            }
+            else if (Cells > 1 && Artwork->UniformTerrainRepeats(Section.PCode) > 1.f)
+            {
+                const auto* Native = Artwork->Terrain(Section.PCode & 31);
+                Blend->Width = Native->Width;
+                Blend->Height = Native->Height;
+                Blend->Pixels.SetNumUninitialized(Native->Pixels.Num());
+                for (int32 Y=0; Y<Native->Height; ++Y)
+                    for (int32 X=0; X<Native->Width; ++X)
+                    {
+                        FColor& Pixel = Blend->Pixels[Y*Native->Width+Native->Width-1-X];
+                        Pixel = Native->Pixels[Y*Native->Width+X];
+                        Pixel.A = 255;
+                    }
+            }
+            else if (!BakePCode(Section.PCode,Blend->Pixels,Blend->Width,Blend->Height,Cells)) return nullptr;
             if (!Blend->PrepareUploadMips()) return nullptr;
             if (CacheFingerprint != 0)
-                ACEPCodeTileCache::SavePrepared(Section.PCode, CacheFingerprint, *Blend);
+                ACEPCodeTileCache::SavePrepared(Section.PCode, CacheFingerprint, *Blend, ArtworkKey);
         }
+        Blend->CellsAcross = OverlayId ? 1 : Artwork->TerrainTileCells(Section.PCode);
+        Blend->OverlaySurfaceId = OverlayId;
         return Blend;
     });
     if (!Section.SharedBake) return false;

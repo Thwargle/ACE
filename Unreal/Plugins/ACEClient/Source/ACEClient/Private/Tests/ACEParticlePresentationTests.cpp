@@ -253,6 +253,73 @@ bool FACEParticlePresentationTest::RunTest(const FString&)
     auto* Remote=World->SpawnActor<AACEWorldEntityActor>();Remote->InitializeFromObject(Human,100,true);
     auto* RemoteFX=Remote->ScriptComponent.Get();
     Culling->Set(1, ECVF_SetByCode);
+    // Coldeve shore: Water Wisp and Broken Fragment both use 64 m particle sprites.
+    // Exercise the actual setup scripts across both sides of that old threshold.
+    for (uint32 Setup : {0x02000599u, 0x020008fbu})
+    {
+        FACEWorldObject Creature;
+        Creature.Guid = 0x7100011;
+        Creature.ItemType = ACEItemType::Creature;
+        Creature.SetupId = Setup;
+        Creature.MotionTableId = Setup == 0x02000599u ? 0x09000031 : 0x09000098;
+        auto* Body = World->SpawnActor<AACEWorldEntityActor>();
+        Body->InitializeFromObject(Creature, 100, true);
+        Body->SetActorLocation(Origin);
+        auto* BodyFX = Body->ScriptComponent.Get();
+        BodyFX->NotifyAppearanceReady();
+        if (!TestEqual(TEXT("Setup spawns its continuous body emitters"), BodyFX->ActiveEmitters.Num(), Setup == 0x02000599u ? 1 : 2)) return false;
+        int32 BlankFrames = 0;
+        const float SavedFOV = Capture->FOVAngle;
+        Capture->FOVAngle = 12.f;
+        for (int Frame = 0; Frame < 360; ++Frame)
+        {
+            View->SetActorLocation(Origin + FVector(Frame < 180 ? 6700 : 6350, 0, 0));
+            View->SetActorRotation((Origin + FVector(0,0,110) - View->GetActorLocation()).Rotation());
+            PC->PlayerCameraManager->UpdateCamera(0.f);
+            Body->Appearance->TickComponent(1.f/60, LEVELTICK_All, nullptr);
+            BodyFX->TickEmitters(1.f / 60.f);
+            for (const auto& E : BodyFX->ActiveEmitters)
+            {
+                const bool Visible = E.Particles.ContainsByPredicate([](const auto& P)
+                {
+                    return FMath::Lerp(P.StartTrans, P.FinalTrans, P.Age / P.Life) < .95f;
+                });
+                if (Frame >= 60 && (E.bDegraded || !Visible)) ++BlankFrames;
+            }
+            if (Frame >= 60 && (Frame % 30 == 0 || Frame == 179 || Frame == 359))
+            {
+                Capture->SetWorldTransform(View->GetActorTransform());
+                Capture->ClearShowOnlyComponents();
+                for (const auto& E : BodyFX->ActiveEmitters)
+                {
+                    if (E.Batch) Capture->ShowOnlyComponent(E.Batch);
+                    for (const auto& P : E.Particles) if (P.Mesh.IsValid()) Capture->ShowOnlyComponent(P.Mesh.Get());
+                }
+                World->SendAllEndOfFrameUpdates();
+                Capture->CaptureScene();
+                FlushRenderingCommands();
+                TArray<FColor> Pixels;
+                Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
+                TestTrue(*FString::Printf(TEXT("Visible particles on setup %08X at frame %d"),Setup,Frame),
+                    Pixels.ContainsByPredicate([](FColor C){return FMath::Max3(C.R,C.G,C.B)>4;}));
+                if (Frame == 179 || Frame == 359)
+                {
+                    for (auto& P : Pixels) P.A=255;
+                    TArray64<uint8> PNG;
+                    FImageUtils::PNGCompressImageArray(384,384,Pixels,PNG);
+                    FFileHelper::SaveArrayToFile(PNG,*(Directory / FString::Printf(TEXT("Shore-%08X-%dm.png"),Setup,Frame==179 ? 67 : 64)));
+                }
+            }
+        }
+        Capture->FOVAngle = SavedFOV;
+        TestEqual(TEXT("Body effect remains visible through the 3 s wisp idle cycle and approach"),BlankFrames,0);
+        for (const auto& E : BodyFX->ActiveEmitters)
+        {
+            TestTrue(TEXT("Creature body culls beyond one landblock"),BodyFX->ShouldDegradeEmitter(E,Origin + FVector(19400,0,0)));
+            TestFalse(TEXT("Culling uses the creature root inside one block"),BodyFX->ShouldDegradeEmitter(E,Origin + FVector(19195,0,0)));
+        }
+        Body->Destroy();
+    }
     LocalPawn->SetActorLocation(Origin);Remote->SetActorLocation(Origin);
     View->SetActorLocation(Origin+FVector(-350,0,180));
     PC->PlayerCameraManager->UpdateCamera(0.f);

@@ -86,6 +86,8 @@ struct ACECLIENT_API FACEDecodedObject
 	/** Explicit PhysicsScript data ID (DID type 0x34). */
 	int32 DefaultScriptId = 0;
 	float DefaultScriptIntensity = 0.f;
+	/** Bounded movement body in the source packet, shared with UpdateMotion. */
+	int32 MovementOffset = 0, MovementLength = 0;
 	/** Interpreted ForwardCommand from PhysicsDesc Movement (door On/Off, corpse Dead). */
 	int32 InitialMotionCommand = 0;
 	/** Interpreted MotionStance from PhysicsDesc Movement (packed ushort). */

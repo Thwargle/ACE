@@ -85,9 +85,10 @@ bool FPersonalFarTerrainDetailTest::RunTest(const FString& Parameters)
 
 	// A fake 32-pixel texture per code: red is the column, green the row, blue the code.
 	int32 Bakes = 0;
-	const FPersonalFarTerrainDetail::FBakeTile Source = [&Bakes](uint32 PalCode, TArray<FColor>& OutPixels, int32& OutSize)
+	const FPersonalFarTerrainDetail::FBakeTile Source = [&Bakes](uint32 PalCode, TArray<FColor>& OutPixels, int32& OutSize,int32& Cells)
 	{
 		++Bakes;
+		Cells = 1;
 		OutSize = 32;
 		OutPixels.SetNumUninitialized(32 * 32);
 		for (int32 Y = 0; Y < 32; ++Y)
@@ -144,10 +145,38 @@ bool FPersonalFarTerrainDetailTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Far jump: every mip, whole"), Uploads.Num(), MipCount);
 	TestEqual(TEXT("Far jump: pixels"), FarDetailTestWrongPixels(Uploads, Bake, 10 * 8, 200 * 8), 0);
 
+	// A shared 120 m imported tile must be cut at the world cell's phase.
+	// Use a ramp to catch mirrored axes, block-edge resets, and cache aliases.
+	{
+		FPersonalFarTerrainDetail Regions;
+		const FPersonalFarTerrainDetail::FBakeTile Ramp=[](uint32,TArray<FColor>& Pixels,int32& Size,int32& Cells)
+		{
+			Size=128; Cells=5;
+			Pixels.SetNumUninitialized(Size*Size);
+			for (int32 Y=0;Y<Size;++Y)
+				for (int32 X=0;X<Size;++X) Pixels[Y*Size+X]=FColor(X,Y,0);
+			return true;
+		};
+		for (const FIntPoint Cell : {FIntPoint(6,7),FIntPoint(7,8),FIntPoint(8,9),FIntPoint(11,12)})
+		{
+			const int32 X=(2*(Cell.X%5)*CellPixels+1)*128/(2*5*CellPixels);
+			const int32 Y=(2*(Cell.Y%5)*CellPixels+1)*128/(2*5*CellPixels);
+			TestEqual(TEXT("Far shell follows the near tile across AC1 block boundaries"),Regions.Tile(Bake,Cell.X,Cell.Y,Ramp)[0],
+				FColor(127-X,127-Y,0));
+		}
+		const FString RegionPath=FPaths::ProjectSavedDir()/TEXT("Automation/FarTerrainRegionTiles.bin");
+		IFileManager::Get().MakeDirectory(*FPaths::GetPath(RegionPath),true);
+		TestTrue(TEXT("Save all phases of an imported tile"),Regions.SaveTiles(RegionPath,5));
+		FPersonalFarTerrainDetail Reloaded;
+		TestTrue(TEXT("Read all phases of an imported tile"),Reloaded.LoadTiles(RegionPath,5));
+		TestEqual(TEXT("Saved far terrain preserves the selected patch"),Reloaded.Tile(Bake,7,8,{})[0],Regions.Tile(Bake,7,8,Ramp)[0]);
+		IFileManager::Get().Delete(*RegionPath);
+	}
+
 	// A source that fails gives the flat color, not a hole.
 	Bake.Palette[0] = FColor(10, 20, 30);
 	FPersonalFarTerrainDetail Flat;
-	Flat.Update(Bake, FIntPoint(200, 200), [](uint32, TArray<FColor>&, int32&) { return false; }, Uploads);
+	Flat.Update(Bake, FIntPoint(200, 200), [](uint32, TArray<FColor>&, int32&, int32&) { return false; }, Uploads);
 	if (const FColor* Pixel = FarDetailTestPixel(Uploads, 0, 5, 5))
 	{
 		TestEqual(TEXT("Failed bake: flat color"), *Pixel, FColor(10, 20, 30, 255));
@@ -265,7 +294,8 @@ bool FPersonalFarTerrainDetailTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Real first update: every mip"), Uploads.Num(), MipCount);
 	TArray<FColor> Pixels;
 	int32 TileSize = 0;
-	TestTrue(TEXT("Real terrain texture bakes"), Dat(World.PalCodeAt(Mizuda.X * 8, Mizuda.Y * 8 + 60), Pixels, TileSize) && TileSize >= CellPixels);
+	int32 SourceCells=1;
+	TestTrue(TEXT("Real terrain texture bakes"), Dat(World.PalCodeAt(Mizuda.X * 8, Mizuda.Y * 8 + 60), Pixels, TileSize,SourceCells) && TileSize >= CellPixels);
 	TSet<uint32> Colors;
 	if (Uploads.Num() == MipCount)
 	{

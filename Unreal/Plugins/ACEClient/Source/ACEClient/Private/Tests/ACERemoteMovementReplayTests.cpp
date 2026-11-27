@@ -575,6 +575,65 @@ bool FACERemoteMovementReplayTest::RunTest(const FString&)
   TestTrue(TEXT("ACE death root rotation matches"),A->GetActorQuat().Equals(Facing*FACEPosition::AceQuatToUnreal(RootRotation),.00001));
   AddInfo(Label);A->Destroy();
  }
+ // Two grounded samples can be delivered in one network pump around a corner.
+ // Check the rendered body against each leg, including the heading at that leg.
+ for (int FPS : {30, 144})
+ {
+  auto* A = Spawn();
+  A->bClampToGround = false;
+  FACEPosition Corner = P;
+  Corner.Location.Y += 2;
+  Corner.SetAceFacingFromUnrealDir2D(FVector::YAxisVector);
+  FACEPosition End = Corner;
+  End.Location.X += 2;
+  End.SetAceFacingFromUnrealDir2D(-FVector::XAxisVector);
+  const FVector Start = A->GetActorLocation();
+  A->ApplyACEPosition(Corner);
+  A->ApplyACEPosition(End);
+  A->Tick(1.f/FPS);
+  TestTrue(TEXT("Batched updates start along the first leg with its heading"),
+   A->GetActorLocation().Y > Start.Y && FMath::Abs(A->GetActorLocation().X-Start.X) < .01
+   && A->GetActorQuat().Equals(Corner.ToUnrealQuat(), .0001));
+  for (int I=0; I<FPS; ++I) A->Tick(1.f/FPS);
+  TestTrue(TEXT("Batched updates finish at the second server frame"),
+   A->GetActorLocation().Equals(End.ToUnrealLocation(100), 5) && A->GetActorQuat().Equals(End.ToUnrealQuat(), .0001));
+  FACEPosition Far = End;
+  Far.Location.X += 25; // Beyond retail's 20m indoor blip threshold.
+  A->ApplyACEPosition(Far);
+  A->Tick(1.f/FPS);
+  TestTrue(TEXT("Discontinuous indoor sample resynchronizes on the next physics step"),
+   A->GetActorLocation().Equals(Far.ToUnrealLocation(100), .05));
+  A->ApplyACEPosition(End);
+  A->ApplyACEPosition(Corner);
+  FACEPosition Teleport = P;
+  ++Teleport.TeleportSequence;
+  A->ApplyACEPosition(Teleport);
+  for (int I=0; I<FPS; ++I) A->Tick(1.f/FPS);
+  TestTrue(TEXT("Teleport discards the entire previous correction path"),
+   A->GetActorLocation().Equals(P.ToUnrealLocation(100),.05));
+  A->Destroy();
+ }
+ // Interleaved appearance/physics work must not replay cached feet, yaw or a jump impulse.
+ {
+  FACEWorldObject O;
+  O.Guid = 0x70001116; O.bIsPlayer = true; O.ItemType = ACEItemType::Creature;
+  O.bHasServerPhysicsDescription = O.bHasPhysicsTimestamps = O.bHasPosition = true;
+  O.Position = P;
+  auto* A = World->SpawnActor<AACEWorldEntityActor>();
+  A->bClampToGround = false;
+  A->InitializeFromObject(O,100,false);
+  FACEPosition Moved = P;
+  Moved.Location.Y += 3; Moved.TeleportSequence = 1;
+  Moved.SetAceFacingFromUnrealDir2D(FVector::XAxisVector);
+  A->ApplyACEPosition(Moved);
+  O.bHasVelocity = true; O.Velocity.Z = 3;
+  A->InitializeFromObject(O,100,false);
+  A->Tick(1.f/60);
+  TestTrue(TEXT("Delayed descriptor cannot rewind or relaunch an existing player"),
+   A->GetActorLocation().Equals(Moved.ToUnrealLocation(100),.01) && A->GetActorQuat().Equals(Moved.ToUnrealQuat(),.0001)
+   && !A->bHavePhysicsVelocity);
+  A->Destroy();
+ }
  // Retail InterpolationManager::adjust_offset replaces the cycle's displacement
  // with a bounded step to the received position. It does not extrapolate that
  // destination while exponentially blending a second, displayed body toward it.
@@ -777,6 +836,16 @@ bool FACERemoteMovementReplayTest::RunTest(const FString&)
   A->ApplyPhysicsVelocity(FVector::ZeroVector);
   for(int I=0;I<FPS;++I)A->ApplyRemoteVRRoot(JumpPose,Dt);
   TestTrue(TEXT("Newer ground state cannot pull a buffered VR jump onto the floor"),A->GetActorLocation().Z-Origin.Z>99);
+  A->Destroy();
+
+  // A constraint can consume the entire translation before the collision sweep.
+  // Retail still fails that correction after five steps without progress.
+  A=Spawn(); FACEPosition Constrained=P; Constrained.Location.Y+=2;
+  A->ApplyACEPosition(Constrained); A->bRemoteConstrained=true; A->RemoteConstraintTravelAc=A->RemoteConstraintMaxAc;
+  for(int I=0;I<4;++I) A->Tick(Dt);
+  TestTrue(TEXT("A constrained correction gets its five-frame progress window"),FVector::Dist2D(A->GetActorLocation(),Origin)<1);
+  A->Tick(Dt);
+  TestTrue(TEXT("A fully consumed correction recovers even with no wall hit"),FVector::Dist2D(A->GetActorLocation(),Constrained.ToUnrealLocation(100))<1);
   A->Destroy();
 
   // Ordinary correction is still physics movement in retail. Test the visible

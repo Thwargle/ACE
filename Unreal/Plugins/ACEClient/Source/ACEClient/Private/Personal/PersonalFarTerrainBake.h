@@ -1,4 +1,5 @@
 #pragma once
+#include "Sky/ACELegionsEnvironment.h"
 
 #include "CoreMinimal.h"
 #include "Async/Future.h"
@@ -79,15 +80,15 @@ namespace PersonalFarTerrainBake
 	using FBakePtr = TSharedPtr<FPersonalFarTerrainBake, ESPMode::ThreadSafe>;
 
 	/** Changes when the DAT files change (path, size, time). 0 when a file is missing. */
-	uint64 SourceKey(const FString& DatDirectory);
+	uint64 SourceKey(const FString& DatDirectory, ACELegionsSky::FEnvironmentPtr Art = ACELegionsSky::ActiveEnvironment());
 
 	FString CachePath(uint64 Key);
 
 	/** Read the whole world from the DAT files. Slow; call off the game thread. */
-	bool Build(const FString& DatDirectory, FPersonalFarTerrainBake& Out);
+	bool Build(const FString& DatDirectory, FPersonalFarTerrainBake& Out, ACELegionsSky::FEnvironmentPtr Art = ACELegionsSky::ActiveEnvironment());
 
 	/** Use the cache file when it matches the DAT files, otherwise build and save. */
-	bool LoadOrBuild(const FString& DatDirectory, FPersonalFarTerrainBake& Out);
+	bool LoadOrBuild(const FString& DatDirectory, FPersonalFarTerrainBake& Out, ACELegionsSky::FEnvironmentPtr Art = ACELegionsSky::ActiveEnvironment());
 
 	/** LoadOrBuild, height levels and color pixels on a worker thread. Null when the bake failed. */
 	TFuture<FBakePtr> LoadOrBuildAsync(const FString& DatDirectory);

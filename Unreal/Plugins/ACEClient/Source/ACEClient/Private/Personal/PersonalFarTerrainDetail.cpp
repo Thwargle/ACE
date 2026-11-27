@@ -12,7 +12,7 @@
 namespace
 {
 	constexpr uint32 FarDetailCacheMagic = 0x44464150; // "PAFD"
-	constexpr uint32 FarDetailCacheVersion = 1;
+	constexpr uint32 FarDetailCacheVersion = 2;
 	constexpr int32 FarDetailBlockCells = FPersonalFarTerrainBake::CellsPerLandblock;
 	/** Pixels across one landblock at mip 0. */
 	constexpr int32 FarDetailBlockPixels = FarDetailBlockCells * PersonalFarTerrainDetail::CellPixels;
@@ -23,12 +23,13 @@ namespace
 	struct FFarDetailDatSource
 	{
 		FString Directory;
+		ACELegionsSky::FEnvironmentPtr Artwork;
 		FACEDatDatabase Portal, Cell;
 		TUniquePtr<FACEDatTextureResolver> Textures;
 		TUniquePtr<FACELandblockMeshBuilder> Builder;
 		bool bTried = false;
 
-		bool Bake(uint32 PalCode, TArray<FColor>& OutPixels, int32& OutSize)
+		bool Bake(uint32 PalCode, TArray<FColor>& OutPixels, int32& OutSize, int32& OutCellsAcross)
 		{
 			if (!bTried)
 			{
@@ -36,7 +37,7 @@ namespace
 				if (Portal.Open(Directory / TEXT("client_portal.dat")) && Cell.Open(Directory / TEXT("client_cell_1.dat")))
 				{
 					Textures = MakeUnique<FACEDatTextureResolver>(&Portal, nullptr);
-					Builder = MakeUnique<FACELandblockMeshBuilder>(&Portal, &Cell, Textures.Get());
+					Builder = MakeUnique<FACELandblockMeshBuilder>(&Portal, &Cell, Textures.Get(), nullptr, Artwork);
 					if (!Builder->EnsureTexMerge())
 					{
 						Builder.Reset();
@@ -44,7 +45,8 @@ namespace
 				}
 			}
 			int32 Height = 0;
-			return Builder && Builder->BakePCode(PalCode, OutPixels, OutSize, Height) && Height == OutSize;
+			OutCellsAcross = Artwork->TerrainTileCells(PalCode);
+			return Builder && Builder->BakePCode(PalCode, OutPixels, OutSize, Height,OutCellsAcross) && Height == OutSize;
 		}
 	};
 }
@@ -71,63 +73,70 @@ namespace PersonalFarTerrainDetail
 	{
 		TSharedRef<FFarDetailDatSource, ESPMode::ThreadSafe> Source = MakeShared<FFarDetailDatSource, ESPMode::ThreadSafe>();
 		Source->Directory = DatDirectory;
-		return [Source](uint32 PalCode, TArray<FColor>& OutPixels, int32& OutSize)
+		Source->Artwork = ACELegionsSky::ActiveEnvironment();
+		return [Source](uint32 PalCode, TArray<FColor>& OutPixels, int32& OutSize, int32& OutCellsAcross)
 		{
-			return Source->Bake(PalCode, OutPixels, OutSize);
+			return Source->Bake(PalCode, OutPixels, OutSize,OutCellsAcross);
 		};
 	}
 }
 
-const TArray<FColor>& FPersonalFarTerrainDetail::Tile(const FPersonalFarTerrainBake& Bake, int32 CellX, int32 CellY, const FBakeTile& BakeTile)
+TConstArrayView<FColor> FPersonalFarTerrainDetail::Tile(const FPersonalFarTerrainBake& Bake, int32 CellX, int32 CellY, const FBakeTile& BakeTile)
 {
 	using namespace PersonalFarTerrainDetail;
 	const uint32 PalCode = Bake.PalCodeAt(CellX, CellY);
-	if (const TArray<FColor>* Found = Tiles.Find(PalCode))
+	auto Phase = [&](const TArray<FColor>& Tile) -> TConstArrayView<FColor>
 	{
-		return *Found;
-	}
+		const int32 N = ACELegionsSky::FEnvironment::TerrainCellsAcross;
+		const int32 Index = Tile.Num() == TilePixels ? 0 : FarDetailMod(CellY,N)*N+FarDetailMod(CellX,N);
+		return MakeArrayView(Tile).Slice(Index*TilePixels,TilePixels);
+	};
+	if (const auto* Found = Tiles.Find(PalCode)) return Phase(*Found);
 	TArray<FColor> Pixels;
-	int32 Size = 0;
-	const bool bBaked = BakeTile && BakeTile(PalCode, Pixels, Size) && Size >= CellPixels
-		&& FMath::IsPowerOfTwo(Size) && Pixels.Num() == Size * Size;
-	if (!bBaked)
+	int32 Size = 0, Cells = 1;
+	if (!BakeTile || !BakeTile(PalCode,Pixels,Size,Cells) ||
+		(Cells != 1 && Cells != ACELegionsSky::FEnvironment::TerrainCellsAcross) ||
+		Size < CellPixels*Cells || !FMath::IsPowerOfTwo(Size) || Pixels.Num() != int64(Size)*Size)
 	{
-		// No texture for this code: the flat color the far terrain has without detail.
+		Cells = 1;
 		Size = CellPixels;
-		Pixels.Init(Bake.ColorAt(CellX, CellY), Size * Size);
+		Pixels.Init(Bake.ColorAt(CellX,CellY),Size*Size);
 	}
-	// The same filter as the mips of loaded terrain.
 	TArray<FColor> Smaller;
-	while (Size > CellPixels)
+	while (Size/2 >= CellPixels*Cells)
 	{
-		FACEDatTextureResolver::BuildOpaqueMip(Pixels, Size, Size, Smaller);
+		FACEDatTextureResolver::BuildOpaqueMip(Pixels,Size,Size,Smaller);
 		Pixels = MoveTemp(Smaller);
 		Size /= 2;
 	}
 	TArray<FColor>& Out = Tiles.Add(PalCode);
-	Out.Reserve(TilePixels);
-	for (int32 Mip = 0; Mip < CellMips; ++Mip)
-	{
-		// Loaded terrain maps the texture with U = 1 - x and V = 1 - y across the cell
-		// (BuildLandblock, CornerU and CornerV). Here the column is x and the row is y.
-		for (int32 Row = 0; Row < Size; ++Row)
+	Out.Reserve(TilePixels*Cells*Cells);
+	// Reduce the shared world-aligned texture once. Keep the 16px patch for
+	// each phase so the shell agrees with the loaded cells across block edges.
+	for (int32 Y=0; Y<Cells; ++Y)
+		for (int32 X=0; X<Cells; ++X)
 		{
-			for (int32 Column = 0; Column < Size; ++Column)
+			TArray<FColor> Patch;
+			Patch.Reserve(CellPixels*CellPixels);
+			for (int32 Row=0; Row<CellPixels; ++Row)
+				for (int32 Col=0; Col<CellPixels; ++Col)
+				{
+					const int32 SX = (2*(X*CellPixels+Col)+1)*Size/(2*Cells*CellPixels);
+					const int32 SY = (2*(Y*CellPixels+Row)+1)*Size/(2*Cells*CellPixels);
+					auto Color=Pixels[(Size-1-SY)*Size+Size-1-SX];
+					Color.A=255;
+					Patch.Add(Color);
+				}
+			for (int32 Side=CellPixels; ; Side/=2)
 			{
-				FColor Pixel = Pixels[(Size - 1 - Row) * Size + (Size - 1 - Column)];
-				Pixel.A = 255;
-				Out.Add(Pixel);
+				Out.Append(Patch);
+				if (Side==1) break;
+				FACEDatTextureResolver::BuildOpaqueMip(Patch,Side,Side,Smaller);
+				Patch=MoveTemp(Smaller);
 			}
 		}
-		if (Size > 1)
-		{
-			FACEDatTextureResolver::BuildOpaqueMip(Pixels, Size, Size, Smaller);
-			Pixels = MoveTemp(Smaller);
-			Size /= 2;
-		}
-	}
 	++Unsaved;
-	return Out;
+	return Phase(Out);
 }
 
 void FPersonalFarTerrainDetail::Update(const FPersonalFarTerrainBake& Bake, FIntPoint Center, const FBakeTile& BakeTile, TArray<FUpload>& Out)
@@ -259,9 +268,9 @@ bool FPersonalFarTerrainDetail::SaveTiles(const FString& Path, uint64 Key)
 	Writer << Magic << Version << Key << Pixels << Count;
 	for (const auto& Pair : Tiles)
 	{
-		uint32 Code = Pair.Key;
-		Writer << Code;
-		Writer.Serialize(const_cast<FColor*>(Pair.Value.GetData()), TilePixels * sizeof(FColor));
+		uint32 Code = Pair.Key, Length = Pair.Value.Num();
+		Writer << Code << Length;
+		Writer.Serialize(const_cast<FColor*>(Pair.Value.GetData()), Length * sizeof(FColor));
 	}
 	if (!FFileHelper::SaveArrayToFile(Bytes, *Path))
 	{
@@ -282,20 +291,27 @@ bool FPersonalFarTerrainDetail::LoadTiles(const FString& Path, uint64 Key)
 	uint32 Magic = 0, Version = 0, Pixels = 0, Count = 0;
 	uint64 StoredKey = 0;
 	Reader << Magic << Version << StoredKey << Pixels << Count;
-	constexpr int64 EntryBytes = sizeof(uint32) + TilePixels * sizeof(FColor);
-	if (Reader.IsError() || Magic != FarDetailCacheMagic || Version != FarDetailCacheVersion || StoredKey != Key
-		|| Pixels != TilePixels || Bytes.Num() - Reader.Tell() != int64(Count) * EntryBytes)
+	const int64 MinEntryBytes = (Version==1 ? 1 : 2)*sizeof(uint32) + TilePixels * sizeof(FColor);
+	if (Reader.IsError() || Magic != FarDetailCacheMagic || (Version != 1 && Version != FarDetailCacheVersion) || StoredKey != Key
+		|| Pixels != TilePixels || Bytes.Num() - Reader.Tell() < int64(Count) * MinEntryBytes)
 	{
 		return false;
 	}
+	TMap<uint32,TArray<FColor>> Loaded;
 	for (uint32 I = 0; I < Count; ++I)
 	{
-		uint32 Code = 0;
+		uint32 Code = 0, Length = TilePixels;
 		Reader << Code;
-		TArray<FColor>& Tile = Tiles.FindOrAdd(Code);
-		Tile.SetNumUninitialized(TilePixels);
-		Reader.Serialize(Tile.GetData(), TilePixels * sizeof(FColor));
+		if (Version >= 2) Reader << Length;
+		constexpr int32 N = ACELegionsSky::FEnvironment::TerrainCellsAcross;
+		if (Reader.IsError() || (Length != TilePixels && Length != TilePixels*N*N) ||
+			int64(Length)*sizeof(FColor) > uint64(Bytes.Num()-Reader.Tell()) || Loaded.Contains(Code)) return false;
+		TArray<FColor>& Tile = Loaded.Add(Code);
+		Tile.SetNumUninitialized(Length);
+		Reader.Serialize(Tile.GetData(), Length * sizeof(FColor));
 	}
+	if (Reader.IsError() || Reader.Tell() != Bytes.Num()) return false;
+	Tiles=MoveTemp(Loaded);
 	Unsaved = 0;
-	return !Reader.IsError();
+	return true;
 }

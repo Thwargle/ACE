@@ -3,6 +3,8 @@
 
 struct ACECLIENT_API FACETerrainBlend
 {
+    int32 CellsAcross = 1; // Runtime projection for this palette and artwork selection.
+    uint32 OverlaySurfaceId = 0; // A separate world-space diffuse over this cell-local RGB and coverage mask.
     TArray<FColor> Pixels;
     int32 Width = 0;
     int32 Height = 0;

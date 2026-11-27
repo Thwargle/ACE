@@ -30,6 +30,9 @@ struct FObjectPacket
 	uint32 HouseOwner = 0;
 	TArray<uint8> Movement;
 	int32 MotionTable = 0;
+	uint32 ItemType = ACEItemType::Misc;
+	bool EmptyMovement = false;
+	TOptional<uint16> PositionStamp, MovementStamp, TeleportStamp;
 };
 
 void WriteAppearance(FACEBinaryWriter& W, uint16 Part)
@@ -43,10 +46,11 @@ TArray<uint8> ObjectPacket(const FObjectPacket& P, uint32 Opcode = ACEOpcode::Ob
 	FACEBinaryWriter W;
 	W.WriteUInt32(Opcode); W.WriteUInt32(P.Guid);
 	WriteAppearance(W, P.Part);
-	W.WriteUInt32(0x81u | (P.Movement.IsEmpty() ? 0x20000u : 0x10000u)
+	W.WriteUInt32(0x81u | (P.Movement.IsEmpty() && !P.EmptyMovement ? 0x20000u : 0x10000u)
 		| (P.bPosition ? 0x8000u : 0u) | (P.MotionTable ? 2u : 0u) | (P.Elasticity.IsSet() ? 0x200u : 0u));
 	W.WriteUInt32(P.PhysicsState);
-	if (P.Movement.IsEmpty()) W.WriteUInt32(P.Placement);
+	if (P.EmptyMovement) W.WriteUInt32(0);
+	else if (P.Movement.IsEmpty()) W.WriteUInt32(P.Placement);
 	else
 	{
 		W.WriteUInt32(P.Movement.Num());
@@ -63,14 +67,21 @@ TArray<uint8> ObjectPacket(const FObjectPacket& P, uint32 Opcode = ACEOpcode::Ob
 	W.WriteUInt32(P.Setup); W.WriteFloat(P.Scale);
 	if (P.Elasticity.IsSet()) W.WriteFloat(P.Elasticity.GetValue());
 	for (int32 I = 0; I < ACEPhysicsTimeStamp::Count; ++I)
-		W.WriteUInt16(I == ACEPhysicsTimeStamp::Instance ? P.Instance : P.Sequence);
+	{
+		uint16 Stamp = P.Sequence;
+		if (I == ACEPhysicsTimeStamp::Instance) Stamp = P.Instance;
+		if (I == ACEPhysicsTimeStamp::Position) Stamp = P.PositionStamp.Get(P.Sequence);
+		if (I == ACEPhysicsTimeStamp::Movement) Stamp = P.MovementStamp.Get(P.Sequence);
+		if (I == ACEPhysicsTimeStamp::Teleport) Stamp = P.TeleportStamp.Get(P.Sequence);
+		W.WriteUInt16(Stamp);
+	}
 	W.Align();
 	W.WriteUInt32((P.Container ? 0x4000u : 0u) | (P.Workmanship>=0 ? 0x01000000u : 0u)
 		| (P.HouseHook ? 0x20000000u : 0u) | (P.HookType ? 0x10000000u : 0u)
 		| (P.HouseOwner ? 0x02000000u : 0u));
 	W.WriteString16L(TEXT("Server-authored object"));
 	W.WriteUInt16(1); W.WriteUInt16(1); // WCID and icon have packed known type prefixes.
-	W.WriteUInt32(ACEItemType::Misc); W.WriteUInt32(P.DescriptionFlags); W.Align();
+	W.WriteUInt32(P.ItemType); W.WriteUInt32(P.DescriptionFlags); W.Align();
 	if (P.Container) W.WriteUInt32(P.Container);
 	if (P.Workmanship>=0) W.WriteFloat(P.Workmanship);
 	if (P.HouseOwner) W.WriteUInt32(P.HouseOwner);
@@ -167,6 +178,65 @@ bool FACECustomObjectReplicationTest::RunTest(const FString&)
 		TestEqual(TEXT("Replacement clears stale house owner"),HookSession.WorldObjects[Hook.Guid].HouseOwnerId,0);
 		TestTrue(TEXT("Ordinary openable containers retain chest animation"),HookSession.WorldObjects[Hook.Guid].UsesOnOffMotion());
 	}
+	// Movement can arrive in the first F745 and in same-instance re-descriptions.
+	for (bool IsPlayer : {false, true})
+	{
+		FACESession World;
+		FObjectPacket P;
+		P.ItemType = ACEItemType::Creature;
+		if (IsPlayer) P.DescriptionFlags = 0x8; // PublicWeenieDesc.Player
+		P.PositionStamp = uint16(8);
+		P.TeleportStamp = uint16(1);
+		P.MovementStamp = uint16(0xffff);
+		TArray<FACEObjectMotionState> Motions;
+		int32 Positions = 0, Vectors = 0;
+		World.OnMotionUpdate.AddLambda([&](int32, const FACEObjectMotionState& M){ Motions.Add(M); });
+		World.OnPositionUpdate.AddLambda([&](int32, const FACEPosition& Pos){
+			++Positions;
+			TestTrue(TEXT("Repeated create supplies a grounded sequenced position"), Pos.bIsGrounded && Pos.bHasTeleportSequence);
+		});
+		World.OnVectorUpdate.AddLambda([&](int32, const FVector&, const FVector&){ ++Vectors; });
+		FACEBinaryWriter Run;
+		Run.WriteUInt8(0); Run.WriteUInt8(0); Run.WriteUInt16(0x3d);
+		Run.WriteUInt32(6); Run.WriteUInt16(7); Run.WriteFloat(1.5f); Run.Align();
+		P.Movement = Run.GetData();
+		World.HandleGameMessage(ObjectPacket(P));
+		TestTrue(TEXT("Spawn starts an already-running body at its wire rate"),
+			Motions.Num() == 1 && Motions.Last().bRunning && Motions.Last().AnimPlayRate == 1.5f);
+		FACEBinaryWriter Face;
+		Face.WriteUInt8(9); Face.WriteUInt8(0); Face.WriteUInt16(0x3d);
+		Face.WriteUInt32(0); Face.WriteFloat(1); Face.WriteFloat(93);
+		P.Movement = Face.GetData();
+		P.MovementStamp = uint16(0); ++P.Sequence; P.X += 5;
+		World.HandleGameMessage(ObjectPacket(P));
+		TestTrue(TEXT("Wrapped movement stamp turns without taking stale coordinates"),
+			Motions.Num() == 2 && Motions.Last().MovementType == 9 && Motions.Last().MoveToDesiredHeading == 93
+			&& Positions == 0 && Vectors == 1 && World.WorldObjects[P.Guid].Position.Location.X != P.X);
+		World.HandleGameMessage(ObjectPacket(P));
+		TestTrue(TEXT("Duplicate description republishes no physics"), Motions.Num() == 2 && Positions == 0 && Vectors == 1);
+		P.PositionStamp = uint16(9);
+		World.HandleGameMessage(ObjectPacket(P));
+		TestTrue(TEXT("New descriptor feet are delivered independently of heading and velocity"),
+			Positions == 1 && World.WorldObjects[P.Guid].Position.Location.X == P.X && Motions.Num() == 2 && Vectors == 1);
+		++P.Sequence; P.MovementStamp = uint16(1);
+		P.Movement.Pop(); // Truncated heading must not consume its sequence.
+		World.HandleGameMessage(ObjectPacket(P));
+		P.Movement = Face.GetData();
+		World.HandleGameMessage(ObjectPacket(P));
+		TestEqual(TEXT("Valid retransmission after a truncated embedded turn"), Motions.Num(), 3);
+		P.EmptyMovement = true; P.PositionStamp = uint16(10); P.MovementStamp = uint16(2); ++P.Sequence; ++P.X;
+		World.HandleGameMessage(ObjectPacket(P));
+		TestTrue(TEXT("Zero-length movement has no autonomous word before the position"),
+			Positions == 2 && World.WorldObjects[P.Guid].Position.Location.X == P.X && Motions.Num() == 3);
+		P.EmptyMovement = false;
+		World.HandleGameMessage(ObjectPacket(P));
+		TestEqual(TEXT("A description without a movement body leaves that motion number available"), Motions.Num(), 4);
+		++P.Sequence;
+		World.HandleGameMessage(ObjectPacket(P));
+		--P.Sequence; P.MovementStamp = uint16(3);
+		World.HandleGameMessage(ObjectPacket(P));
+		TestEqual(TEXT("Duplicate movement cannot advance the server-control epoch"), Motions.Num(), 5);
+	}
 	// ACSmartBox queues F74C for absent objects and newer incarnations, then
 	// replays after CreateObject. Exercise actual wire parsing and presentation.
 	{
@@ -178,10 +248,10 @@ bool FACECustomObjectReplicationTest::RunTest(const FString&)
 			TestTrue(TEXT("Deferred motion has a created object before presentation"), MotionSession.WorldObjects.Contains(Guid));
 			++Motions;
 		});
-		auto Motion = [&](uint16 Instance, uint16 Sequence, bool Truncated = false)
+		auto Motion = [&](uint16 Instance, uint16 Sequence, bool Truncated = false, uint16 Control = 1)
 		{
 			FACEBinaryWriter W; W.WriteUInt32(ACEOpcode::UpdateMotion); W.WriteUInt32(Object.Guid);
-			W.WriteUInt16(Instance); W.WriteUInt16(Sequence); W.WriteUInt16(1); W.WriteUInt8(0); W.Align();
+			W.WriteUInt16(Instance); W.WriteUInt16(Sequence); W.WriteUInt16(Control); W.WriteUInt8(0); W.Align();
 			W.WriteUInt8(0); W.WriteUInt8(0); W.WriteUInt16(0x3D);
 			if (!Truncated) W.WriteUInt32(0);
 			MotionSession.HandleGameMessage(W.GetData());
@@ -206,6 +276,11 @@ bool FACECustomObjectReplicationTest::RunTest(const FString&)
 		TestEqual(TEXT("Inventory-only stub cannot consume motion"), Motions, 2);
 		MotionSession.HandleGameMessage(ObjectPacket(Object));
 		TestEqual(TEXT("Full physics description releases stub motion"), Motions, 3);
+		Motion(4, 7, false, 0); // From before the current server-control epoch.
+		Motion(4, 7, false, 1);
+		TestEqual(TEXT("A superseded command consumes its movement number without changing direction"), Motions, 3);
+		Motion(4, 8, false, 1);
+		TestEqual(TEXT("The next current command still takes effect"), Motions, 4);
 	}
 	FACESession Session;
 	Session.PlayerGuid = 100;

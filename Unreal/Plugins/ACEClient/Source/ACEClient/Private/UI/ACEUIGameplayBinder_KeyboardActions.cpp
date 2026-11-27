@@ -90,6 +90,13 @@ void UACEUIGameplayBinder::RefreshStackAmountEntry(bool bShow)
 void UACEUIGameplayBinder::PollAdditionalKeyboardActions(APlayerController* PC)
 {
  auto Pressed=[&](const TCHAR* Name){return ACEInputBindings::Pressed(PC,ACEInputBindings::Action(Name));};
+ if(Pressed(TEXT("SelectionPreviousSelection")))
+ {
+  const int32 Previous=Client->GetPreviousSelectedObjectGuid();
+  FACEWorldObject Target;
+  if(Previous && Client->GetWorldObject(Previous,Target) && !TryCompletePendingUseWithTarget(Previous))
+   Client->SelectObject(Previous);
+ }
  if(Pressed(TEXT("SelectionSelf")))
  {if(!TryCompletePendingUseWithTarget(Client->GetPlayerGuid()))Client->SelectObject(Client->GetPlayerGuid());}
  for(const TCHAR* Kind:{TEXT("Player"),TEXT("CompassItem"),TEXT("Fellow")})

@@ -61,6 +61,7 @@ public:
 	void SetGameplayBinder(UACEUIGameplayBinder* InBinder);
 	bool IsGameplayCanvas() const { return GameplayBinder != nullptr; }
 	/** Refresh once per engine frame, from either Slate or VR with the canvas hidden. */
+	void RefreshPresentation();
 	void TickGameplayState(bool bRefreshDesktopHUD = true);
 	void SetCharSelectBinder(UACEUICharSelectBinder* InBinder);
 	void SetCharGenBinder(UACEUICharGenBinder* InBinder) { CharGenBinder=InBinder; SetIsFocusable(InBinder != nullptr); }

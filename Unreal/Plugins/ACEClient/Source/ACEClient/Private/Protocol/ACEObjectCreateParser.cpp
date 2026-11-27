@@ -179,7 +179,9 @@ bool FACEObjectCreateParser::ParsePhysicsData(FACEBinaryReader& Reader, FACEDeco
 	{
 		if (!Reader.CanRead(4)) return false;
 		const uint32 MoveLen = Reader.ReadUInt32();
-		if (MoveLen > MAX_int32 - 4 || !Reader.CanRead(static_cast<int32>(MoveLen) + 4)) return false;
+		if (MoveLen && (Reader.Remaining() < 4 || MoveLen > uint32(Reader.Remaining() - 4))) return false;
+		Out.MovementOffset = Reader.Tell();
+		Out.MovementLength = static_cast<int32>(MoveLen);
 		const int32 MoveStart = Reader.Tell();
 		FACEBinaryReader Motion(Reader.GetData() + MoveStart, static_cast<int32>(MoveLen));
 		// InterpretedState: door On/Off resting pose, corpse Dead hold, etc.
@@ -239,7 +241,7 @@ bool FACEObjectCreateParser::ParsePhysicsData(FACEBinaryReader& Reader, FACEDeco
 			}
 		}
 		Reader.Seek(MoveStart + static_cast<int32>(MoveLen));
-		Reader.ReadUInt32(); // IsAutonomous
+		if (MoveLen) Reader.ReadUInt32(); // IsAutonomous only follows a nonempty buffer.
 	}
 	else if (Flags & AnimationFrame)
 	{

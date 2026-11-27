@@ -826,6 +826,15 @@ namespace ACE.Server.Tests
                 }
             }
             Assert.AreEqual(retailBefore,Messages(retail),"Ordinary compatibility never sends a custom opcode to retail.");
+            var beforeStop = Messages(desktop);
+            typeof(Player).GetField("vrNextPose", PrivateInstance).SetValue(f.Player, DateTime.UtcNow.AddSeconds(1));
+            pose.Flags = 0;
+            ++pose.Sequence; f.Player.HandleVRPose(pose);
+            Assert.IsFalse((bool)typeof(Player).GetProperty("HasActiveVRHands",PrivateInstance).GetValue(f.Player));
+            Assert.AreEqual(beforeStop + 1, Messages(desktop), "Release reaches observers even inside the rate limit.");
+            ++pose.Sequence; f.Player.HandleVRPose(pose);
+            Assert.AreEqual(beforeStop + 1, Messages(desktop), "Repeated release stays rate limited.");
+            Assert.AreEqual(retailBefore, Messages(retail));
         }
 
         [TestMethod]

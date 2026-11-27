@@ -15,14 +15,22 @@ bool FACEPackagingMaterialsTest::RunTest(const FString& Parameters)
 	TStrongObjectPtr<UGameInstance> Instance(NewObject<UGameInstance>());
 	TStrongObjectPtr<UACEDatSubsystem> Dat(NewObject<UACEDatSubsystem>(Instance.Get()));
 	const auto Parents = Dat->GetRuntimeMaterialParents();
-	TestEqual(TEXT("Complete world/UI/filtered VR widget/pointer/particle/sky/comfort shader set"), Parents.Num(), 46);
-	for (const TCHAR* Name : {TEXT("M_ACELandLit_v43"),TEXT("M_ACELegionsSkyAdd_v2"),TEXT("M_ACELegionsSkyAlpha_v1"),TEXT("M_ACESkyColorFill_v8"),
+	TestEqual(TEXT("Complete world/UI/filtered VR widget/pointer/particle/sky/comfort and meadow shader set"), Parents.Num(), 47);
+	for (const TCHAR* Name : {TEXT("M_ACELegionsGrass_v1"),TEXT("M_ACELandLit_v44"),TEXT("M_ACELegionsSkyAdd_v2"),TEXT("M_ACELegionsSkyAlpha_v1"),TEXT("M_ACESkyColorFill_v8"),
 		TEXT("M_ACEFarScenery_v1_0"),TEXT("M_ACEFarScenery_v1_1"),TEXT("M_ACEFarScenery_v1_2"),
 		TEXT("M_ACEFarScenery_v1_3"),TEXT("M_ACEFarScenery_v1_4")})
 		TestTrue(Name,Parents.ContainsByPredicate([Name](const UMaterialInterface* Parent)
 		{
 			return Parent && Parent->GetName()==Name;
 		}));
+	const auto* Grass = LoadObject<UMaterialInterface>(nullptr,TEXT("/Game/ACE/RuntimeMaterials/M_ACELegionsGrass_v1.M_ACELegionsGrass_v1"));
+	if (TestNotNull(TEXT("Cookable grass material"),Grass))
+	{
+		FLinearColor Default;
+		TestTrue(TEXT("Cookable grass supports walking contact and range fade"),Grass->GetBlendMode()==BLEND_Masked &&
+			Grass->GetVectorParameterValue(TEXT("GrassContact"),Default) && Grass->GetVectorParameterValue(TEXT("GrassTrail"),Default) &&
+			Grass->GetVectorParameterValue(TEXT("GrassView"),Default));
+	}
 	const auto* Horizon = LoadObject<UMaterialInterface>(nullptr,TEXT("/Game/ACE/RuntimeMaterials/M_ACESkyColorFill_v8.M_ACESkyColorFill_v8"));
 	float Falloff = -1.f;
 	TestTrue(TEXT("Cookable horizon supports a forecast-dependent fade"), Horizon &&

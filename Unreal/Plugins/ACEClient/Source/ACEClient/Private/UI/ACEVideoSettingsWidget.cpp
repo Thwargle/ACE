@@ -166,12 +166,6 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  UniformDungeonLighting->SetWidgetStyle(RoundToggle); UniformDungeonLighting->SetContent(Label(TEXT("Uniform dungeon lighting"))); Box->AddChild(Fixed(UniformDungeonLighting,272,20));
  UniformDungeonLighting->OnCheckStateChanged.AddDynamic(this,&UACEVideoSettingsWidget::ChangeUniformDungeonLighting);
  UACEHoverTooltipWidget::SetWidgetTooltip(UniformDungeonLighting,FText::FromString(TEXT("Light enclosed dungeon rooms, objects, and characters evenly. Turn off for torchlight and shadows. Changes apply and save immediately.")));
- LegionsSky=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("LegionsSky"));
- LegionsSky->SetWidgetStyle(RoundToggle);
- LegionsSky->SetContent(Label(TEXT("Use imported AC2 sky")));
- UACEHoverTooltipWidget::SetWidgetTooltip(LegionsSky,FText::FromString(TEXT("Show the Legions sky outdoors with AC1 weather and sun and moon positions for your server’s time of day.")));
- Box->AddChild(Fixed(LegionsSky,272,20));
- LegionsSky->OnCheckStateChanged.AddDynamic(this,&UACEVideoSettingsWidget::ChangeLegionsSky);
  LegionsDirectory=WidgetTree->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass(),TEXT("LegionsDatPath"));
  const FLinearColor Bronze(.37f,.23f,.085f), Gold(.78f,.53f,.16f);
  const FSlateRoundedBoxBrush Field(FLinearColor(.018f,.014f,.01f),1.f,Bronze,1.f);
@@ -204,6 +198,27 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  LegionsImport->OnClicked.AddDynamic(this,&UACEVideoSettingsWidget::ImportLegionsSky);
  Box->AddChild(Fixed(ImportRow,272,22));
  LegionsStatus=Label(TEXT("")); LegionsStatus->SetAutoWrapText(true); Box->AddChild(LegionsStatus);
+ LegionsSky=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("LegionsSky"));
+ LegionsSky->SetWidgetStyle(RoundToggle);
+ LegionsSky->SetContent(Label(TEXT("Use imported AC2 sky")));
+ UACEHoverTooltipWidget::SetWidgetTooltip(LegionsSky,FText::FromString(TEXT("Show the Legions sky outdoors with AC1 weather and sun and moon positions for your server’s time of day.")));
+ Box->AddChild(Fixed(LegionsSky,272,20));
+ LegionsSky->OnCheckStateChanged.AddDynamic(this,&UACEVideoSettingsWidget::ChangeLegionsSky);
+ auto ArtworkToggle=[&](const TCHAR* Key,const TCHAR* Caption,const TCHAR* Hint)
+ {
+  auto* Toggle=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),FName(Key));
+  Toggle->SetWidgetStyle(RoundToggle);
+  Toggle->SetContent(Label(Caption));
+  UACEHoverTooltipWidget::SetWidgetTooltip(Toggle,FText::FromString(Hint));
+  Box->AddChild(Fixed(Toggle,272,20));
+  Toggle->OnCheckStateChanged.AddDynamic(this,&UACEVideoSettingsWidget::ChangeLegionsEnvironment);
+  LegionsEnvironmentChecks.Add(Key,Toggle);
+ };
+ ArtworkToggle(TEXT("LegionsGround"),TEXT("AC2 ground textures"),TEXT("Replace mapped rock, dirt, sand, marsh, snow and ice textures as the landscape streams back in."));
+ ArtworkToggle(TEXT("LegionsGrass"),TEXT("AC2 grass textures"),TEXT("Use Legions grass on grassy terrain."));
+ ArtworkToggle(TEXT("LegionsGroundCover"),TEXT("AC2 interactive grass"),TEXT("Draw grass tufts outdoors that bend as you walk through them."));
+ ArtworkToggle(TEXT("LegionsBoulders"),TEXT("AC2 boulder textures"),TEXT("Use Legions stone textures on matching outdoor boulders."));
+ ArtworkToggle(TEXT("LegionsTrees"),TEXT("AC2 tree models"),TEXT("Replace supported outdoor tree models and their bark and leaves."));
  ShowFrameRate=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("ShowFrameRate"));
  ShowFrameRate->SetWidgetStyle(RoundToggle);ShowFrameRate->SetContent(Label(TEXT("Show FPS overlay")));Box->AddChild(Fixed(ShowFrameRate,272,20));
  auto AddFarTerrainCheck = [&](const TCHAR* Key, const TCHAR* Caption, const TCHAR* Tooltip)
@@ -403,12 +418,7 @@ void UACEVideoSettingsWidget::ResetVideo()
  CursorScaleLabel->SetText(FText::FromString(FString::Printf(TEXT("%d%%"),FMath::RoundToInt(CursorScale->GetValue()*100.f))));
  ObjectGlow->SetIsChecked(ACERuntimeOptions::Get(TEXT("ObjectGlow"))>.5f);
  UniformDungeonLighting->SetIsChecked(ACERuntimeOptions::Get(TEXT("UniformDungeonLighting"))>.5f);
- bool NeedsWeather=false;
- const bool HasSky=ACELegionsSky::HasCache(&NeedsWeather);
- if (NeedsWeather && LegionsImport->GetIsEnabled())
-  LegionsStatus->SetText(FText::FromString(TEXT("Reimport your Legions DAT to add storm skies and lighting.")));
- LegionsSky->SetIsEnabled(HasSky);
- LegionsSky->SetIsChecked(HasSky && ACERuntimeOptions::LegionsSky());
+ RefreshLegionsOptions();
  ConstrainUIWindows->SetIsChecked(ACERuntimeOptions::Get(TEXT("ConstrainUIWindows"))>.5f);
  RefreshFrameRateOption();
  ChatFontFace->SetSelectedIndex(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontFace"))));
@@ -594,6 +604,40 @@ void UACEVideoSettingsWidget::ChangeLegionsSky(bool bEnabled)
  ACERuntimeOptions::Apply();
 }
 
+void UACEVideoSettingsWidget::RefreshLegionsOptions()
+{
+ TGuardValue<bool> Guard(LoadingSettings,true);
+ bool HasEnvironment=false, HasCards=false, HasDerethTrees=false, HasGroundDetail=false, HasBoulders=false;
+ const bool HasSky=ACELegionsSky::HasCache(nullptr,&HasEnvironment,&HasCards,&HasDerethTrees,&HasGroundDetail,&HasBoulders);
+ LegionsSky->SetIsEnabled(HasSky);
+ LegionsSky->SetIsChecked(HasSky && ACERuntimeOptions::LegionsSky());
+ for (const auto& Choice : LegionsEnvironmentChecks)
+ {
+  const bool Available=Choice.Key==TEXT("LegionsGroundCover") ? HasCards : Choice.Key==TEXT("LegionsBoulders") ? HasBoulders : HasEnvironment;
+  Choice.Value->SetIsEnabled(Available);
+  Choice.Value->SetIsChecked(Available && ACERuntimeOptions::Get(*Choice.Key)>.5f);
+ }
+ if (HasEnvironment && !HasCards)
+  LegionsStatus->SetText(FText::FromString(TEXT("Reimport your Legions DAT to add interactive grass.")));
+ else if (HasEnvironment && !HasDerethTrees)
+  LegionsStatus->SetText(FText::FromString(TEXT("Reimport your Legions DAT to add trees across Dereth.")));
+ else if (HasDerethTrees && !HasGroundDetail)
+  LegionsStatus->SetText(FText::FromString(TEXT("Reimport your Legions DAT to add ground detail.")));
+ else if (HasGroundDetail && !HasBoulders)
+  LegionsStatus->SetText(FText::FromString(TEXT("Reimport your Legions DAT to add boulder textures.")));
+ else if (HasSky && !HasEnvironment)
+  LegionsStatus->SetText(FText::FromString(TEXT("Reimport your Legions DAT to add outdoor textures and trees.")));
+}
+
+void UACEVideoSettingsWidget::ChangeLegionsEnvironment(bool)
+{
+ if (LoadingSettings) return;
+ for (const auto& Choice : LegionsEnvironmentChecks)
+  if (Choice.Value->GetIsEnabled()) ACERuntimeOptions::Set(*Choice.Key,Choice.Value->IsChecked()?1.f:0.f);
+ ACERuntimeOptions::Apply();
+ LegionsStatus->SetText(FText::FromString(TEXT("Outdoor artwork updated.")));
+}
+
 void UACEVideoSettingsWidget::BrowseLegionsDat()
 {
 #if PLATFORM_WINDOWS
@@ -652,7 +696,7 @@ void UACEVideoSettingsWidget::ImportLegionsSky()
  LegionsImport->SetIsEnabled(false);
  LegionsDirectory->SetIsEnabled(false);
  if (LegionsBrowse) LegionsBrowse->SetIsEnabled(false);
- LegionsStatus->SetText(FText::FromString(TEXT("Importing sky from your AC2 DATs…")));
+ LegionsStatus->SetText(FText::FromString(TEXT("Importing artwork from your AC2 DATs…")));
  const FString Destination=ACELegionsSky::CachePath();
  Async(EAsyncExecution::ThreadPool,[Weak=TWeakObjectPtr<UACEVideoSettingsWidget>(this),Input,Destination]()
  {
@@ -660,17 +704,18 @@ void UACEVideoSettingsWidget::ImportLegionsSky()
   const bool Ok=ACELegionsSky::Import(Input,Destination,Error);
   AsyncTask(ENamedThreads::GameThread,[Weak,Ok,Error=MoveTemp(Error)]() mutable
   {
+   if (Ok) ACERuntimeOptions::Apply();
    if (auto* Widget=Weak.Get())
    {
     Widget->LegionsImport->SetIsEnabled(true);
     Widget->LegionsDirectory->SetIsEnabled(true);
     if (Widget->LegionsBrowse) Widget->LegionsBrowse->SetIsEnabled(true);
-    if (Ok) Error=ACERuntimeOptions::LegionsSky() ? TEXT("Imported. The AC2 sky is enabled.") : TEXT("Imported. Select “Use imported AC2 sky” to enable it.");
-    Widget->LegionsStatus->SetText(FText::FromString(Error));
+    Widget->LegionsStatus->SetText(FText::FromString(Ok ? TEXT("Imported. Choose the artwork to use.") : Error));
     if (Ok)
     {
-     Widget->LegionsSky->SetIsEnabled(true);
-     Widget->LegionsSky->SetIsChecked(ACERuntimeOptions::LegionsSky());
+     Widget->RefreshLegionsOptions();
+     if (!Widget->LegionsEnvironmentChecks.FindChecked(TEXT("LegionsTrees"))->GetIsEnabled())
+      Widget->LegionsStatus->SetText(FText::FromString(TEXT("Sky imported. These DATs lack supported outdoor artwork.")));
     }
    }
   });
@@ -735,6 +780,8 @@ void UACEVideoSettingsWidget::DefaultsVideo()
  ObjectGlow->SetIsChecked(true); ChangeObjectGlow(true);
  UniformDungeonLighting->SetIsChecked(false); ChangeUniformDungeonLighting(false);
  LegionsSky->SetIsChecked(false); ChangeLegionsSky(false);
+ for (auto& Choice : LegionsEnvironmentChecks) Choice.Value->SetIsChecked(false);
+ ChangeLegionsEnvironment(false);
  ConstrainUIWindows->SetIsChecked(true);
  ShowFrameRate->SetIsChecked(false);
  ChatFontFace->SetSelectedIndex(2); ChatFontSize->SetSelectedIndex(1);

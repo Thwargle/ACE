@@ -287,8 +287,13 @@ void UACEVRMenu::Execute(FName Action)
     bDirty=true;
 }
 
-void UACEVRComponent::OpenPluginManager()
+void UACEVRComponent::TogglePluginManager()
 {
+    if(bInventoryOpen && !bUseDesktopMenu && GameplayMenu && GameplayMenu->GetPage()=="Plugins")
+    {
+        ToggleInventory();
+        return;
+    }
     bUseDesktopMenu=false;
     if(!bInventoryOpen)ToggleInventory();
     if(GameplayMenu)GameplayMenu->OpenPage("Plugins");

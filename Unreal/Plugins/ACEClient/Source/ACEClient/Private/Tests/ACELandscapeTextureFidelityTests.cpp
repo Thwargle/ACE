@@ -71,7 +71,7 @@ bool FACELandscapeTextureFidelityTest::RunTest(const FString& Parameters)
 	for (int32 Y = 0; Y < 512; ++Y)
 		for (int32 X = 0; X < 512; ++X)
 			Surface.Pixels[Y * 512 + X] = FColor(X & 255, Y & 255, (X + Y) & 255, 255);
-	Builder.TerrainSurfCache.Add(0, Surface);
+	Builder.TerrainSurfCache.Add(0, MakeShared<FACEDatDecodedSurface, ESPMode::ThreadSafe>(Surface));
 	Builder.TerrainTilingCache.Add(0, 2);
 	TArray<FColor> Pixels;
 	int32 Width = 0, Height = 0;

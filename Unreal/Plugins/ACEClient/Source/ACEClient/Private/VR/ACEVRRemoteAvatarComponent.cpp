@@ -32,26 +32,26 @@ void UACEVRRemoteAvatarComponent::TickComponent(float Dt, ELevelTick Type, FActo
 	auto* GI = GetWorld()->GetGameInstance();
 	auto* Client = GI ? GI->GetSubsystem<UACEClientSubsystem>() : nullptr;
 	auto* Dat = GI ? GI->GetSubsystem<UACEDatSubsystem>() : nullptr;
-	if (!Entity || !App || !App->GetMeshRoot() || !Client || !Dat) return;
+	if (!Entity) return;
 	FACEVRPose Pose;
-	const auto Session = Client->GetSession();
+	const auto Session = Client ? Client->GetSession() : nullptr;
 	int32 Left = -1, Right = -1; FTransform LeftHold, RightHold, HeadBind;
-	const float Scale = App->WorldScale;
-	const bool Valid = Session && Session->GetVRPose(Entity->GetACEGuid(), Pose)
+	const float Scale = App ? App->WorldScale : 1.f;
+	const bool Valid = App && App->GetMeshRoot() && Dat && Session && Session->GetVRPose(Entity->GetACEGuid(), Pose)
 		&& Dat->GetHoldingLocation(App->GetSetupId(), 8, Left, LeftHold, Scale)
 		&& Dat->GetHoldingLocation(App->GetSetupId(), 1, Right, RightHold, Scale)
 		&& Left == 12 && Right == 15 && App->GetPartBindTransform(16, HeadBind);
 	if (!Valid)
 	{
 		Entity->EndRemoteVRRoot();
-		if (bApplied)
+		if (bApplied && App)
 		{
 			App->bVRPoseControlled = false; App->ResetVRLowerBody();
-			App->GetMeshRoot()->SetRelativeTransform(RetailRoot);
+			if (App->GetMeshRoot()) App->GetMeshRoot()->SetRelativeTransform(RetailRoot);
 			for (int32 I = 0; I < App->GetPartCount(); ++I)
 			{ FTransform Bind; if (auto* Part = App->GetPartMesh(I); Part && App->GetPartBindTransform(I, Bind)) Part->SetRelativeTransform(Bind); }
-			bApplied = false;
 		}
+		bApplied = false;
 		return;
 	}
 	if (!bApplied) RetailRoot = App->GetMeshRoot()->GetRelativeTransform();
@@ -60,6 +60,7 @@ void UACEVRRemoteAvatarComponent::TickComponent(float Dt, ELevelTick Type, FActo
 	// updates at render cadence, so apply the sampled root here with the limbs,
 	// including when no new retail motion packet has woken the actor yet.
 	if (Pose.Version==2) Entity->ApplyRemoteVRRoot(Pose,Dt);
+	else Entity->EndRemoteVRRoot();
 	FTransform Tracked[3];
 	for (int32 I = 0; I < 3; ++I)
 		Tracked[I] = FTransform(Pose.Poses[I].GetRotation(), Entity->GetActorLocation() + Pose.Poses[I].GetLocation() * Scale);

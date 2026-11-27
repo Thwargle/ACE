@@ -1,4 +1,5 @@
 #include "Sky/ACELegionsSkyRenderer.h"
+#include "Sky/ACELegionsEnvironment.h"
 #include "GameFramework/Actor.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "ProceduralMeshComponent.h"
@@ -39,29 +40,8 @@ bool FACELegionsSkyRenderer::Build(AActor& Owner, ACELegionsSky::FBackdrop&& Imp
 	for (const auto& Pair : Imported.Images)
 	{
 		const auto& Image = Pair.Value;
-		auto* Tex = UTexture2D::CreateTransient(Image.Width, Image.Height, Image.Format);
-		if (!Tex)
-			return false;
-		Tex->SRGB = true;
-		Tex->AddressX = TA_Wrap;
-		Tex->AddressY = TA_Wrap;
-		Tex->Filter = TF_Trilinear;
-		Tex->NeverStream = true;
-		auto& Mips = Tex->GetPlatformData()->Mips;
-		for (int32 I = 0; I < Image.Mips.Num(); ++I)
-		{
-			if (I > 0)
-				Mips.Add(new FTexture2DMipMap());
-			auto& Mip = Mips[I];
-			Mip.SizeX = FMath::Max(1, Image.Width >> I);
-			Mip.SizeY = FMath::Max(1, Image.Height >> I);
-			const auto& Pixels = Image.Mips[I];
-			const int64 Bytes = Pixels.Num();
-			Mip.BulkData.Lock(LOCK_READ_WRITE);
-			FMemory::Memcpy(Mip.BulkData.Realloc(Bytes), Pixels.GetData(), Bytes);
-			Mip.BulkData.Unlock();
-		}
-		Tex->UpdateResource();
+		auto* Tex = ACELegionsSky::CreateImportedTexture(Image);
+		if (!Tex) return false;
 		Textures.Add(Pair.Key, Tex);
 	}
 	Imported.Images.Empty();
@@ -98,7 +78,12 @@ bool FACELegionsSkyRenderer::Build(AActor& Owner, ACELegionsSky::FBackdrop&& Imp
 			Mesh->CreateMeshSection(I, L.Vertices, S.Indices, {}, L.UVs, {}, {}, false);
 			auto* Mid = UMaterialInstanceDynamic::Create(S.Additive ? Add : Alpha, Mesh);
 			Mid->SetTextureParameterValue(TEXT("ACETexture"), Textures.FindChecked(S.Texture));
-			Mid->SetVectorParameterValue(TEXT("MaterialFactor"), S.Tint);
+			// The moon's second card is a grayscale light falloff. Preserve its
+			// DAT stage gain and source alpha; color the resulting additive light
+			// after decoding the ramp. Tinting the faint texels before the sRGB
+			// conversion crushes the outer edge against the night sky.
+			const bool MoonGlow = L.Setup == MoonSetup && S.Additive;
+			Mid->SetVectorParameterValue(TEXT("MaterialFactor"), MoonGlow ? FLinearColor(1,1,1,S.Tint.A) : S.Tint);
 			Mid->SetVectorParameterValue(TEXT("StageOps"), S.StageOps);
 			Mid->SetVectorParameterValue(TEXT("UVOffset"), FLinearColor(S.Offset[0].X,S.Offset[0].Y,S.Offset[1].X,S.Offset[1].Y));
 			// CPU supplies wrapped offsets from the synchronized sky clock.
@@ -352,7 +337,15 @@ FLinearColor FACELegionsSkyRenderer::Update(float Time, const FACELegionsSkyFram
 					ACESkyMotion::Offset(Frame.Seconds,Velocity.Y,Section.Offset[Stage].Y));
 			}
 			Mid->SetVectorParameterValue(TEXT("UVOffset"),FLinearColor(Offset[0].X,Offset[0].Y,Offset[1].X,Offset[1].Y));
-			Mid->SetVectorParameterValue(TEXT("SkyTint"), Tint);
+			FLinearColor SectionTint = Tint;
+			if (L.Setup == MoonSetup && Section.Additive)
+			{
+				// Match the soft, cool rim in the AC2 night frame. The display
+				// response of the authored light color weights the linear emission.
+				SectionTint *= Section.Tint.ToFColorSRGB().ReinterpretAsLinear();
+				SectionTint.A = Tint.A; // source alpha already lives in MaterialFactor
+			}
+			Mid->SetVectorParameterValue(TEXT("SkyTint"), SectionTint);
 			if (L.Setup == SunSetup && L.Sections[J].Additive)
 				Mid->SetScalarParameterValue(TEXT("SunHorizonGlow"),
 					ClearDaylight * (1.f - FMath::SmoothStep(0.f,.65f,float(Frame.Sun.Direction.Z))));

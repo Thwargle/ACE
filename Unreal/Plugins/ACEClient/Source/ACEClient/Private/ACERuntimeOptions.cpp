@@ -1,4 +1,5 @@
 #include "ACERuntimeOptions.h"
+#include "Sky/ACELegionsEnvironment.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/App.h"
 #include "HAL/IConsoleManager.h"
@@ -42,6 +43,7 @@ float Get(const TCHAR* Key)
     float Legacy=1.f;
     if(GConfig->GetFloat(TEXT("ACE.Presentation"),TEXT("FieldOfView"),Legacy,GGameUserSettingsIni)) V=90.f*Legacy;
    }
+   else if (FCString::Strcmp(Key,TEXT("LegionsGroundCover"))==0) V=Get(TEXT("LegionsGrass"));
    else if (FCString::Strcmp(Key,TEXT("ScreenBrightness"))==0)
    {
     // Old values were gamma, not an output multiplier. Preserve the neutral
@@ -67,6 +69,7 @@ void Set(const TCHAR* Key,float Value)
 }
 void Apply()
 {
+ ACELegionsSky::RefreshEnvironment();
  bLegionsSky=Get(TEXT("LegionsSky"))>.5f;
  bClassicMovement=Get(TEXT("ClassicMovement"))>.5f;
  bStationaryMissileAttacks=Get(TEXT("StationaryMissileAttacks"))>.5f;

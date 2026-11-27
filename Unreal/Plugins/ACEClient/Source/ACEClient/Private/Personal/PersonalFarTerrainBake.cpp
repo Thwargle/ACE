@@ -1,4 +1,5 @@
 #include "Personal/PersonalFarTerrainBake.h"
+#include "Sky/ACELegionsEnvironment.h"
 #include "Dat/ACEDatDatabase.h"
 #include "Dat/ACEDatFileTypes.h"
 #include "Dat/ACEDatTextureResolver.h"
@@ -21,11 +22,11 @@ namespace
 	 * The bytes are averaged as they are, like the mips of loaded terrain
 	 * (FACEDatTextureResolver::BuildOpaqueMip), so both look the same from far away.
 	 */
-	bool AverageBakedColor(FACELandblockMeshBuilder& Builder, uint32 PalCode, FColor& Out)
+	bool AverageBakedColor(FACELandblockMeshBuilder& Builder, uint32 PalCode, FColor& Out, int32 TileCells = 1)
 	{
 		TArray<FColor> Pixels;
 		int32 Width = 0, Height = 0;
-		if (!Builder.BakePCode(PalCode, Pixels, Width, Height) || Pixels.Num() != Width * Height || Pixels.Num() == 0)
+		if (!Builder.BakePCode(PalCode, Pixels, Width, Height,TileCells) || Pixels.Num() != Width * Height || Pixels.Num() == 0)
 		{
 			return false;
 		}
@@ -225,7 +226,7 @@ bool FPersonalFarTerrainBake::Load(const FString& Path, uint64 Key)
 
 namespace PersonalFarTerrainBake
 {
-uint64 SourceKey(const FString& DatDirectory)
+uint64 SourceKey(const FString& DatDirectory, ACELegionsSky::FEnvironmentPtr Art)
 {
 	uint32 Hash = FarTerrainCacheVersion;
 	bool bOk = true;
@@ -233,7 +234,7 @@ uint64 SourceKey(const FString& DatDirectory)
 	const uint32 CellHash = Hash;
 	HashDatFile(DatDirectory / TEXT("client_portal.dat"), Hash, bOk);
 	const uint64 Key = (uint64(CellHash) << 32) | Hash;
-	return bOk ? FMath::Max<uint64>(Key, 1) : 0;
+	return bOk ? Art->TerrainCacheKey(FMath::Max<uint64>(Key, 1)) : 0;
 }
 
 FString CachePath(uint64 Key)
@@ -241,7 +242,7 @@ FString CachePath(uint64 Key)
 	return FPaths::ProjectSavedDir() / TEXT("Personal") / FString::Printf(TEXT("FarTerrain_%016llX.bin"), Key);
 }
 
-bool Build(const FString& DatDirectory, FPersonalFarTerrainBake& Out)
+bool Build(const FString& DatDirectory, FPersonalFarTerrainBake& Out, ACELegionsSky::FEnvironmentPtr Art)
 {
 	const double Start = FPlatformTime::Seconds();
 	// Own handles: the game's cell DAT is not public, and its reads share one lock
@@ -272,14 +273,15 @@ bool Build(const FString& DatDirectory, FPersonalFarTerrainBake& Out)
 	int32 TypesFound = 0;
 	{
 		FACEDatTextureResolver Textures(&Portal, nullptr);
-		FACELandblockMeshBuilder Builder(&Portal, &Cell, &Textures);
+		FACELandblockMeshBuilder Builder(&Portal, &Cell, &Textures, nullptr, Art);
 		if (!Builder.EnsureTexMerge())
 		{
 			return false;
 		}
 		for (int32 Type = 0; Type < FPersonalFarTerrainBake::RoadCode; ++Type)
 		{
-			if (AverageBakedColor(Builder, FACELandblockMeshBuilder::GetPalCode(0, 0, 0, 0, Type, Type, Type, Type), Out.Palette[Type]))
+			const uint32 Code = FACELandblockMeshBuilder::GetPalCode(0,0,0,0,Type,Type,Type,Type);
+			if (AverageBakedColor(Builder,Code,Out.Palette[Type],Art->TerrainTileCells(Code)))
 			{
 				++TypesFound;
 			}
@@ -324,9 +326,9 @@ bool Build(const FString& DatDirectory, FPersonalFarTerrainBake& Out)
 	return true;
 }
 
-bool LoadOrBuild(const FString& DatDirectory, FPersonalFarTerrainBake& Out)
+bool LoadOrBuild(const FString& DatDirectory, FPersonalFarTerrainBake& Out, ACELegionsSky::FEnvironmentPtr Art)
 {
-	const uint64 Key = SourceKey(DatDirectory);
+	const uint64 Key = SourceKey(DatDirectory, Art);
 	if (Key != 0)
 	{
 		const FString Path = CachePath(Key);
@@ -334,7 +336,7 @@ bool LoadOrBuild(const FString& DatDirectory, FPersonalFarTerrainBake& Out)
 		{
 			return true;
 		}
-		if (Build(DatDirectory, Out))
+		if (Build(DatDirectory, Out, Art))
 		{
 			// A failed save only means the next start builds again.
 			Out.Save(Path, Key);
@@ -347,10 +349,10 @@ bool LoadOrBuild(const FString& DatDirectory, FPersonalFarTerrainBake& Out)
 
 TFuture<FBakePtr> LoadOrBuildAsync(const FString& DatDirectory)
 {
-	return Async(EAsyncExecution::ThreadPool, [DatDirectory]() -> FBakePtr
+	return Async(EAsyncExecution::ThreadPool, [DatDirectory, Art = ACELegionsSky::ActiveEnvironment()]() -> FBakePtr
 	{
 		auto Bake = MakeShared<FPersonalFarTerrainBake, ESPMode::ThreadSafe>();
-		if (!LoadOrBuild(DatDirectory, *Bake))
+		if (!LoadOrBuild(DatDirectory, *Bake, Art))
 		{
 			return FBakePtr();
 		}

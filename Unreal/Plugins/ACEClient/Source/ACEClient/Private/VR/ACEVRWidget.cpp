@@ -23,26 +23,25 @@
 
 namespace
 {
-#if PLATFORM_ANDROID
 	// Multiple menu instances can exist while a transfer is being imported.
 	struct FQuestSkyMenu
 	{
 		bool HasSource = false;
 		bool HasCache = false;
 		bool Importing = false;
-		bool NeedsWeather = false;
+		bool HasEnvironment = false, HasGrassCards = false, HasBoulders = false;
 		FString Message;
 
 		void Refresh()
 		{
 			HasSource = IFileManager::Get().FileExists(*ACELegionsSky::StagedPath(ACELegionsSky::CachePath()));
-			HasCache = ACELegionsSky::HasCache(&NeedsWeather);
+			HasCache = ACELegionsSky::HasCache(nullptr, &HasEnvironment, &HasGrassCards, nullptr, nullptr, &HasBoulders);
 		}
 		void StartImport()
 		{
 			if (!HasSource || Importing) return;
 			Importing = true;
-			Message = TEXT("Importing your AC2 sky...");
+			Message = TEXT("Importing your AC2 artwork...");
 			Async(EAsyncExecution::ThreadPool, [this, Destination = ACELegionsSky::CachePath()]()
 			{
 				FString Error;
@@ -51,10 +50,10 @@ namespace
 				{
 					Importing = false;
 					Refresh();
-					Message = Success ? TEXT("AC2 sky installed.") : Error;
+					Message = Success ? (HasEnvironment ? TEXT("Imported. Choose the artwork to use.") :
+						TEXT("Sky imported. Transfer a fresh Legions DAT to add outdoor artwork.")) : Error;
 					if (Success)
 					{
-						ACERuntimeOptions::Set(TEXT("LegionsSky"), 1.f);
 						ACERuntimeOptions::Apply();
 					}
 				});
@@ -62,7 +61,6 @@ namespace
 		}
 	};
 	FQuestSkyMenu QuestSky;
-#endif
 	const FLinearColor MenuGold(.66f, .44f, .16f);
 	const FLinearColor MenuText(.90f, .83f, .66f);
 	const FButtonStyle& RetailButtonStyle()
@@ -233,7 +231,6 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 		Scroll->AddSlot().Padding(0,6)[Button(TAttribute<FText>::CreateLambda([]()
 			{ return FText::FromString(ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f ? TEXT("FPS overlay: On") : TEXT("FPS overlay: Off")); }),
 			[](){ACERuntimeOptions::Set(TEXT("ShowFrameRate"),ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f ? 0.f : 1.f);ACERuntimeOptions::Apply();})];
-#if PLATFORM_ANDROID
 		QuestSky.Refresh();
 		auto SkyToggle = Button(TAttribute<FText>::CreateLambda([]()
 		{
@@ -245,20 +242,57 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 		});
 		SkyToggle->SetEnabled(TAttribute<bool>::CreateLambda([](){ return QuestSky.HasCache && !QuestSky.Importing; }));
 		Scroll->AddSlot().Padding(0,6)[SkyToggle];
-		auto ImportSky = Button(Literal(TEXT("Import and use AC2 sky")), [](){ QuestSky.StartImport(); });
+		const struct { const TCHAR* Key; const TCHAR* Caption; } ArtworkChoices[] = {
+			{TEXT("LegionsGround"), TEXT("AC2 ground textures")},
+			{TEXT("LegionsGrass"), TEXT("AC2 grass textures")},
+			{TEXT("LegionsGroundCover"), TEXT("AC2 interactive grass")},
+			{TEXT("LegionsTrees"), TEXT("AC2 tree models")},
+			{TEXT("LegionsBoulders"), TEXT("AC2 boulder textures")}
+		};
+		for (const auto& Choice : ArtworkChoices)
+		{
+			const TCHAR* Key = Choice.Key;
+			const TCHAR* Caption = Choice.Caption;
+			auto Toggle = Button(TAttribute<FText>::CreateLambda([Key,Caption]()
+			{
+				return FText::FromString(FString::Printf(TEXT("%s: %s"), Caption, ACERuntimeOptions::Get(Key)>.5f ? TEXT("On") : TEXT("Off")));
+			}), [Key]()
+			{
+				ACERuntimeOptions::Set(Key,ACERuntimeOptions::Get(Key)>.5f ? 0.f : 1.f);
+				ACERuntimeOptions::Apply();
+				QuestSky.Message=TEXT("Outdoor artwork updated.");
+			});
+			Toggle->SetEnabled(TAttribute<bool>::CreateLambda([Key]()
+			{
+				if (QuestSky.Importing) return false;
+				if (FCString::Strcmp(Key,TEXT("LegionsGroundCover"))==0) return QuestSky.HasGrassCards;
+				if (FCString::Strcmp(Key,TEXT("LegionsBoulders"))==0) return QuestSky.HasBoulders;
+				return QuestSky.HasEnvironment;
+			}));
+			Scroll->AddSlot().Padding(0,6)[Toggle];
+		}
+#if PLATFORM_ANDROID
+		auto ImportSky = Button(Literal(TEXT("Import AC2 artwork")), [](){ QuestSky.StartImport(); });
 		ImportSky->SetVisibility(TAttribute<EVisibility>::CreateLambda([](){ return QuestSky.HasSource ? EVisibility::Visible : EVisibility::Collapsed; }));
 		ImportSky->SetEnabled(TAttribute<bool>::CreateLambda([](){ return !QuestSky.Importing; }));
 		Scroll->AddSlot().Padding(0,4)[ImportSky];
+#endif
 		Scroll->AddSlot()[Text(TAttribute<FText>::CreateLambda([]()
 		{
 			if (!QuestSky.Message.IsEmpty()) return FText::FromString(QuestSky.Message);
-			if (QuestSky.NeedsWeather && !QuestSky.HasSource)
-				return FText::FromString(TEXT("Transfer your Legions DAT again to add storm skies."));
+			if (QuestSky.HasEnvironment && !QuestSky.HasGrassCards) return FText::FromString(TEXT("Import a fresh Legions DAT to add interactive grass."));
+			if (QuestSky.HasEnvironment && !QuestSky.HasBoulders) return FText::FromString(TEXT("Import a fresh Legions DAT to add boulder textures."));
+#if PLATFORM_ANDROID
+			if (QuestSky.HasCache && !QuestSky.HasEnvironment && !QuestSky.HasSource)
+				return FText::FromString(TEXT("Transfer your Legions DAT again to add outdoor textures and trees."));
 			if (!QuestSky.HasCache && !QuestSky.HasSource)
 				return FText::FromString(TEXT("On your PC, run Install-AC2-Sky.cmd to transfer your sky."));
+#else
+			if (!QuestSky.HasEnvironment)
+				return FText::FromString(TEXT("Import your Legions DAT in Graphics Options."));
+#endif
 			return FText::GetEmpty();
 		}), 18)];
-#endif
 		Scroll=Sections[0];
 		Scroll->AddSlot().Padding(0, 6)[Button(TAttribute<FText>::CreateLambda([Rig]()
 			{ return FText::FromString(Rig.IsValid() && Rig->GetSettings()->bMatchCharacterHeight ? TEXT("Eye height: Character") : TEXT("Eye height: Physical")); }),

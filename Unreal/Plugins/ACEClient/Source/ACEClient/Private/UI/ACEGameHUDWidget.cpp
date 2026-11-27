@@ -1841,8 +1841,7 @@ void UACEGameHUDWidget::OnQuestsClicked() { SetPanelPage(EACEHudPanelPage::Quest
 void UACEGameHUDWidget::OnOptionsClicked() { SetPanelPage(EACEHudPanelPage::Options); }
 void UACEGameHUDWidget::OnHelpClicked()
 {
-	AppendChatLine(TEXT("Help: use the toolbar icons for Character, Spellbook, Map, Inventory, and Options."), ChatSystemColor);
-	SetPanelPage(EACEHudPanelPage::Options);
+	if (auto* PC = Cast<AACEPlayerController>(GetOwningPlayer())) PC->OpenClientHelp();
 }
 
 void UACEGameHUDWidget::ShowIndicatorPanel(int32 IndicatorIndex)

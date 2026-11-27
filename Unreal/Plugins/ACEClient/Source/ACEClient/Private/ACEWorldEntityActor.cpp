@@ -174,7 +174,12 @@ AACEWorldEntityActor::AACEWorldEntityActor()
 
 void AACEWorldEntityActor::InitializeFromObject(const FACEWorldObject& Object, float InWorldScale, bool bApplyDatAppearance)
 {
-	const bool ApplyPlacement = !Object.bAppearanceOnlyUpdate || ACEGuid != Object.Guid;
+	// Repeated creature descriptions deliver position and vector changes through
+	// their own timestamped events. A queued descriptor can be older than either.
+	const bool ExistingRemoteBody = bHaveRemotePredict && ACEGuid == Object.Guid && !ParentGuid && !bAttachedToParent
+		&& Object.bHasServerPhysicsDescription && !Object.bIsSelf && !Object.IsCorpse()
+		&& (Object.bIsPlayer || (Object.ItemType & ACEItemType::Creature));
+	const bool ApplyPlacement = (!Object.bAppearanceOnlyUpdate || ACEGuid != Object.Guid) && !ExistingRemoteBody;
 	ACEGuid = Object.Guid;
 	ACEName = Object.Name;
 	SetupId = Object.SetupId;
@@ -191,7 +196,7 @@ void AACEWorldEntityActor::InitializeFromObject(const FACEWorldObject& Object, f
 	bIsHouseHook = Object.bIsHouseHook;
 	InitialMotionCommand = Object.InitialMotionCommand;
 	ObjectDescriptionFlags = Object.ObjectDescriptionFlags;
-	bAllowsDeadPoseInteraction = Object.AllowsDeadPoseInteraction();
+	bRemoteUseNoncombatant = Object.AllowsDeadPoseInteraction();
 	PhysicsState = Object.PhysicsState;
 	UseRadius = Object.UseRadius;
 	bIsSelf = Object.bIsSelf;
@@ -1181,7 +1186,7 @@ bool AACEWorldEntityActor::ResolveFacingTarget(int32 TargetGuid, FVector& Locati
 
 bool AACEWorldEntityActor::ResolveMovementTarget(int32 TargetGuid, FVector& Location, float& Radius, float& Height)
 {
-	if (!ResolveFacingTarget(TargetGuid, Location)) return false;
+	if (!ResolveFacingTarget(TargetGuid, Location, false)) return false;
 	auto* GI = GetGameInstance();
 	FACEWorldObject Target;
 	if (GI && GI->GetSubsystem<UACEClientSubsystem>()->GetWorldObject(TargetGuid, Target))
@@ -1258,8 +1263,20 @@ FVector AACEWorldEntityActor::AdvanceRemoteMoveTo(float Seconds)
 		FACEPosition P; P.CellId = RemoteMotion.MoveToCellId; P.Location = RemoteMotion.MoveToLocalAce;
 		Target = P.ToUnrealLocation(WorldScale);
 	}
-	if (RemoteMotion.MovementType == 6 && RemoteMotion.MoveToTargetGuid)
-		HaveTarget = ResolveMovementTarget(RemoteMotion.MoveToTargetGuid, Target, TargetRadius, TargetHeight) || HaveTarget;
+	if (RemoteMotion.MovementType == 6)
+	{
+		if (!ResolveMovementTarget(RemoteMotion.MoveToTargetGuid, Target, TargetRadius, TargetHeight))
+		{
+			// TargetManager cancels an established pursuit when the body leaves.
+			RemoteMotion.MovementType = 0;
+			RemoteMotion.ForwardCommand = ACEMotion::Ready;
+			RemoteMotion.bMoving = false;
+			RemoteMotion.Forward = RemoteMotion.ForwardUnitsPerSecond = 0.f;
+			SetRemoteLocomotion(0.f, 0.f, false, 1.f);
+			return FVector::ZeroVector;
+		}
+		HaveTarget = true;
+	}
 	if (!HaveTarget) return FVector::ZeroVector;
 
 	const FVector Offset = Target - RemotePredictLocation;
@@ -1361,7 +1378,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 	Super::Tick(DeltaTime);
 	FACEVRPose VRRoot;
 	const auto* VRClient=GetWorld()->GetGameInstance() ? GetWorld()->GetGameInstance()->GetSubsystem<UACEClientSubsystem>() : nullptr;
-	const bool HasVRRoot=bIsPlayer && !bIsSelf && VRClient && VRClient->GetSession()
+	const bool HasVRRoot=bHaveVRPresentation && bIsPlayer && !bIsSelf && VRClient && VRClient->GetSession()
 		&& VRClient->GetSession()->GetVRPose(ACEGuid,VRRoot) && VRRoot.Version==2;
 	// PostPhysics applies the tracked root once, together with the hands. A
 	// second root writer here used to undo grounding/interpolation each frame.
@@ -1385,7 +1402,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 		if (ClampLocationToGround(Loc))
 		{
 			RemotePredictLocation = Loc;
-			RemoteAnchorLocation = Loc;
+			if (!bRemoteCorrectionPending) RemoteAnchorLocation = Loc;
 			SetActorLocation(Loc);
 			bPendingGroundClamp = false;
 			GroundClampRetrySeconds = 0.f;
@@ -1457,7 +1474,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			RemotePredictLocation += UnrealVel * PhysicsStep
 				+ FACEPosition::AceVectorToUnreal(Acceleration, WorldScale) * (0.5f * PhysicsStep * PhysicsStep);
 			AcePhysicsVelocity += Acceleration * PhysicsStep;
-			RemoteAnchorLocation = RemotePredictLocation;
+			if (!bRemoteCorrectionPending) RemoteAnchorLocation = RemotePredictLocation;
 
 			if (!AcePhysicsOmega.IsNearlyZero())
 			{
@@ -1500,7 +1517,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 					if (RemotePredictLocation.Z <= GroundZ + SkinCm)
 					{
 						RemotePredictLocation.Z = GroundZ + SkinCm;
-						RemoteAnchorLocation.Z = RemotePredictLocation.Z;
+						if (!bRemoteCorrectionPending) RemoteAnchorLocation.Z = RemotePredictLocation.Z;
 						if (AcePhysicsVelocity.Z < 0.f)
 						{
 							AcePhysicsVelocity.Z = 0.f;
@@ -1673,11 +1690,15 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 				// independent of the model's walk-cycle velocity and object scale.
 				const float Speed = 8.f * FMath::Max(0.f,RemoteRunRate);
 				const float Limit = (Speed>.0002f?Speed:7.5f)*WorldScale*Step;
+				if (RemoteCorrectionFrames == 0)
+					RemoteCorrectionStartDistance = FVector::Distance(PredictionStart, RemoteAnchorLocation);
+				RemoteCorrectionTravelBudget += Limit;
 				RemotePredictLocation = PredictionStart+(RemoteAnchorLocation-PredictionStart).GetClampedToMaxSize(Limit);
 				// Retail replaces the complete animation offset, including rotation.
 				// Directed movement keeps its heading; ordinary motion takes the
 				// authoritative heading without adding another turn in this step.
-				RemotePredictRotation = (bMoveTo || bTurnTo) ? PredictionStartRotation : RemoteAnchorRotation;
+				if (!StickyDestination.IsSet())
+					RemotePredictRotation = bRemoteCorrectionKeepHeading ? PredictionStartRotation : RemoteAnchorRotation;
 			}
 			// PositionManager applies StickyManager after InterpolationManager.
 			// A swing's live target spacing owns the final displacement.
@@ -1701,7 +1722,6 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			// Retain presentation handover for older poses without contact metadata
 			// and buffered VR/airborne state whose displayed frame is still catching up.
 			const bool SharedPhysicsFrame = Creature && GetActorLocation().Equals(PredictionStart,.001f);
-			const FVector RequestedPrediction = RemotePredictLocation;
 			const FVector Resolved=ResolvePredictedMovement(PredictionStart, RemotePredictLocation);
 			const bool XYChanged=FVector::DistSquared2D(Resolved,RemotePredictLocation)>.0001;
 			RemotePredictLocation=Resolved;
@@ -1717,7 +1737,6 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			if (bClampToGround && DisplayMovement.Z < 0) DisplayMovement.Z = 0;
 			FVector NextLoc = SharedPhysicsFrame ? RemotePredictLocation
 				: InterpolateRemoteLocation(RemotePredictLocation,DeltaTime,DisplayMovement);
-			const FVector RequestedLocation = SharedPhysicsFrame ? RequestedPrediction : NextLoc;
 			// Always seat Z for grounded remotes within the band — continuous XY integrate
 			// used to leave feet floating between sparse F748s.
 			// Match initial placement: Stuck signs/wall props retain the server's Z
@@ -1736,27 +1755,53 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 				// into a prediction at different XY on a hill.
 				ClampLocationToGround(NextLoc,&RemotePredictRotation);
 			}
-			if (Correcting && !StickyDestination.IsSet())
+			if (Correcting)
 			{
 				// Retail InterpolationManager checks progress every five physics frames
 				// and SetPositionSimple resynchronizes when its correction queue fails.
-				// Measure the correction actually requested by the physics step;
-				// ordinary extrapolated locomotion must never authorize crossing a wall.
-				RemoteCorrectionRequested += FVector::Distance(RequestedLocation, PredictionStart);
-				RemoteCorrectionBlocked += FVector::Distance(RequestedLocation, NextLoc);
-				if (FVector::DistSquared(NextLoc, RemoteAnchorLocation) < FMath::Square(.05f * WorldScale))
-					bRemoteCorrectionPending = false;
-				else if (++RemoteCorrectionFrames >= 5)
+				// Constraints and sliding can consume the step without bringing the
+				// body closer, even when no collision sweep actually blocks movement.
+				const double Distance = FVector::Distance(NextLoc, RemoteAnchorLocation);
+				bool Complete = Distance < .05f * WorldScale;
+				bool Failed = false;
+				if (!Complete && ++RemoteCorrectionFrames >= 5)
 				{
-					if (RemoteCorrectionRequested > .0002f * WorldScale
-						&& RemoteCorrectionBlocked >= RemoteCorrectionRequested * .7f
-						&& FVector::DistSquared(NextLoc, RemoteAnchorLocation) >= FMath::Square(.2f * WorldScale))
+					const double Progress = RemoteCorrectionStartDistance - Distance;
+					if (!StickyDestination.IsSet() && RemoteCorrectionTravelBudget > 0.f
+						&& (Progress < .0002f * WorldScale || Progress < .3f * RemoteCorrectionTravelBudget))
 					{
-						NextLoc = RemotePredictLocation = RemoteAnchorLocation;
-						bRemoteCorrectionPending = false;
+						Complete = true;
+						Failed = Distance >= .2f * WorldScale;
+						if (Failed) ++RemoteCorrectionFailures;
 					}
 					RemoteCorrectionFrames = 0;
-					RemoteCorrectionRequested = RemoteCorrectionBlocked = 0.f;
+					RemoteCorrectionStartDistance = RemoteCorrectionTravelBudget = 0.f;
+				}
+				if (RemoteCorrectionFailures > 3 || (Failed && RemoteCorrectionQueue.IsEmpty()))
+				{
+					// UseTime blips to the last queued frame when interpolation fails.
+					if (!RemoteCorrectionQueue.IsEmpty())
+					{
+						RemoteAnchorLocation = RemoteCorrectionQueue.Last().Key;
+						RemoteAnchorRotation = RemoteCorrectionQueue.Last().Value;
+					}
+					NextLoc = RemotePredictLocation = RemoteAnchorLocation;
+					if (!bRemoteCorrectionKeepHeading) RemotePredictRotation = RemoteAnchorRotation;
+					RemoteCorrectionQueue.Reset();
+					Complete = true;
+				}
+				if (Complete)
+				{
+					bRemoteCorrectionPending = !RemoteCorrectionQueue.IsEmpty();
+					if (bRemoteCorrectionPending)
+					{
+						RemoteAnchorLocation = RemoteCorrectionQueue[0].Key;
+						RemoteAnchorRotation = RemoteCorrectionQueue[0].Value;
+						RemoteCorrectionQueue.RemoveAt(0, 1, EAllowShrinking::No);
+					}
+					else RemoteCorrectionFailures = 0;
+					RemoteCorrectionFrames = 0;
+					RemoteCorrectionStartDistance = RemoteCorrectionTravelBudget = 0.f;
 				}
 			}
 			if (SharedPhysicsFrame) RemotePredictLocation = NextLoc;
@@ -1840,7 +1885,12 @@ void AACEWorldEntityActor::ApplyRemoteVRRoot(const FACEVRPose& Pose, float Delta
 	// correction intact so tracking loss/mode changes resume ordinary movement
 	// at the latest server position, rather than discarding it every render frame.
 	if (LastRemotePositionAt <= Pose.ReceivedAt)
+	{
 		RemotePredictLocation = RemoteAnchorLocation = TrackedRoot;
+		bRemoteCorrectionPending = false;
+		RemoteCorrectionQueue.Reset();
+		RemoteCorrectionFailures = 0;
+	}
 	FVector Display = Snap ? TrackedRoot : InterpolateRemoteLocation(TrackedRoot,DeltaTime,Movement);
 	// The latest VectorUpdate can describe a different instant from the buffered
 	// pose. Establish support at this sample, never pull an older jump down merely
@@ -2391,6 +2441,7 @@ void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position, bool b
 	if (bSnap) PendingRemoteLanding.Reset();
 	// Cell notifications still update the collision context during a jump across
 	// a building entrance; delaying the transform must not retain an old floor.
+	const int32 PreviousCell = LastAceCellId;
 	LastAceCellId = Position.CellId;
 	if (Appearance) Appearance->UpdateCellLighting(Position.CellId);
 	if (Creature && !bSnap && Position.bHasContactState)
@@ -2432,18 +2483,50 @@ void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position, bool b
 	// difference defeat the horizontal 5 cm tolerance and reintroduce weaving.
 	if (Creature && Position.bIsGrounded && !bHavePhysicsVelocity && bClampToGround)
 		ClampLocationToGround(NewLocation);
-	RemoteAnchorLocation = NewLocation;
-	RemoteAnchorRotation = NewRotation;
-	if (bSnap)
-		bRemoteCorrectionPending = false;
-	else if (Creature && !bHaveVRPresentation && Position.bIsGrounded)
+	const float ToleranceSq = FMath::Square(.05f * WorldScale);
+	if (!bSnap && Creature && !bHaveVRPresentation && Position.bIsGrounded
+		&& FVector::DistSquared(GetActorLocation(), NewLocation) > ToleranceSq)
 	{
-		if (!bRemoteCorrectionPending)
+		const FVector& Tail = RemoteCorrectionQueue.IsEmpty() ? RemoteAnchorLocation : RemoteCorrectionQueue.Last().Key;
+		const FVector& From = bRemoteCorrectionPending ? Tail : GetActorLocation();
+		const float BlipDistance = (uint32(PreviousCell) & 0xffffu) >= 0x100u ? 20.f : 100.f;
+		// InterpolateTo checks a discontinuity against the previous queued sample.
+		if (FVector::DistSquared(From, NewLocation) > FMath::Square(BlipDistance * WorldScale))
+			RemoteCorrectionFailures = 4;
+		bRemoteCorrectionKeepHeading = KeepHeading;
+		if (!bRemoteCorrectionPending || (RemoteCorrectionQueue.IsEmpty() && FVector::DistSquared(Tail, NewLocation) < ToleranceSq))
 		{
-			RemoteCorrectionFrames = 0;
-			RemoteCorrectionRequested = RemoteCorrectionBlocked = 0.f;
+			RemoteAnchorLocation = NewLocation;
+			RemoteAnchorRotation = NewRotation;
+			if (!bRemoteCorrectionPending)
+			{
+				RemoteCorrectionFrames = 0;
+				RemoteCorrectionStartDistance = RemoteCorrectionTravelBudget = 0.f;
+			}
 		}
-		bRemoteCorrectionPending = FVector::DistSquared(GetActorLocation(), NewLocation) >= FMath::Square(.05f * WorldScale);
+		else
+		{
+			if (!RemoteCorrectionQueue.IsEmpty() && FVector::DistSquared(Tail, NewLocation) < ToleranceSq)
+				RemoteCorrectionQueue.Pop(EAllowShrinking::No);
+			if (RemoteCorrectionQueue.Num() == 19)
+			{
+				RemoteAnchorLocation = RemoteCorrectionQueue[0].Key;
+				RemoteAnchorRotation = RemoteCorrectionQueue[0].Value;
+				RemoteCorrectionQueue.RemoveAt(0, 1, EAllowShrinking::No);
+				RemoteCorrectionFrames = 0;
+				RemoteCorrectionStartDistance = RemoteCorrectionTravelBudget = 0.f;
+			}
+			RemoteCorrectionQueue.Emplace(NewLocation, NewRotation);
+		}
+		bRemoteCorrectionPending = true;
+	}
+	else
+	{
+		RemoteCorrectionQueue.Reset();
+		RemoteCorrectionFailures = 0;
+		bRemoteCorrectionPending = false;
+		RemoteAnchorLocation = NewLocation;
+		RemoteAnchorRotation = NewRotation;
 	}
 	// Retail InterpolationManager completes position corrections within 0.05 AC.
 	// Keep sub-tolerance noise out of the predictor (especially sideways drift
@@ -2456,7 +2539,7 @@ void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position, bool b
 		RemotePredictLocation = NewLocation;
 	// CPhysicsObj::MoveOrTeleport preserves heading for every directed command,
 	// including TurnTo, while ordinary interpreted motion accepts the packet frame.
-	if (bSnap || !KeepHeading)
+	if (bSnap || (!KeepHeading && !bRemoteCorrectionPending))
 	{
 		RemotePredictRotation = NewRotation;
 	}
@@ -2523,6 +2606,18 @@ void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position, bool b
 	RefreshActorTickEnabled();
 }
 
+void AACEWorldEntityActor::RestoreMotionAfterAppearance(const FACEObjectMotionState& LastPacket)
+{
+	if (LastPacket.MovementType >= 6 && LastPacket.MovementType <= 9)
+	{
+		// Physics already resolved the target and may have finished the turn.
+		// The next movement step supplies the new mesh with its current footwork.
+		if (Appearance && RemoteMotion.CurrentStyle) Appearance->SetPreferredStyle(RemoteMotion.CurrentStyle);
+		return;
+	}
+	ApplyMotionState(LastPacket);
+}
+
 void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 {
 	const bool bDeath = Motion.IsDeathMotion();
@@ -2532,7 +2627,7 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 	if (bReceivedDeathMotion && !bIsPlayer && !bDeath) return;
 	if (bReceivedDeathMotion && bIsPlayer && !bDeath && Appearance)
 		Appearance->ClearDeathMotion();
-	bReceivedDeathMotion = bDeath && !IsCorpse() && !bAllowsDeadPoseInteraction;
+	bReceivedDeathMotion = bDeath && !IsCorpse() && !bRemoteUseNoncombatant;
 	SetActorEnableCollision(!bReceivedDeathMotion);
 	// A corpse is a separate object at the final death frame. Late Ready/locomotion
 	// updates must not turn it back into an idle creature.
@@ -2550,6 +2645,17 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
     else if (!bDeath && RemoteMotion.CurrentStyle != Motion.CurrentStyle)
         RemoteWalkingMotion.Reset();
 	RemoteMotion = Motion;
+	if (Motion.MovementType == 6)
+	{
+		FVector Target;
+		if (!ResolveFacingTarget(Motion.MoveToTargetGuid, Target, false))
+		{
+			// MovementManager::unpack_movement falls back to MoveToPosition once.
+			// A body appearing later cannot replace the packet's destination.
+			RemoteMotion.MovementType = 7;
+			RemoteMotion.MoveToTargetGuid = 0;
+		}
+	}
 	if (Appearance)
 		Appearance->SetTurnInput(!bDeath && !bHavePhysicsVelocity && Motion.MovementType == 0 ? Motion.Turn : 0.f);
 	// CMotionInterp::apply_interpreted_movement remembers my_run_rate. Ready,

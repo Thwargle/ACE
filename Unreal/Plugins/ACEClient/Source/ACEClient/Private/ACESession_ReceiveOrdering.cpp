@@ -3,19 +3,19 @@
 // Retail UIQueueManager / WOrderHdr / TSRecv order F7B0 blobs per owning
 // weenie. Packet sequence numbers only recover transport loss: a fragmented
 // earlier event can finish after a later complete event even on ordered UDP.
-void FACESession::ReceiveGameMessage(const TArray<uint8>& Message)
+void FACESession::ReceiveGameMessage(const TArray<uint8>& Message, double ReceivedAt)
 {
 	if (Message.Num() < 4) return;
 	FACEBinaryReader Reader(Message);
 	if (Reader.ReadUInt32() != ACEOpcode::GameEvent)
 	{
-		if (AcceptPropertyStamp(Message)) HandleGameMessage(Message);
+		if (AcceptPropertyStamp(Message)) HandleGameMessage(Message, ReceivedAt);
 		return;
 	}
 	if (!Reader.CanRead(12)) return;
 	const int32 Owner = Reader.ReadInt32();
 	const uint32 Stamp = Reader.ReadUInt32();
-	if (!Owner) { HandleGameMessage(Message); return; } // WOrderHdr iid=0 is unordered.
+	if (!Owner) { HandleGameMessage(Message, ReceivedAt); return; } // WOrderHdr iid=0 is unordered.
 	auto& Stream = OrderedGameEvents.FindOrAdd(Owner);
 	if ((Stream.bReceivedFirst && Stamp <= Stream.LastStamp) || Stream.Pending.Contains(Stamp)) return;
 	// Preserve reliable events until recovery. Do not silently skip inventory
@@ -25,7 +25,7 @@ void FACESession::ReceiveGameMessage(const TArray<uint8>& Message)
 		ConnectionError = TEXT("Too many incomplete ordered game events. Please reconnect to the server.");
 		Log(ConnectionError); SetState(EACESessionState::Failed); return;
 	}
-	Stream.Pending.Add(Stamp, {Message, FPlatformTime::Seconds()});
+	Stream.Pending.Add(Stamp, {Message, ReceivedAt});
 	++PendingGameEventCount; PendingGameEventBytes += Message.Num();
 	QueueReadyGameEvents(Owner);
 }
@@ -43,13 +43,25 @@ void FACESession::QueueReadyGameEvents(int32 Owner)
 	}
 }
 
+void FACESession::ForgetObjectEventOrder(int32 Owner)
+{
+	// Retail destroys a weenie's TSRecv with that weenie. ACE's local-player
+	// events use a session-wide sequence that survives physics recreation.
+	if (Owner == PlayerGuid) return;
+	FOrderedGameEvents Stream;
+	if (!OrderedGameEvents.RemoveAndCopyValue(Owner, Stream)) return;
+	PendingGameEventCount -= Stream.Pending.Num();
+	for (const auto& Pair : Stream.Pending) PendingGameEventBytes -= Pair.Value.Message.Num();
+}
+
 void FACESession::DispatchReadyGameEvent()
 {
 	int32 Owner;
 	if (!ReadyGameEventOwners.Dequeue(Owner)) return;
 	auto* Stream = OrderedGameEvents.Find(Owner);
-	if (!Stream) return;
+	if (!Stream || !Stream->bReadyQueued) return;
 	Stream->bReadyQueued = false;
+	if (!WorldObjects.Contains(Owner)) return;
 	const uint32 Next = !Stream->bReceivedFirst && Stream->Pending.Contains(0) ? 0 : Stream->LastStamp + 1;
 	FOrderedGameEvents::FEvent Event;
 	if (!Stream->Pending.RemoveAndCopyValue(Next, Event)) return;
@@ -57,7 +69,7 @@ void FACESession::DispatchReadyGameEvent()
 	--PendingGameEventCount; PendingGameEventBytes -= Event.Message.Num();
 	QueueReadyGameEvents(Owner);
 	// The callback may clear world/session state. Never retain Stream across it.
-	HandleGameMessage(Event.Message);
+	HandleGameMessage(Event.Message, Event.QueuedAt);
 }
 
 bool FACESession::AcceptPropertyStamp(const TArray<uint8>& Message)

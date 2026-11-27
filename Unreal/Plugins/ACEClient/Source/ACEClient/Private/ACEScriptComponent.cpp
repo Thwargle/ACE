@@ -7,6 +7,7 @@
 #include "ACELoadingScreenActor.h"
 #include "ACECharacterAppearanceComponent.h"
 #include "ACEWorldEntityActor.h"
+#include "Dat/ACELandblockMeshBuilder.h"
 #include "ACERegionSceneryActor.h"
 #include "ACEEnvCellActor.h"
 #include "ACEEffectLightSubsystem.h"
@@ -1385,7 +1386,8 @@ void UACEScriptComponent::ExecuteHook(
 		break;
 	case EACEAnimationHookType::CreateParticle:
 	case EACEAnimationHookType::CreateBlockingParticle:
-		CreateEmitter(Hook, Hook.Type == EACEAnimationHookType::CreateBlockingParticle, Intensity, SourcePlayScript);
+		CreateEmitter(Hook, Hook.Type == EACEAnimationHookType::CreateBlockingParticle, Intensity, SourcePlayScript,
+			CurrentScriptId != 0 && CurrentScriptId == SetupDefaultScript);
 		break;
 	case EACEAnimationHookType::DestroyParticle:
 		StopEmitter(ResolveEmitterSlot(Hook.Id, SourcePlayScript), true);
@@ -2174,7 +2176,7 @@ FVector UACEScriptComponent::ResolveHookOffsetLocal(const FActiveEmitter& Emitte
 }
 
 void UACEScriptComponent::CreateEmitter(
-	const FACEDatAnimationHook& Hook, bool bBlocking, float Intensity, uint32 SourcePlayScript)
+	const FACEDatAnimationHook& Hook, bool bBlocking, float Intensity, uint32 SourcePlayScript, bool bSetupScript)
 {
 	// ParticleManager::CreateParticleEmitter removes the occupied slot before
 	// SetInfo/SetParenting can fail. Blocking creates leave that slot untouched.
@@ -2251,6 +2253,14 @@ void UACEScriptComponent::CreateEmitter(
 			Emitter.MaxDegradeDistance = Shape->Parts[0].MaxDegradeDistance;
 		}
 	SanitizeInfo(Emitter.Info);
+	const auto* Entity = Cast<AACEWorldEntityActor>(GetOwner());
+	Emitter.bCreatureBodyEffect = bSetupScript && Entity && !Entity->bIsPlayer
+		&& (Entity->ItemType & ACEItemType::Creature) != 0
+		&& Emitter.Info.TotalSeconds <= 0 && Emitter.Info.TotalParticles == 0;
+	// Some living bodies are made of particles. Keep their continuous setup effects
+	// visible across a streamed block, even when their individual sprites have a short LOD.
+	if (Emitter.bCreatureBodyEffect)
+		Emitter.MaxDegradeDistance = FMath::Max(Emitter.MaxDegradeDistance, FACELandblockMeshBuilder::LandblockSize);
 	Emitter.bBlocking = bBlocking;
 	// PropertyFloat.PhysicsScriptIntensity — PeTable tier + Scale/Transparent/UV tween speed.
 	// Do not rewrite Birthrate/particle A,B,C: those are authored for the intensity-selected script.
@@ -2783,7 +2793,8 @@ bool UACEScriptComponent::ShouldDegradeEmitter(const FActiveEmitter& Emitter, co
 	const auto* PC = GetWorld() ? Cast<AACEPlayerController>(GetWorld()->GetFirstPlayerController()) : nullptr;
 	if (PC && PC->IsCameraMapView()) return false;
 	const float Distance = Emitter.MaxDegradeDistance * FMath::Max(1.f, WorldScale);
-	return FVector::DistSquared(ViewLocation, GetEmitterTransform(Emitter).GetLocation()) > FMath::Square(Distance);
+	const FVector Origin = Emitter.bCreatureBodyEffect ? GetOwner()->GetActorLocation() : GetEmitterTransform(Emitter).GetLocation();
+	return FVector::DistSquared(ViewLocation, Origin) > FMath::Square(Distance);
 }
 
 void UACEScriptComponent::SetEmitterDegraded(FActiveEmitter& Emitter, bool bDegraded)

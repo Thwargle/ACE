@@ -187,6 +187,9 @@ bool FACEHousingTest::RunTest(const FString&)
 	TestTrue(TEXT("Server remains authoritative over items"),S.WorldObjects.Contains(204));
 	Load(1234);Binder->RefreshHouseOffer();S.StageHousePayment(200,true);Draw(TEXT("Maintenance"));
 	TestTrue(TEXT("Owned house opens maintenance"),Binder->bHouseRentTab);
+	const auto MaintenancePage=Manager->FindElementByName(TEXT("HouseMaintenancePage"));
+	TestEqual(TEXT("Slumlord paints the retail panel backdrop"),MaintenancePage->Parent.Pin()->ImageFileId,0x06004CC2u);
+	TestEqual(TEXT("Maintenance body paints the backdrop once"),MaintenancePage->ImageFileId,0u);
 	TestTrue(TEXT("Partial maintenance shows paid and staged count"),Binder->HouseOfferLabels[3]->GetText().ToString().Contains(TEXT("110/1000 Pyreals")));
 	Binder->OnElementActivated(Manager->FindElementByName(TEXT("HouseMaintenance_Button")));
 	TestFalse(TEXT("Owner needs no proxy confirmation"),Binder->bHousePaymentConfirm);

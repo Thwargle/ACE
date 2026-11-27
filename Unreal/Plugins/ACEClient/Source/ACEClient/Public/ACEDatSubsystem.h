@@ -611,6 +611,7 @@ public:
 	UMaterialInterface* EnsureAceUnlitMaskedMaterialBase();
 	UMaterialInterface* EnsureAceOutdoorLitMaterialBase();
 	UMaterialInterface* EnsureAceOutdoorLitMaskedMaterialBase();
+	UMaterialInstanceDynamic* GetImportedSceneryMaterial(uint32 TextureId, bool bMasked = true);
 	/** Soft translucency (lifestones / glass) — Translucent Opacity from texture A * OpacityMul. */
 	UMaterialInterface* EnsureAceUnlitTranslucentMaterialBase();
 	/** Additive FX (portal swirls / spell particles) — Additive emissive * OpacityMul. */
@@ -716,6 +717,8 @@ private:
 	uint64 ComputeDatFingerprint() const;
 	void TryStartDiskCacheMaintenance();
 	void PumpLandblockBuildQueue();
+	void RefreshResidentTerrainArtwork();
+	TSharedPtr<TAtomic<bool>, ESPMode::ThreadSafe> CancelArtworkBake;
 	void OnLandblockBuildComplete(uint32 LandblockId, float WorldScale, int32 Generation, bool bOk, TSharedPtr<FACEBuiltLandblockMesh> Mesh);
 
 	void PumpSetupBuildQueue();
@@ -1066,6 +1069,15 @@ private:
 	UMaterialInterface* EnsureFarSceneryMaterialBase(uint8 Kind);
 	enum class EObjectLightEnvironment : uint8 { Outdoors, Interior, Dungeon };
 	TMap<TWeakObjectPtr<UMaterialInstanceDynamic>, EObjectLightEnvironment> WorldLightingInstances;
+	TMap<uint32, TWeakObjectPtr<UMaterialInstanceDynamic>> ImportedSceneryMaterials;
+	uint32 SceneryMaterialCrc = 0;
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture2D> LegionsGroundDetailTexture;
+	uint32 GroundDetailCrc = 0;
+	UPROPERTY(Transient)
+	TMap<uint32,TObjectPtr<UTexture2D>> LegionsBlendOverlays;
+	uint32 BlendOverlayCrc = 0;
+	void ApplyLegionsGroundMaterial(UMaterialInstanceDynamic* Material, uint32 PCode, const FACETerrainBlend* Blend);
 
 	UPROPERTY(Transient)
 	TMap<uint64, TObjectPtr<UTexture2D>> ResolvedTextureCache;
@@ -1077,6 +1089,7 @@ private:
 	uint64 ResolvedCacheClock = 0;
 
 	int32 AppliedSurfaceUnpackVersion = 0;
+	uint64 LoadedTerrainArtwork = 0, LoadedSceneryArtwork = 0;
 	bool bLandMeshReloadRequested = false;
 
 	/** Invalidates in-flight landblock workers when DATs are replaced / torn down. */

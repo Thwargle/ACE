@@ -78,7 +78,7 @@ public:
 	void ToggleCombat();
 	void SetCombat(int32 Mode);
 	void OpenRetailPanel(FName Name);
-	void OpenPluginManager();
+	void TogglePluginManager();
 	void RevealSalvagePanel();
 	bool RevealLearnedSpellInMenu(int32 SpellId);
 	void CycleSpell(int32 Direction);

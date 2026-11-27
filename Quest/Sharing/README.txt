@@ -22,7 +22,7 @@ Update-Quest.cmd. It updates the app while keeping your DAT files, saved login,
 and VR settings. Do not uninstall the old app first. If the original data
 installation is incomplete, use Install-Quest.cmd instead.
 
-OPTIONAL AC2 LEGIONS SKY
+OPTIONAL AC2 LEGIONS ARTWORK
 
 1. Install or update AC:VR from this full bundle. Connect your Quest by USB
    and close the game.
@@ -30,10 +30,8 @@ OPTIONAL AC2 LEGIONS SKY
    Legions installation, or choose Saved\Skies\Legions.sky from an existing
    AC:Unreal import. The cache is the smaller transfer. For portal.dat, allow
    free space on the headset for two copies during USB transfer.
-3. Open AC:VR. Under Options > VR settings > Graphics, choose "Import and use
-   AC2 sky". The headset validates the file, applies the sky, and frees the
-   transferred DAT space after import. Use "AC2 sky" here to switch back to
-   the original sky or enable the imported sky again.
+3. Open AC:VR. Under Options > VR settings > Graphics, choose "Import AC2 artwork".
+   Choose sky, ground textures, grass textures, interactive grass and tree models individually.
 
 The sky and your choice survive ordinary app updates. To replace the sky,
 repeat steps 2 and 3. For a single install and transfer from the command line,
@@ -106,7 +104,7 @@ Use this project's VR-enabled server for its custom VR combat/pose extensions.
 
 UPDATES / TROUBLESHOOTING
 
-- Three dots before the account screen on v166: use the complete v167 Quest
+- Three dots before the account screen on v166: use the complete v168 Quest
   bundle and run its Update-Quest.cmd to replace the APK and keep your DATs
   and logins. The updated APK enables the Quest Vulkan device profile. Data repair
   only checks the DATs. If the dots persist, capture diagnostics while the

@@ -77,6 +77,26 @@ void UPersonalFarTerrainSubsystem::SetShown(bool bShown)
 
 bool UPersonalFarTerrainSubsystem::EnsureBake(const FString& DatDirectory)
 {
+	const uint64 CurrentKey = ACELegionsSky::ActiveEnvironment()->TerrainCacheKey(1);
+	if (ArtworkKey && ArtworkKey != CurrentKey)
+	{
+		if (ShellActor) ShellActor->Destroy();
+		ShellActor = nullptr;
+		ShellMesh = nullptr;
+		ShellMaterial = nullptr;
+		ColorTexture = nullptr;
+		DetailTexture = nullptr;
+		DetailMaterial = nullptr;
+		Detail.Reset();
+		DetailTiles = {};
+		DetailCenter.Reset();
+		BuiltDetailCenter.Reset();
+		BuiltRadius = 0;
+		Bake.Reset();
+		PendingBake = {};
+		bDetailBusy = bBuilding = bBakeRequested = false;
+	}
+	ArtworkKey = CurrentKey;
 	if (Bake)
 	{
 		return true;
@@ -267,10 +287,9 @@ void UPersonalFarTerrainSubsystem::UpdateDetail(FIntPoint Center, const FString&
 	}
 	bDetailBusy = true;
 	Async(EAsyncExecution::ThreadPool,
-		[Weak = TWeakObjectPtr<UPersonalFarTerrainSubsystem>(this), State = Detail, Tiles = DetailTiles, Data = Bake, Center, DatDirectory, bFirst]()
+		[Weak = TWeakObjectPtr<UPersonalFarTerrainSubsystem>(this), State = Detail, Tiles = DetailTiles, Data = Bake, Center, Key = PersonalFarTerrainBake::SourceKey(DatDirectory), bFirst]()
 	{
 		const double Start = FPlatformTime::Seconds();
-		const uint64 Key = PersonalFarTerrainBake::SourceKey(DatDirectory);
 		if (bFirst && Key != 0)
 		{
 			State->LoadTiles(FPersonalFarTerrainDetail::TileCachePath(Key), Key);
@@ -289,11 +308,11 @@ void UPersonalFarTerrainSubsystem::UpdateDetail(FIntPoint Center, const FString&
 			UE_LOG(LogTemp, Log, TEXT("PersonalFarTerrain: detail texture %.2fs (%d parts, %d new tiles, %d tiles in all)"),
 				Seconds, Uploads->Num(), State->TileCount() - TilesBefore, State->TileCount());
 		}
-		AsyncTask(ENamedThreads::GameThread, [Weak, Center, Uploads]()
+		AsyncTask(ENamedThreads::GameThread, [Weak, Data, Center, Uploads]()
 		{
 			if (UPersonalFarTerrainSubsystem* Self = Weak.Get())
 			{
-				Self->ApplyDetail(Center, Uploads);
+				if (Self->Bake == Data) Self->ApplyDetail(Center, Uploads);
 			}
 		});
 	});
@@ -409,11 +428,11 @@ void UPersonalFarTerrainSubsystem::Update()
 				DetailCells = PersonalFog::TextureCells(*WantDetail, FogRings); // personal: fog-distance
 			}
 			PersonalFarTerrainMesh::Build(*Data, Center, Radius, Holes, HoleRadius, WorldScale, *Mesh, WantDetail.IsSet() ? &DetailCells : nullptr, SceneryRadius);
-			AsyncTask(ENamedThreads::GameThread, [Weak, Mesh, Radius, WorldScale, WantDetail, Holes = MoveTemp(Holes)]() mutable
+			AsyncTask(ENamedThreads::GameThread, [Weak, Data, Mesh, Radius, WorldScale, WantDetail, Holes = MoveTemp(Holes)]() mutable
 			{
 				if (UPersonalFarTerrainSubsystem* Self = Weak.Get())
 				{
-					Self->ApplyMesh(Mesh, Radius, MoveTemp(Holes), WorldScale, WantDetail);
+					if (Self->Bake == Data) Self->ApplyMesh(Mesh, Radius, MoveTemp(Holes), WorldScale, WantDetail);
 				}
 			});
 		});

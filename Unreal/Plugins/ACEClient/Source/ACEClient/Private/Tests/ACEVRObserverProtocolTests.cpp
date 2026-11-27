@@ -108,13 +108,26 @@ bool FACEVRObserverProtocolTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Tracked pose action"),PoseWire.ReadUInt32(),0xF7D1u);
     TestEqual(TEXT("Negotiated outgoing v2 size"),PoseWire.Remaining(),176);
     TestEqual(TEXT("High capability bits select version two"),PoseWire.ReadUInt32(),2u);
+    Session.CachedC2SPackets.Reset();
+    Pose.Poses[1].SetLocation(FVector(.2,0,1.5));
+    Session.SendVRPose(Pose);
+    TestEqual(TEXT("Hand movement alone sends only the tracked pose"),Session.CachedC2SPackets.Num(),1);
+    Session.CachedC2SPackets.Reset();
+    Session.PlayerPosition.Location.X+=.1f;
+    Session.SendVRPose(Pose);
+    TestEqual(TEXT("Moving feet sends an authoritative report with the pose"),Session.CachedC2SPackets.Num(),2);
     const uint32 AfterPose=Session.NextGameActionSequence;
     Session.bMoving=true;Session.AutoPosTimer=Session.AutonomousPositionInterval;
     Session.Tick(.02f);
     TestEqual(TEXT("Active tracking does not send duplicate timed feet reports"),Session.NextGameActionSequence,AfterPose);
     // Timed retail movement reports resume on landing; unchanged airborne
     // positions deliberately do not generate normal AutonomousPosition actions.
-    Session.LastVRPoseSent=-100.;Session.bAutoPosContact=true;Session.Tick(.02f);
+    Session.CachedC2SPackets.Reset();
+    Session.EndVRPoseStream();Session.EndVRPoseStream();
+    TestEqual(TEXT("Tracking loss sends exactly one stop pose"),Session.CachedC2SPackets.Num(),1);
+    auto StopBytes=LastPayload();FACEBinaryReader Stop(StopBytes);Stop.Skip(44);
+    TestEqual(TEXT("Stop clears tracked head and hands"),Stop.ReadUInt32(),0u);
+    Session.bAutoPosContact=true;Session.Tick(.02f);
     auto Fallback=LastPayload();FACEBinaryReader FallbackWire(Fallback);FallbackWire.Skip(24);
     TestEqual(TEXT("Paused tracking resumes normal movement reports"),FallbackWire.ReadUInt32(),ACEGameAction::AutonomousPosition);
     Ack(262143u,2);

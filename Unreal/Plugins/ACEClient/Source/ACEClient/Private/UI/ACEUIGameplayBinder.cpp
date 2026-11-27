@@ -1992,6 +1992,19 @@ void UACEUIGameplayBinder::SanitizeFloatyPanelChrome()
 		}
 		Manager->SetElementVisibleByName(Page, false);
 	}
+	// Slumlord owns one translucent black DAT backdrop. Its Buy and
+	// Maintenance tabs inherit a second copy over exactly the same body.
+	for (const TCHAR* Name : {TEXT("HouseBuyPage"),TEXT("HouseMaintenancePage")})
+	{
+		const auto Page = Manager->FindElementByName(Name);
+		const auto Parent = Page ? Page->Parent.Pin() : nullptr;
+		if (Parent && Parent->ImageFileId == 0x06004CC2u && Page->ImageFileId == Parent->ImageFileId)
+		{
+			Page->ImageFileId = 0;
+			for (auto& State : Page->States)
+				if (State.Value.ImageFileId == Parent->ImageFileId) State.Value.ImageFileId = 0;
+		}
+	}
 	// Page bodies that re-paint the same slab as the floaty root (0x06004CC2) double-darken
 	// ("shadow over the interface areas" on Attributes/Titles/Options/Social tabs). Keep the
 	// root fill (inventory/skills rely on it); drop the redundant page copies. Inner list /
@@ -2267,6 +2280,7 @@ void UACEUIGameplayBinder::ToggleGameplayPanel(const FString& PageElementName, c
 
 void UACEUIGameplayBinder::HandleEscape()
 {
+	if (PlayerController && PlayerController->CloseClientHelp()) return;
 	if (PendingUseWithSourceGuid || (PlayerController && PlayerController->GetObjectCursorTargeting()))
 	{
 		CancelPendingUseWith();

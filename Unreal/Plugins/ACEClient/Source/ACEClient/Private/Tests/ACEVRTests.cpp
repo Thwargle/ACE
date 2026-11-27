@@ -447,15 +447,19 @@ bool FACEVRProtocolTest::RunTest(const FString& Parameters)
 	FACEWorldObject Live; Live.Guid = 300; Session.WorldObjects.Add(300, Live);
 	FACEWorldObject Old; Old.Guid = 301; Session.WorldObjects.Add(301, Old);
 	Session.SelectObject(301);
+	Session.GiveRecipientGuid=301;
+	Session.PropertyStamps.FindOrAdd(301).Add(7u,100u);
 	TArray<int32> Deleted; Session.OnObjectDeleted.AddLambda([&](int32 Guid) { Deleted.Add(Guid); });
 	for (uint32 Epoch : {11u, 12u})
 	{
 		FACEBinaryWriter Snapshot; Snapshot.WriteUInt32(Epoch); Snapshot.WriteUInt32(1); Snapshot.WriteUInt32(300);
-		FACEBinaryReader Input(Snapshot.GetData()); Session.ApplyVRWorldSnapshot(Input);
+		FACEBinaryReader Input(Snapshot.GetData()); Session.ApplyVRWorldSnapshot(Input, 0);
 		TestEqual(TEXT("Only the current teleport epoch can remove a stale NPC"), Session.WorldObjects.Contains(301), Epoch != 12u);
 	}
 	TestTrue(TEXT("Authoritative membership preserves the live NPC"), Session.WorldObjects.Contains(300));
 	TestEqual(TEXT("Snapshot removal clears an old area's selected enemy"),Session.GetSelectedObject().Guid,0);
+	TestEqual(TEXT("Snapshot removal clears the old give recipient"),Session.GiveRecipientGuid,0);
+	TestFalse(TEXT("A reused GUID starts fresh property timestamps"),Session.PropertyStamps.Contains(301));
 	const auto SavedPlayerPosition=Session.PlayerPosition;
 	Session.PlayerPosition.CellId=0x7D640001;Session.PlayerPosition.Location=FVector(44,94,12);
 	Session.WorldObjects[300].bHasPosition=true;Session.WorldObjects[300].Position=Session.PlayerPosition;
@@ -466,13 +470,26 @@ bool FACEVRProtocolTest::RunTest(const FString& Parameters)
 	for (int32 Guid : {100, 201, 202, 203, 204}) TestTrue(TEXT("Snapshot preserves self, nested inventory, equipment, and vendor stock"), Session.WorldObjects.Contains(Guid));
 	TestEqual(TEXT("Stale NPC deletion reaches the world presenter once"), Deleted.Num(), 1);
 	FACEBinaryWriter Truncated; Truncated.WriteUInt32(12); Truncated.WriteUInt32(2); Truncated.WriteUInt32(100);
-	FACEBinaryReader BadSnapshot(Truncated.GetData()); Session.ApplyVRWorldSnapshot(BadSnapshot);
+	FACEBinaryReader BadSnapshot(Truncated.GetData()); Session.ApplyVRWorldSnapshot(BadSnapshot, 0);
 	TestTrue(TEXT("Truncated membership cannot erase live NPCs"), Session.WorldObjects.Contains(300));
 	Session.WorldObjects.Add(301,Old);
 	FACEBinaryWriter FullAck;for(uint32 V:{100u,5u,0xF7D0u,1u,511u,12u,1u,300u,200u})FullAck.WriteUInt32(V);FullAck.WriteFloat(24.f);
 	FACEBinaryReader FullAR(FullAck.GetData());Session.HandleGameEvent(FullAR);
 	TestFalse(TEXT("Membership consumes exactly its GUIDs before the missile profile trailer"),Session.WorldObjects.Contains(301));
 	TestEqual(TEXT("Membership leaves the missile speed readable"),Session.GetVRMissileSpeed(200),24.f);
+	// Both invalid counts and well-formed prior-area snapshots used to expose
+	// the first two object IDs to the independent missile-profile reader.
+	for (bool Stale : {true,false})
+	{
+		const uint32 PreviousCaps=Session.VRCapabilities;
+		FACEBinaryWriter Ignored;
+		for(uint32 V:{100u,5u,0xF7D0u,1u,63u,Stale?11u:12u,Stale?2u:3u,567u,891u,777u})Ignored.WriteUInt32(V);
+		Ignored.WriteFloat(12.f);
+		FACEBinaryReader IgnoredReader(Ignored.GetData());Session.HandleGameEvent(IgnoredReader);
+		TestEqual(TEXT("Unusable snapshot preserves negotiated features"),Session.VRCapabilities,PreviousCaps);
+		TestEqual(TEXT("Unusable snapshot preserves the current missile profile"),Session.GetVRMissileSpeed(200),24.f);
+		TestTrue(TEXT("Unusable snapshot preserves current-area membership"),Session.WorldObjects.Contains(300));
+	}
 	FACEBinaryWriter ProfilePacket;for(uint32 V:{100u,6u,0xF7D3u,2717u})ProfilePacket.WriteUInt32(V);ProfilePacket.WriteFloat(30.f);ProfilePacket.WriteUInt32(1);
 	FACEBinaryReader ProfileReader(ProfilePacket.GetData());Session.HandleGameEvent(ProfileReader);
 	float ArcSpeed=0;bool Gravity=false;

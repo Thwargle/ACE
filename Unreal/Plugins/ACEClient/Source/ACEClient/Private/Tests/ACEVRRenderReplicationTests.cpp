@@ -155,6 +155,20 @@ bool FACEVRRenderReplicationTest::RunTest(const FString& Parameters)
 		for(uint32 V:{ACEOpcode::GameEvent,100u,1u,0xF7D1u}) Event.WriteUInt32(V);
 		Event.WriteBytes(Payload); Session.HandleGameMessage(Event.GetData());
 	};
+	// A fragmented pose delayed by the packet pump and the owner's ordered
+	// event queue must still expire relative to its original socket receipt.
+	FACEBinaryWriter Delayed;
+	for(uint32 V:{ACEOpcode::GameEvent,123u,1u,0xF7D1u}) Delayed.WriteUInt32(V);
+	Delayed.WriteBytes(W.GetData());
+	FACESession::FReceivedFragment Fragment; Fragment.BlobId=17; Fragment.Count=2; Fragment.Queue=ACEQueue::SmartboxQueue;
+	const auto& Bytes=Delayed.GetData();
+	Fragment.Data.Append(Bytes.GetData(),16); Session.ProcessReceivedFragment(Fragment,FPlatformTime::Seconds()-1.);
+	Fragment.Index=1;Fragment.Data.Reset();Fragment.Data.Append(Bytes.GetData()+16,Bytes.Num()-16);
+	Session.ProcessReceivedFragment(Fragment,FPlatformTime::Seconds());Session.DispatchReadyGameEvent();
+	FACEVRPose Expired;
+	TestTrue(TEXT("Reassembled tracked pose reached the ordered handler"),Session.VRPoses.Contains(123));
+	TestFalse(TEXT("A delayed pose cannot reacquire tracking after expiry"),Session.GetVRPose(123,Expired));
+	Session.VRPoses.Remove(123);
 	ReceivePose(W.GetData());
 	FACEVRPose Pose; TestTrue(TEXT("Received pose is available to the renderer"),Session.GetVRPose(123,Pose));
 	// Object creation now evaluates retail idle immediately. Compare to the
@@ -241,6 +255,17 @@ bool FACEVRRenderReplicationTest::RunTest(const FString& Parameters)
 	ReceiveMotion(1,7);
 	const FVector DesktopStart=Desktop->GetActorLocation();
 	const FTransform DesktopLeg=Desktop->Appearance->GetPartMesh(2)->GetRelativeTransform();
+	// A v2 sample can precede attachment of the skeletal playback component.
+	// Ordinary movement must continue until the component actually places the root.
+	auto DeferredPose=Session.VRPoses[123].Current;
+	DeferredPose.ReceivedAt=FPlatformTime::Seconds();
+	Session.VRPoses.FindOrAdd(126).Add(DeferredPose);
+	for(int32 Frame=0;Frame<6;++Frame)
+	{
+		Desktop->Tick(1.f/90);Ordinary->Tick(1.f/90);
+	}
+	TestTrue(TEXT("A buffered pose alone cannot freeze ordinary movement"),FVector::Dist(DesktopStart,Desktop->GetActorLocation())>1);
+	Session.VRPoses.Remove(126);
 	for(int32 Frame=0;Frame<18;++Frame)
 	{
 		Desktop->Tick(1.f/90);Desktop->Appearance->TickComponent(1.f/90,LEVELTICK_All,nullptr);
@@ -290,6 +315,11 @@ bool FACEVRRenderReplicationTest::RunTest(const FString& Parameters)
 	for(uint16 V:{uint16(0),uint16(1),uint16(0),uint16(0)})PositionEvent.WriteUInt16(V);
 	Session.HandleGameMessage(PositionEvent.GetData());
 	Session.OnPositionUpdate.Remove(PositionHandle);
+	// The F748 now falls BETWEEN the two poses being interpolated. Only
+	// the later endpoint arrived after the correction, not the displayed frame.
+	auto AfterCorrection=Next;AfterCorrection.ReceivedAt=FPlatformTime::Seconds();++AfterCorrection.Sequence;
+	auto BeforeCorrection=Next;BeforeCorrection.ReceivedAt=AfterCorrection.ReceivedAt-.12;
+	Session.VRPoses[123]=FACERemoteVRPose();Session.VRPoses[123].Add(BeforeCorrection);Session.VRPoses[123].Add(AfterCorrection);
 	Remote->TickComponent(.01f,LEVELTICK_All,nullptr);
 	Entity->SetActorTickEnabled(false);
 	Session.VRPoses[123].Current.ReceivedAt-=1;
@@ -299,6 +329,19 @@ bool FACEVRRenderReplicationTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Stale tracking restores retail held placement"),Remote->UpdateMissileAttachment(CrossbowActor));
 	for(int32 Frame=0;Frame<180;++Frame)if(Entity->IsActorTickEnabled())Entity->Tick(1.f/90);
 	TestTrue(TEXT("Leaving tracking preserves the newest ordinary position update"),Entity->GetActorLocation().Equals(Resume.ToUnrealLocation(100),.2));
+	auto Fresh=AfterCorrection;++Fresh.Sequence;Fresh.ReceivedAt=FPlatformTime::Seconds();
+	Fresh.Root=Resume.ToUnrealLocation(100)/100.+FVector(.8,0,0);
+	Session.VRPoses[123].Add(Fresh);Remote->TickComponent(.01f,LEVELTICK_All,nullptr);
+	Entity->SetActorTickEnabled(false);
+	auto HandsOnly=Fresh;++HandsOnly.Sequence;HandsOnly.Version=1;HandsOnly.ReceivedAt=FPlatformTime::Seconds();
+	Session.VRPoses[123].Add(HandsOnly);Remote->TickComponent(.01f,LEVELTICK_All,nullptr);
+	TestTrue(TEXT("A hands-only stream returns the feet to ordinary movement immediately"),
+		Entity->IsActorTickEnabled() && Entity->Appearance->bVRPoseControlled);
+	Session.WorldObjects[123].bDying=true;
+	Remote->TickComponent(.05f,LEVELTICK_All,nullptr);
+	TestFalse(TEXT("A dying player immediately uses the ordinary death animation"),Entity->Appearance->bVRPoseControlled);
+	TestFalse(TEXT("A fresh tracking packet cannot override death"),Session.GetVRPose(123,Pose));
+	Session.WorldObjects[123].bDying=false;
 	CrossbowActor->Destroy();BoltActor->Destroy();
 	// Compare the exact first-contact result, not just an approximate count.
 	// Many arc segments miss all rigid parts in a dense candidate set.

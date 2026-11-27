@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "ACEWorldEntityActor.h"
+#include "ACECharacterAppearanceComponent.h"
 #include "ACEWorldPresenterComponent.h"
 #include "ACEPlayerController.h"
 #include "ACEClientSubsystem.h"
@@ -87,6 +88,27 @@ bool FACERemoteTurnTargetsTest::RunTest(const FString&)
  TestTrue(TEXT("An object without a live physics body uses the packed absolute fallback"),Buffer->RemoteTurnFaceDir.Equals(Face(75),.00001));
  Presenter->Spawned.Add(Remote.Guid,Target);Buffer->Tick(.01f);
  TestTrue(TEXT("A target appearing later cannot replace the frozen fallback"),Buffer->RemoteTurnFaceDir.Equals(Face(75),.00001));
+ // Both TurnTo and MoveTo resolve whether a body exists when the command arrives.
+ // A later appearance rebuild must not retarget a turn towards a newly visible body.
+ FACEObjectMotionState LastTurn = Buffer->RemoteMotion;
+ Buffer->RestoreMotionAfterAppearance(LastTurn);
+ TestTrue(TEXT("A mesh rebuild preserves the original turn bearing"),Buffer->RemoteTurnFaceDir.Equals(Face(75),.00001));
+ FACEObjectMotionState Approach;
+ Approach.MovementType = 6; Approach.MoveToTargetGuid = Remote.Guid;
+ Approach.CurrentStyle = ACEMotion::StanceNonCombat; Approach.bHaveMoveToTarget = true;
+ Approach.MoveToCellId = P.CellId; Approach.MoveToLocalAce = P.Location + FVector(5,0,0);
+ Presenter->Spawned.Remove(Remote.Guid);
+ Buffer->ApplyMotionState(Approach);
+ Presenter->Spawned.Add(Remote.Guid,Target);
+ Buffer->Tick(1.f/60);
+ TestTrue(TEXT("A cached-only pursuit target uses the packet's fixed destination"),
+  Buffer->RemoteMotion.MovementType == 7 && Buffer->RemoteMotion.MoveToTargetGuid == 0);
+ Buffer->ApplyMotionState(Approach);
+ TestEqual(TEXT("A visible target starts a live pursuit"),Buffer->RemoteMotion.MovementType,uint8(6));
+ Presenter->Spawned.Remove(Remote.Guid);
+ Buffer->Tick(1.f/60);
+ TestTrue(TEXT("Losing a live pursuit target stops the creature"),
+  Buffer->RemoteMotion.MovementType == 0 && !Buffer->RemoteMotion.bMoving);
  // Slow orbit around the actual Pumpkin Buffer, across heading wrap, with
  // delayed local position echoes. Each packet must choose the current bearing
  // and the DAT's angular rate; no backwards frame is permitted in this replay.
@@ -111,6 +133,42 @@ bool FACERemoteTurnTargetsTest::RunTest(const FString&)
   }
   TestTrue(TEXT("Slow orbit progresses monotonically at retail DAT rate"),Monotonic && MaxError<.0001);
   AddInfo(FString::Printf(TEXT("Pumpkin orbit %d FPS: max angular error %.6f degrees"),FPS,FMath::RadiansToDegrees(MaxError)));
+ }
+ // Both ACE Virindi Paradox records (23570 and 35164) use this setup and
+ // motion table. Replay a turn towards another moving player at the Caul summit.
+ FACEPosition Caul;
+ Caul.CellId=0x0909000b;Caul.Location=FVector(40.174632,71.359301,14.006);
+ Caul.RotationW=.829232f;Caul.RotationXYZ.Z=.558905f;
+ FACEWorldObject Paradox=O;
+ Paradox.Name=TEXT("Virindi Paradox");Paradox.WeenieClassId=23570;
+ Paradox.SetupId=0x02000f47;Paradox.MotionTableId=0x09000028;Paradox.Position=Caul;
+ Buffer->InitializeFromObject(Paradox,100,true);
+ TestTrue(TEXT("Virindi Paradox builds its retail DAT body"),Buffer->Appearance->HasAppearance());
+ Session->WorldObjects.Add(Paradox.Guid,Paradox);
+ Presenter->Spawned.Add(Remote.Guid,Target);
+ Session->SetLocalPosition(Caul);PC->PredictedPose=Caul;
+ const FVector Summit=Caul.ToUnrealLocation(100);
+ Remote.Position=Caul;Remote.Position.Location.Y+=4;
+ Session->WorldObjects.Add(Remote.Guid,Remote);
+ Target->SetActorLocation(Summit+FVector(-400,0,0));
+ for (int FPS : {30,60,144})
+ {
+  Buffer->bHaveRemotePredict=false;
+  Buffer->ApplyACEPosition(Caul,false);
+  Turn(Remote.Guid,0,0);
+  for(int I=0;I<3*FPS;++I)
+  {
+   if(I==FPS/2)
+   {
+    FACEPosition Correction=Caul;Correction.Location.Y+=.4;
+    Correction.bHasContactState=Correction.bIsGrounded=true;
+    Buffer->ApplyACEPosition(Correction);
+   }
+   Buffer->Tick(1.f/FPS);
+  }
+  const FQuat Expected=FACEPosition::QuatFromUnrealTravelDir2D(-FVector::XAxisVector);
+  TestTrue(TEXT("Caul Virindi Paradox finishes facing the sampled player after a position correction"),
+   Buffer->GetActorQuat().Equals(Expected,.0001));
  }
  Session->OnMotionUpdate.Clear();Presenter->Spawned.Reset();
  GI->Shutdown();GEngine->DestroyWorldContext(World);World->DestroyWorld(false);

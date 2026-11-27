@@ -7,6 +7,7 @@
 #include "Dat/ACETerrainBlendCache.h"
 
 class FACEDatTextureResolver;
+namespace ACELegionsSky { struct FEnvironment; }
 
 struct FACEBuiltLandblockSection
 {
@@ -77,6 +78,7 @@ struct FACEBuiltLandblockMesh
 class ACECLIENT_API FACELandblockMeshBuilder
 {
 	friend class FACELandscapeTextureFidelityTest;
+	friend class UACEDatSubsystem;
 public:
 	static constexpr int32 CellDim = 8;
 	static constexpr int32 VertexDim = 9;
@@ -89,11 +91,8 @@ public:
 	static constexpr uint32 RoadTerrainType = 0x20;
 
 	FACELandblockMeshBuilder(FACEDatDatabase* InPortal, FACEDatDatabase* InCell, FACEDatTextureResolver* InTextures,
-		TSharedPtr<FACETerrainBlendCache, ESPMode::ThreadSafe> InBlendCache = nullptr)
-		: Portal(InPortal), Cell(InCell), Textures(InTextures),
-		  BlendCache(InBlendCache ? InBlendCache : MakeShared<FACETerrainBlendCache, ESPMode::ThreadSafe>())
-	{
-	}
+		TSharedPtr<FACETerrainBlendCache, ESPMode::ThreadSafe> InBlendCache = nullptr,
+		TSharedPtr<const ACELegionsSky::FEnvironment, ESPMode::ThreadSafe> InArtwork = nullptr);
 
 	bool EnsureHeightTable();
 	void SetCacheFingerprint(uint64 Fingerprint) { CacheFingerprint = Fingerprint; }
@@ -108,10 +107,11 @@ public:
 	void SetLandSurfaceAtlas(const class FACELandSurfaceAtlas* InAtlas) { LandAtlas = InAtlas; }
 
 	/** CPU TexMerge bake for one terrain palette code (also used to hydrate disk tiles). */
-	bool BakePCode(uint32 PCode, TArray<FColor>& OutPixels, int32& OutW, int32& OutH);
+	bool BakePCode(uint32 PCode, TArray<FColor>& OutPixels, int32& OutW, int32& OutH, int32 CellsAcross = 1);
 	/** Fill missing BakedPixels on CPU sections after a geometry-only disk load. */
 	void HydrateSectionBakes(FACEBuiltLandblockMesh& Mesh, uint64 DatFingerprint);
 
+	static bool IsOnRoad(const FACEBuiltLandblockMesh& Mesh, float LocalX, float LocalY);
 	static bool GetSplitDir(uint32 LandblockId, int32 CellX, int32 CellY);
 	static uint32 GetPalCode(int32 R1, int32 R2, int32 R3, int32 R4, int32 T1, int32 T2, int32 T3, int32 T4);
 
@@ -142,8 +142,8 @@ public:
 
 private:
 	bool FillSectionBake(FACEBuiltLandblockSection& Section);
-	bool LoadTerrainSurface(uint32 TerrainType, FACEDatDecodedSurface& Out, uint32& OutTiling);
-	FColor SampleTiled(const FACEDatDecodedSurface& Surf, float U, float V, uint32 Tiling) const;
+	const FACEDatDecodedSurface* LoadTerrainSurface(uint32 TerrainType, float& OutTiling, int32 CellsAcross);
+	FColor SampleTiled(const FACEDatDecodedSurface& Surf, float U, float V, float Tiling) const;
 	static void RotateUV(float U, float V, int32 Rot, float& OutU, float& OutV);
 	bool FindTerrainAlpha(uint32 PCode, uint32 TCode, FACEDatDecodedSurface& OutAlpha, int32& OutRot, uint32* OutTexGID = nullptr);
 	bool FindRoadAlpha(uint32 PCode, uint32 RCode, FACEDatDecodedSurface& OutAlpha, int32& OutRot, uint32* OutTexGID = nullptr);
@@ -152,7 +152,7 @@ private:
 	void GetRoadCodes(uint32 PCode, uint32 OutRCodes[2], bool& bAllRoad) const;
 	bool ResolveGpuBlend(uint32 PCode, struct FACELandGpuBlend& Out);
 	FColor SampleAlpha(const FACEDatDecodedSurface& Alpha, float U, float V, int32 Rot) const;
-	void MergeOverlay(TArray<FColor>& Pixels, int32 Size, const FACEDatDecodedSurface& Overlay, uint32 OverlayTiling, const FACEDatDecodedSurface& Alpha, int32 Rot) const;
+	void MergeOverlay(TArray<FColor>& Pixels, int32 Size, const FACEDatDecodedSurface& Overlay, float OverlayTiling, const FACEDatDecodedSurface& Alpha, int32 Rot, int32 CellsAcross = 1) const;
 
 	FACEDatDatabase* Portal = nullptr;
 	FACEDatDatabase* Cell = nullptr;
@@ -162,8 +162,9 @@ private:
 	bool bHeightTableReady = false;
 	FACEDatTexMerge TexMerge;
 	bool bTexMergeReady = false;
-	TMap<uint32, FACEDatDecodedSurface> TerrainSurfCache;
+	TMap<uint32, TSharedPtr<const FACEDatDecodedSurface, ESPMode::ThreadSafe>> TerrainSurfCache;
 	TMap<uint32, uint32> TerrainTilingCache;
 	TSharedPtr<FACETerrainBlendCache, ESPMode::ThreadSafe> BlendCache;
+	TSharedPtr<const ACELegionsSky::FEnvironment, ESPMode::ThreadSafe> Artwork;
 	uint64 CacheFingerprint = 0;
 };

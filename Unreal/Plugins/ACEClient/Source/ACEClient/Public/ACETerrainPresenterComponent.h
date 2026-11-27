@@ -24,6 +24,7 @@ UCLASS(ClassGroup = (ACE), meta = (BlueprintSpawnableComponent))
 class ACECLIENT_API UACETerrainPresenterComponent : public UActorComponent
 {
 	GENERATED_BODY()
+	friend class FACEYaraqArtworkTest;
 	friend class FACESpawnSupportTest;
 	friend class FACEStreamingRetryBudgetTest;
 	friend class FACERetailInteriorStreamingTest;
@@ -61,6 +62,10 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE")
 	float WorldScale = 100.f;
+private:
+	TSharedPtr<class FACELegionsGroundCover> LegionsGrass;
+	float GrassTickTime = 0.f;
+public:
 
 	/**
 	 * Chebyshev radius of landblocks to keep loaded around the player.

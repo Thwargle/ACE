@@ -725,6 +725,7 @@ public:
 	bool SupportsUniformVRMovement() const { return bLocalVRFeedback && (VRCapabilities & 262144u) != 0; }
 	double LastVRPoseSent = -100.;
 	bool SendVRPose(FACEVRPose Pose);
+	void EndVRPoseStream();
 	bool SupportsVRDrops() const { return (VRCapabilities & 1024u) != 0; }
 	bool SendVRDrop(uint32 Cell, int32 Item, int32 SplitAmount, const FVector& OriginAc);
 	bool GetVRPose(int32 Guid, FACEVRPose& Pose) const;
@@ -787,6 +788,7 @@ private:
 		uint16 Count = 0;
 		uint16 Queue = 0;
 		TMap<uint16, TArray<uint8>> Parts;
+		double FirstReceivedAt = 0.;
 		int32 Bytes = 0;
 	};
 	struct FEphemeralMessage
@@ -804,7 +806,7 @@ private:
 	void HandleDatagram(const uint8* Data, int32 Size, bool bFromS2CSocket);
 
 	void HandleConnectRequest(FACEBinaryReader& Body);
-	void HandleGameMessage(const TArray<uint8>& MessageBytes);
+	void HandleGameMessage(const TArray<uint8>& MessageBytes, double ReceivedAt = FPlatformTime::Seconds());
 	void HandleCharacterList(FACEBinaryReader& Reader);
 	friend class FACECharacterManagementTest;
 	bool BuildCharacterMutation(int32 CharacterId, bool bRestore, TArray<uint8>& Payload) const;
@@ -821,6 +823,9 @@ private:
 	void HandleUpdatePosition(FACEBinaryReader& Reader);
 	void HandlePositionQuality(FACEBinaryReader& Reader, bool bPublic);
 	void HandleUpdateMotion(FACEBinaryReader& Reader);
+	static bool DecodeMotionBody(FACEBinaryReader& Reader, const FACEPosition* Origin, bool bLocalPlayer,
+		uint16& ActionStamp, bool& bHaveActionStamp, FACEObjectMotionState& Motion);
+	void ApplyReceivedMotion(int32 Guid, FACEObjectMotionState& Motion, uint16 ActionStamp, bool bHaveActionStamp);
 	void HandleVectorUpdate(FACEBinaryReader& Reader);
 	void HandleSetState(FACEBinaryReader& Reader);
 	void HandlePlayerCreate(FACEBinaryReader& Reader);
@@ -848,8 +853,8 @@ private:
 	void ReplayObjectPhysicsEvents(int32 Guid);
 	void HandleSound(FACEBinaryReader& Reader);
 	void HandlePlayerTeleport(FACEBinaryReader& Reader);
-	void ApplyVRWorldSnapshot(FACEBinaryReader& Reader);
-	void HandleVRPose(FACEBinaryReader& Reader);
+	bool ApplyVRWorldSnapshot(FACEBinaryReader& Reader, uint32 TrailerBytes);
+	void HandleVRPose(FACEBinaryReader& Reader, double ReceivedAt);
 	void SendVRSubscriptions();
 	void HandleHealthFeedback(FACEBinaryReader& Reader);
 	void HandleVRRecovery(FACEBinaryReader& Reader);
@@ -862,7 +867,7 @@ private:
 	void HandleSoulEmote(FACEBinaryReader& Reader);
 	void HandleTurbineChat(FACEBinaryReader& Reader);
 	void HandleSetTurbineChatChannels(FACEBinaryReader& Reader);
-	void HandleGameEvent(FACEBinaryReader& Reader);
+	void HandleGameEvent(FACEBinaryReader& Reader, double ReceivedAt = FPlatformTime::Seconds());
 	void HandleCombatVictimNotification(FACEBinaryReader& Reader);
 	void HandleCombatKillerNotification(FACEBinaryReader& Reader);
 	void HandleCombatAttackerNotification(FACEBinaryReader& Reader);
@@ -1081,13 +1086,14 @@ private:
 	double NetworkDispatchAge(double Now) const;
 	double NetworkPumpBudgetSeconds(bool bSocketBacklog) const;
 	void RequestMissingS2CPackets(double Now);
-	void ProcessReceivedFragment(const FReceivedFragment& Fragment);
+	void ProcessReceivedFragment(const FReceivedFragment& Fragment, double ReceivedAt = FPlatformTime::Seconds());
 	void ResetReceivedMessages();
 	void RemovePartialMessage(uint64 BlobId);
 	void ExpireEphemeralMessages(double Now);
-	void ReceiveGameMessage(const TArray<uint8>& Message);
+	void ReceiveGameMessage(const TArray<uint8>& Message, double ReceivedAt = FPlatformTime::Seconds());
 	bool AcceptPropertyStamp(const TArray<uint8>& Message);
 	void QueueReadyGameEvents(int32 Owner);
+	void ForgetObjectEventOrder(int32 Owner);
 	void DispatchReadyGameEvent();
 
 	static uint32 HeaderHash32(uint32 Sequence, EACEPacketHeaderFlags Flags, uint16 Id, uint16 Time, uint16 Size, uint16 Iteration);
@@ -1203,6 +1209,7 @@ private:
 	TSet<uint32> RejectedS2CPackets;
 	float AutoPosTimer = 0.f;
 	void TickPositionReporting(float DeltaSeconds);
+	bool HasPositionReportChanged() const;
 	FACEPosition LastReportedPosition;
 	bool bHaveReportedPosition = false;
 	bool bLastReportedContact = true;

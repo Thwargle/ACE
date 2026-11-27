@@ -1,4 +1,5 @@
 #include "ACELandblockActor.h"
+#include "Sky/ACELegionsEnvironment.h"
 #include "ACEDatSubsystem.h"
 #include "ACEClientSubsystem.h"
 #include "ACERegionSceneryActor.h"
@@ -1531,6 +1532,24 @@ bool AACELandblockActor::LoadLandblock(int32 InLandblockId, float InWorldScale, 
 		QueueScenery(Dat);
 	}
 	return true;
+}
+
+void AACELandblockActor::RefreshImportedScenery(UACEDatSubsystem& Dat)
+{
+	for (const auto& Pair : SceneryHisms)
+	{
+		const uint32 Id = uint32(Pair.Key >> 32);
+		if (!Pair.Value || !ACELegionsSky::IsMappedScenery(Id)) continue;
+		const int32 Placement = int32(Pair.Key & 0x7fffffffu);
+		const bool Collision = (Pair.Key & 0x80000000u) != 0;
+		Dat.GetOrBuildSetupMeshShared(Id,WorldScale,Placement);
+		if (auto* Mesh = Dat.GetOrCreateSetupStaticMesh(Id,WorldScale,Collision,Placement,false,false,true))
+		{
+			Pair.Value->EmptyOverrideMaterials();
+			Pair.Value->SetStaticMesh(Mesh);
+			Dat.BindSetupStaticMeshMaterials(Pair.Value,Id,WorldScale,Collision,Placement,false,false,true);
+		}
+	}
 }
 
 bool AACELandblockActor::ReapplyOutdoorTerrain()

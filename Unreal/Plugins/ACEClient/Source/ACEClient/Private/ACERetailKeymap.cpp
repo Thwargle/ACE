@@ -99,7 +99,7 @@ const TMap<FString,FKey>& ActionNames()
   {TEXT("ToggleInventoryPanel"),EKeys::I},{TEXT("ToggleAttributesPanel"),EKeys::P},{TEXT("ToggleSkillsPanel"),Action(TEXT("Skills"))},
   {TEXT("ToggleSpellbookPanel"),EKeys::M},{TEXT("ToggleSpellComponentsPanel"),Action(TEXT("Components"))},{TEXT("ToggleWorldPanel"),Action(TEXT("World"))},
   {TEXT("ToggleOptionsPanel"),EKeys::O},{TEXT("ToggleAllegiancePanel"),Action(TEXT("Allegiance"))},{TEXT("ToggleFellowshipPanel"),Action(TEXT("Fellowship"))},
-  {TEXT("ToggleContractsPanel"),EKeys::U},{TEXT("ToggleChat"),Action(TEXT("ToggleChat"))},
+  {TEXT("ToggleContractsPanel"),EKeys::U},{TEXT("ToggleChatEntry"),Action(TEXT("ToggleChat"))},
   {TEXT("USE"),EKeys::F},{TEXT("EscapeKey"),EKeys::Escape},{TEXT("EnterChatMode"),Action(TEXT("Chat"))},{TEXT("CombatToggleCombat"),EKeys::Tilde},
   {TEXT("PointState"),EKeys::K},{TEXT("Wave"),EKeys::J},{TEXT("Laugh"),Action(TEXT("Laugh"))},{TEXT("Cheer"),Action(TEXT("Cheer"))},{TEXT("Cry"),Action(TEXT("Cry"))},
   {TEXT("CreateShortcut"),EKeys::Zero},
@@ -117,11 +117,19 @@ const TMap<FString,FKey>& ActionNames()
  };
  return Map;
 }
-FKey ActionFor(const FString& Name)
+FKey ActionFor(const FString& Name,int32 Context)
 {
  using namespace ACEInputBindings;
+ if(Context==AlternateCameraContext)
+ {
+  const FKey Alternate=Action(*(TEXT("Alternate.")+Name));
+  for(const auto& A:Actions())if(A.Context==Context && A.Key==Alternate)return A.Key;
+  return FKey();
+ }
+ // Accept the spelling written by earlier AC:Unreal exports.
+ if(Name==TEXT("ToggleChat"))return Action(TEXT("ToggleChat"));
  if(const FKey* Key=ActionNames().Find(Name))return *Key;
- for(const auto& A:ACERetailAdditionalActions())if(A.Key.ToString()==TEXT("ACE.")+Name)return A.Key;
+ for(const auto& A:ACERetailAdditionalActions())if(A.Context!=AlternateCameraContext && A.Key.ToString()==TEXT("ACE.")+Name)return A.Key;
  for(int32 I=0;I<18;++I)if(Name==FString::Printf(TEXT("UseQuickSlot_%d"),I+1))return Shortcut(I);
  for(int32 I=0;I<12;++I)if(Name==FString::Printf(TEXT("UseSpellSlot_%d"),I+1))return SpellSlot(I);
  return FKey();
@@ -129,7 +137,12 @@ FKey ActionFor(const FString& Name)
 FString NameFor(FKey Key)
 {
  for(const auto& P:ActionNames())if(P.Value==Key)return P.Key;
- for(const auto& A:ACERetailAdditionalActions())if(A.Key==Key)return Key.ToString().Mid(4);
+ for(const auto& A:ACERetailAdditionalActions())if(A.Key==Key)
+ {
+  FString Name=Key.ToString();
+  Name.RemoveFromStart(A.Context==ACEInputBindings::AlternateCameraContext?TEXT("ACE.Alternate."):TEXT("ACE."));
+  return Name;
+ }
  for(int32 I=0;I<18;++I)if(Key==ACEInputBindings::Shortcut(I))return FString::Printf(TEXT("UseQuickSlot_%d"),I+1);
  for(int32 I=0;I<12;++I)if(Key==ACEInputBindings::SpellSlot(I))return FString::Printf(TEXT("UseSpellSlot_%d"),I+1);
  return FString();
@@ -137,13 +150,14 @@ FString NameFor(FKey Key)
 FString GroupFor(const FString& Name,int32 Context,const TCHAR* Page)
 {
  // ActionMap 0x26000000 defines the permitted retail input map for each action.
+ if(Context==ACEInputBindings::AlternateCameraContext)return TEXT("CameraAlternateControls");
  if(Context==2)return TEXT("MeleeCombat");if(Context==4)return TEXT("MissileCombat");if(Context==8)return TEXT("MagicCombat");
  if(Name.StartsWith(TEXT("Movement"))||Name==TEXT("Ready")||Name==TEXT("Sitting")||Name==TEXT("Crouch")||Name==TEXT("Sleeping"))return TEXT("MovementCommands");
  if(Name.StartsWith(TEXT("Camera")))return TEXT("CameraControls");
  if(FString(Page)==TEXT("Emotes"))return TEXT("Emotes");
  if(Name.StartsWith(TEXT("UseQuickSlot"))||Name==TEXT("CreateShortcut"))return TEXT("QuickslotCommands");
  if(Name.StartsWith(TEXT("Selection"))&&Name!=TEXT("SelectionExamine"))return TEXT("ItemSelectionCommands");
- if(Name==TEXT("ToggleChat"))return TEXT("ToggleChatEntry");
+ if(Name==TEXT("ToggleChatEntry"))return TEXT("ToggleChatEntry");
  if(Name==TEXT("EnterChatMode"))return TEXT("ChatCommands");
  if(Name==TEXT("CombatToggleCombat"))return TEXT("Combat");
  return TEXT("UICommands");
@@ -191,14 +205,14 @@ FImportResult ImportRetailKeymap(const FString& Text)
  {
   // A camera action in CameraAlternateControls must never replace a movement
   // arrow in the ordinary map. Only contexts implemented by our dispatcher apply.
-  static const TSet<FString> SupportedGroups={TEXT("MovementCommands"),TEXT("ItemSelectionCommands"),TEXT("UICommands"),TEXT("QuickslotCommands"),TEXT("ChatCommands"),TEXT("ToggleChatEntry"),TEXT("Combat"),TEXT("MeleeCombat"),TEXT("MissileCombat"),TEXT("MagicCombat"),TEXT("Emotes"),TEXT("CameraControls")};
+  static const TSet<FString> SupportedGroups={TEXT("MovementCommands"),TEXT("ItemSelectionCommands"),TEXT("UICommands"),TEXT("QuickslotCommands"),TEXT("ChatCommands"),TEXT("ToggleChatEntry"),TEXT("Combat"),TEXT("MeleeCombat"),TEXT("MissileCombat"),TEXT("MagicCombat"),TEXT("Emotes"),TEXT("CameraControls"),TEXT("CameraAlternateControls")};
   if(!SupportedGroups.Contains(Group.Name))
   {if(!Group.Children.IsEmpty())Result.UnchangedContexts.AddUnique(FString::Printf(TEXT("%s (%d entries): existing application controls remain in use"),*Group.Name,Group.Children.Num()));continue;}
   GroupsSeen.Add(Group.Name);
-  const int32 Mode=Group.Name==TEXT("MeleeCombat")?2:Group.Name==TEXT("MissileCombat")?4:Group.Name==TEXT("MagicCombat")?8:0;
+  const int32 Mode=Group.Name==TEXT("CameraAlternateControls")?AlternateCameraContext:Group.Name==TEXT("QuickslotCommands")?QuickslotContext:Group.Name==TEXT("MeleeCombat")?2:Group.Name==TEXT("MissileCombat")?4:Group.Name==TEXT("MagicCombat")?8:0;
   for(const FNode& N:Group.Children)
   {
-   const FKey Key=ActionFor(N.Name);const bool Nothing=N.Name==TEXT("DoNothing");
+   const FKey Key=ActionFor(N.Name,Mode);const bool Nothing=N.Name==TEXT("DoNothing");
    auto Skip=[&](const TCHAR* Why)
    {
     FString Details;
@@ -259,7 +273,7 @@ bool ExportRetailKeymapFile(const FString& Path,FString& Error)
  if(!FPaths::GetExtension(Path).Equals(TEXT("keymap"),ESearchCase::IgnoreCase))
  {Error=TEXT("Choose a filename ending in .keymap.");return false;}
  TMap<FKey,FString> Names;for(const auto& P:ActionNames())Names.Add(P.Value,P.Key);
- for(const auto& A:ACERetailAdditionalActions())Names.Add(A.Key,A.Key.ToString().Mid(4));
+ for(const auto& A:ACERetailAdditionalActions())Names.Add(A.Key,NameFor(A.Key));
  for(int32 I=0;I<18;++I)Names.Add(Shortcut(I),FString::Printf(TEXT("UseQuickSlot_%d"),I+1));
  for(int32 I=0;I<12;++I)Names.Add(SpellSlot(I),FString::Printf(TEXT("UseSpellSlot_%d"),I+1));
  // First entry is ControlNameMapper's canonical DirectInput spelling; later

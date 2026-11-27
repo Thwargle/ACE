@@ -401,7 +401,7 @@ void UACEPluginSubsystem::TogglePanel()
     if(auto* PC=GetGameInstance()->GetFirstLocalPlayerController())if(APawn* Pawn=PC->GetPawn())
         if(auto* VR=Pawn->FindComponentByClass<UACEVRComponent>();VR && VR->IsActive())
         {
-            VR->OpenPluginManager(); return;
+            VR->TogglePluginManager(); return;
         }
     auto* Viewport=GetGameInstance()->GetGameViewportClient(); if(!Viewport)return;
     if(DesktopPanel){CloseDesktopPluginManager();return;}

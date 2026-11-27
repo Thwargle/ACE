@@ -57,7 +57,7 @@ public:
 	};
 
 	/** Gives the square texture loaded terrain draws for a terrain palette code (BakePCode). */
-	using FBakeTile = TFunction<bool(uint32 PalCode, TArray<FColor>& OutPixels, int32& OutSize)>;
+	using FBakeTile = TFunction<bool(uint32 PalCode, TArray<FColor>& OutPixels, int32& OutSize, int32& OutCellsAcross)>;
 
 	/**
 	 * Bring the texture content to Center. Out gets every part that changed.
@@ -76,7 +76,8 @@ public:
 	static constexpr int32 TilePixels = 16 * 16 + 8 * 8 + 4 * 4 + 2 * 2 + 1;
 
 private:
-	const TArray<FColor>& Tile(const FPersonalFarTerrainBake& Bake, int32 CellX, int32 CellY, const FBakeTile& BakeTile);
+	friend class FPersonalFarTerrainDetailTest;
+	TConstArrayView<FColor> Tile(const FPersonalFarTerrainBake& Bake, int32 CellX, int32 CellY, const FBakeTile& BakeTile);
 
 	/** Per palette code: the cell mips, already turned the way the texture needs them. */
 	TMap<uint32, TArray<FColor>> Tiles;

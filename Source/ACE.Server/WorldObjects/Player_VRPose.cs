@@ -23,7 +23,10 @@ namespace ACE.Server.WorldObjects
                 || unchecked((int)(pose.Sequence - vrPoseSequence)) <= 0) return;
             vrPoseSequence = pose.Sequence;
             var now = DateTime.UtcNow;
-            if (now < vrNextPose) return;
+            bool tracking = (pose.Flags & 4u) != 0;
+            // A final tracking release can immediately follow the last sample.
+            // Allow it once so observers and melee spacing resume ordinary movement.
+            if (now < vrNextPose && (tracking || vrLastTrackedPose == DateTime.MinValue)) return;
             vrNextPose = now.AddMilliseconds(40); // max 25 Hz; client normally sends 20 Hz
             // AutoPos can already be queued when the tracked pose is dispatched,
             // but the landblock physics tick has not consumed it yet. Run the
@@ -44,7 +47,7 @@ namespace ACE.Server.WorldObjects
                 if (Teleporting || !IsAlive || pose.Cell != Location.Cell
                     || pose.Teleport != BitConverter.ToUInt16(Sequences.GetCurrentSequence(SequenceType.ObjectTeleport), 0)) return;
             }
-            vrLastTrackedPose = (pose.Flags & 4u) != 0 ? now : DateTime.MinValue;
+            vrLastTrackedPose = tracking ? now : DateTime.MinValue;
             // Preserve implicit opt-in for older VR clients. New desktop/VR
             // clients may instead subscribe without sending any tracked poses.
             vrPoseSubscribed = true;

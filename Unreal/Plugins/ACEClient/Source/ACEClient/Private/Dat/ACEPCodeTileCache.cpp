@@ -31,17 +31,23 @@ namespace ACEPCodeTileCache
 		}
 	}
 
-	FString MakeCacheFilePath(uint32 PCode, uint64 DatFingerprint)
+	FString MakeCacheFilePath(uint32 PCode, uint64 DatFingerprint, uint64 ArtworkKey)
 	{
+		// Keep the AC1 fingerprint in the filename so cache maintenance and other
+		// clients sharing the folder retain the tiles for every artwork selection.
+		if (!ArtworkKey) ArtworkKey = DatFingerprint;
+		if (ArtworkKey != DatFingerprint)
+			return ACEDiskTileCache::GetPCodesDir() /
+				FString::Printf(TEXT("%08X_%016llX_%016llX.acpx"), PCode, DatFingerprint, ArtworkKey);
 		return ACEDiskTileCache::GetPCodesDir()
 			/ FString::Printf(TEXT("%08X_%016llX.acpx"), PCode, DatFingerprint);
 	}
 
-	bool SavePrepared(uint32 PCode, uint64 DatFingerprint, const FACETerrainBlend& Blend)
+	bool SavePrepared(uint32 PCode, uint64 DatFingerprint, const FACETerrainBlend& Blend, uint64 ArtworkKey)
 	{
 		if (!Blend.IsValid() || Blend.UploadMips.IsEmpty() || Blend.Width>2048 || Blend.Height>2048) return false;
 		TArray<uint8> Bytes;
-		WritePod(Bytes, Magic); WritePod(Bytes, SchemaVersion); WritePod(Bytes, PCode); WritePod(Bytes, DatFingerprint);
+		WritePod(Bytes, Magic); WritePod(Bytes, SchemaVersion); WritePod(Bytes, PCode); WritePod(Bytes, (ArtworkKey ? ArtworkKey : DatFingerprint));
 		WritePod(Bytes, Blend.Width); WritePod(Bytes, Blend.Height); WritePod(Bytes, Blend.UploadMips.Num());
 		for (const auto& Mip : Blend.UploadMips)
 		{
@@ -49,7 +55,7 @@ namespace ACEPCodeTileCache
 			Bytes.Append(Mip.Data);
 		}
 		const uint32 CRC=FCrc::MemCrc32(Bytes.GetData(),Bytes.Num()); WritePod(Bytes,CRC);
-		const FString Path=MakeCacheFilePath(PCode,DatFingerprint);
+		const FString Path=MakeCacheFilePath(PCode,DatFingerprint,ArtworkKey);
 		const FString Temp=Path+FGuid::NewGuid().ToString()+TEXT(".tmp");
 		if (!FFileHelper::SaveArrayToFile(Bytes,*Temp)) return false;
 		IFileManager& FM=IFileManager::Get();
@@ -58,10 +64,10 @@ namespace ACEPCodeTileCache
 		return Saved;
 	}
 
-	bool LoadPrepared(uint32 PCode, uint64 DatFingerprint, FACETerrainBlend& OutBlend)
+	bool LoadPrepared(uint32 PCode, uint64 DatFingerprint, FACETerrainBlend& OutBlend, uint64 ArtworkKey)
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(ACE_LoadPreparedLandMips);
-		const FString Path=MakeCacheFilePath(PCode,DatFingerprint);
+		const FString Path=MakeCacheFilePath(PCode,DatFingerprint,ArtworkKey);
 		// Validate sizes before allocating. A corrupt cache is a cache miss, never
 		// a partially published texture or an unbounded allocation during login.
 		const int64 FileSize=IFileManager::Get().FileSize(*Path);
@@ -74,7 +80,7 @@ namespace ACEPCodeTileCache
 		uint32 FileMagic=0,Version=0,Code=0; uint64 Fingerprint=0; int32 Count=0;
 		FACETerrainBlend Loaded;
 		if (!ReadPod(Ar,FileMagic) || FileMagic!=Magic || !ReadPod(Ar,Version) || Version!=SchemaVersion
-			|| !ReadPod(Ar,Code) || Code!=PCode || !ReadPod(Ar,Fingerprint) || Fingerprint!=DatFingerprint
+			|| !ReadPod(Ar,Code) || Code!=PCode || !ReadPod(Ar,Fingerprint) || Fingerprint!=(ArtworkKey ? ArtworkKey : DatFingerprint)
 			|| !ReadPod(Ar,Loaded.Width) || !ReadPod(Ar,Loaded.Height) || !ReadPod(Ar,Count)
 			|| Loaded.Width<=0 || Loaded.Height<=0 || Loaded.Width>2048 || Loaded.Height>2048
 			|| Count!=FMath::FloorLog2(FMath::Max(Loaded.Width,Loaded.Height))+1) return false;

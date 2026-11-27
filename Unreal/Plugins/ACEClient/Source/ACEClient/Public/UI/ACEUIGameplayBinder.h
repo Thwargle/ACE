@@ -569,6 +569,7 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UScrollBox> KeymapReportScroll;
 	UPROPERTY(Transient) TObjectPtr<UTextBlock> KeymapReportText;
 	bool bKeymapReport = false;
+	bool bKeymapHasCycleConflict = false;
 	UPROPERTY(Transient) TArray<TObjectPtr<UTextBlock>> KeymapDialogLabels;
 	UPROPERTY(Transient) TObjectPtr<UComboBoxString> KeymapFileChoice;
 	TArray<FString> KeymapFiles;

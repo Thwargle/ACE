@@ -314,6 +314,7 @@ void AACEPlayerController::EnsureDatIntroCanvas()
 
 void AACEPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	CloseClientHelp();
 	UpdateObjectHighlights(false);
 	KeyboardRouter.Reset();
 	DesktopDisplay.Reset();
@@ -1004,6 +1005,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				SetDesktopInterfaceHidden(!bDesktopInterfaceHidden);
 			if (DatGameplayBinder && !IsDesktopInterfaceHidden())
 			{
+				PollClientUtilityKeys();
 				DatGameplayBinder->PollInterfaceKeyboardActions(this);
 				if (ACEInputBindings::Pressed(this, EKeys::Escape)) DatGameplayBinder->HandleEscape();
 			}
@@ -1015,6 +1017,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	}
 	if (!Client || Client->GetSessionState() != EACESessionState::InWorld)
 	{
+		CloseClientHelp();
 		if (APawn* P = GetPawn())
 			if (auto* App = P->FindComponentByClass<UACECharacterAppearanceComponent>()) App->ResetWalkingMotion();
 		UpdateObjectHighlights(false);
@@ -1141,6 +1144,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		// A movement press and an attack hotkey can arrive in the same frame.
 		if (bJumpAirborne || !FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R))
 			Client->GetSession()->SetLocalMissileTravel(true);
+        PollClientUtilityKeys();
         if(DatGameplayBinder) DatGameplayBinder->PollKeyboardActions(this);
         else if(GameHUDWidget)for(int32 Slot=0;Slot<9;++Slot)
             if(ACEInputBindings::Pressed(this,ACEInputBindings::Shortcut(Slot)))GameHUDWidget->ActivateHotbarSlot(Slot);
@@ -4156,7 +4160,8 @@ void AACEPlayerController::UpdateMouseLook(float DeltaTime, USpringArmComponent*
     const bool bInputFocused = (DatGameplayBinder && DatGameplayBinder->IsChatEntryFocused())
         || (GameHUDWidget && GameHUDWidget->IsChatEntryFocused()) || ACEInputBindings::IsEditing() || ACEInputBindings::IsTextEntryFocused();
     const bool bWasInstant = bInstantMouseLookHeld;
-    bInstantMouseLookHeld = !bInputFocused && ACEInputBindings::Down(this,ACEInputBindings::Action(TEXT("CameraInstantMouseLook")));
+    bInstantMouseLookHeld = !bInputFocused && (ACEInputBindings::Down(this,ACEInputBindings::Action(TEXT("CameraInstantMouseLook")))
+        || ACEInputBindings::Down(this,ACEInputBindings::Action(TEXT("CameraActivateAlternateMode"))));
     const bool bRightDown = IsInputKeyDown(EKeys::RightMouseButton) || bInstantMouseLookHeld;
     const bool bLeftDown = IsInputKeyDown(EKeys::LeftMouseButton);
     float MX = 0.f, MY = 0.f;
@@ -4276,10 +4281,14 @@ void AACEPlayerController::UpdateOrbitCamera(float DeltaTime)
 
 	UpdateMouseLook(DeltaTime, Boom);
 
-	const float bOrbitLeft = ACEInputBindings::Value(this, EKeys::NumPadFour);
-	const float bOrbitRight = ACEInputBindings::Value(this, EKeys::NumPadSix);
-	const float bOrbitUp = ACEInputBindings::Value(this, EKeys::NumPadEight);
-	const float bOrbitDown = ACEInputBindings::Value(this, EKeys::NumPadTwo);
+	const float bOrbitLeft = FMath::Max(ACEInputBindings::Value(this, EKeys::NumPadFour),
+		ACEInputBindings::Value(this, ACEInputBindings::Action(TEXT("Alternate.CameraRotateLeft"))));
+	const float bOrbitRight = FMath::Max(ACEInputBindings::Value(this, EKeys::NumPadSix),
+		ACEInputBindings::Value(this, ACEInputBindings::Action(TEXT("Alternate.CameraRotateRight"))));
+	const float bOrbitUp = FMath::Max(ACEInputBindings::Value(this, EKeys::NumPadEight),
+		ACEInputBindings::Value(this, ACEInputBindings::Action(TEXT("Alternate.CameraRotateUp"))));
+	const float bOrbitDown = FMath::Max(ACEInputBindings::Value(this, EKeys::NumPadTwo),
+		ACEInputBindings::Value(this, ACEInputBindings::Action(TEXT("Alternate.CameraRotateDown"))));
 	const float OrbitStep = ACECameraRetail::NumpadOrbitDegreesPerSecond * DeltaTime
 		* ACERuntimeOptions::Get(TEXT("CameraAdjustment"));
 	const float PitchStep = bCameraLookDown

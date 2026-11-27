@@ -42,6 +42,7 @@ class ACECLIENT_API AACELandblockActor : public AActor
 	friend class FACECameraEdgeTest;
 	friend class FACESpawnSupportTest;
 	friend class FACERetailRuntimeRegressionTest;
+	friend class FACEYaraqArtworkTest;
 
 public:
 	AACELandblockActor();
@@ -58,6 +59,7 @@ public:
 	 * No-op when this actor is scenery-only under a terrain chunk.
 	 */
 	bool ReapplyOutdoorTerrain();
+	void RefreshImportedScenery(UACEDatSubsystem& Dat);
 
 	/** Scenery + placement only — terrain mesh owned by AACETerrainChunkActor. */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Terrain")

@@ -8,6 +8,10 @@
 #include "ACEInputBindings.h"
 #include "ACEPlayerController.h"
 #include "Engine/World.h"
+#include "Engine/Engine.h"
+#include "Engine/GameInstance.h"
+#include "Engine/GameViewportClient.h"
+#include "Widgets/SOverlay.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerInput.h"
 #include "RetailCustomKeymap.inl"
@@ -44,6 +48,59 @@ bool FACEInputBindingsTest::RunTest(const FString&)
   for(FKey Key:Keys)PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(Key,IE_Pressed,1.f));
   PC->PlayerInput->ProcessInputStack({},.016f,false);
  };
+ auto CheckRetailKeys=[&]()
+ {
+  using namespace ACEInputBindings;
+  const FKey Help=Action(TEXT("ToggleHelp")),Plugins=Action(TEXT("TogglePluginManager"));
+  Hold({EKeys::F1});TestTrue(TEXT("F1 opens Help"),Pressed(PC,Help));
+  TestFalse(TEXT("F1 alone leaves plugins closed"),Pressed(PC,Plugins));
+  Hold({EKeys::RightShift,EKeys::LeftControl,EKeys::F1});TestTrue(TEXT("Ctrl+Shift+F1 opens plugins"),Pressed(PC,Plugins));
+  TestFalse(TEXT("Modified F1 does not also open Help"),Pressed(PC,Help));
+  const FKey Rotate=Action(TEXT("Alternate.CameraRotateLeft"));
+  for(FKey Activate:{EKeys::Divide,EKeys::F2})
+  {
+   Hold({Activate,EKeys::Left,EKeys::W});
+   TestTrue(TEXT("Alternate camera left"),Down(PC,Rotate));
+   TestFalse(TEXT("Captured arrow does not turn the player"),Down(PC,EKeys::A));
+   TestTrue(TEXT("Independent forward binding continues"),Down(PC,EKeys::W));
+   Hold({EKeys::Left});
+   TestFalse(TEXT("Camera releases the arrow immediately"),Down(PC,Rotate));
+   TestTrue(TEXT("Released arrow turns the player"),Down(PC,EKeys::A));
+  }
+  Hold({EKeys::Slash});TestTrue(TEXT("Slash selects the closest player"),Pressed(PC,Action(TEXT("SelectionClosestPlayer"))));
+  TestFalse(TEXT("Slash leaves chat closed"),Pressed(PC,Action(TEXT("Chat"))));
+  Hold({EKeys::P});TestTrue(TEXT("P recalls the previous selection"),Pressed(PC,Action(TEXT("SelectionPreviousSelection"))));
+  SetCombatContext(8);Hold({EKeys::Hyphen});TestTrue(TEXT("Radar cycling works in magic"),Pressed(PC,Action(TEXT("SelectionPreviousCompassItem"))));
+  Hold({EKeys::Zero});TestTrue(TEXT("Zero still creates a shortcut in magic"),Pressed(PC,EKeys::Zero));
+  SetCombatContext(1);Hold({EKeys::LeftAlt,EKeys::One});
+  TestTrue(TEXT("Quickslot map handles stock Alt+1"),Pressed(PC,Shortcut(9)));
+  TestFalse(TEXT("Overlapping floating chat action is suppressed"),Pressed(PC,Action(TEXT("ToggleFloatingChatWindow1"))));
+ };
+ CheckRetailKeys();
+ FString StockFile;
+ if(FParse::Value(FCommandLine::Get(),TEXT("RetailDefaultKeymap="),StockFile))
+ {
+  using namespace ACEInputBindings;
+  BeginEdit();
+  const auto Stock=ImportRetailKeymapFile(StockFile);
+  TestTrue(TEXT("Stock AC1 keymap imports"),Stock.bSuccess);
+  AddInfo(FString::Printf(TEXT("Retail DAT default: %d gameplay bindings, %d skipped records, %d native UI/system maps."),Stock.BindingCount,Stock.Skipped.Num(),Stock.UnchangedContexts.Num()));
+  for(const auto& Entry:Stock.Skipped)AddError(Entry);
+  for(const auto& A:Actions())
+  {
+   // The wheel is an additional Unreal zoom control. All shipped retail keyboard
+   // and mouse-button chords should otherwise agree with a fresh configuration.
+   for(int32 Slot=0;Slot<3;++Slot)
+   {
+    const auto Expected=A.DefaultBindings[Slot];
+    if(Expected.Key==EKeys::MouseScrollUp || Expected.Key==EKeys::MouseScrollDown)continue;
+    TestTrue(FString::Printf(TEXT("Stock import matches fresh default: %s slot %d"),A.Label,Slot+1),Expected==Get(A.Key,Slot));
+   }
+  }
+  Commit();CheckRetailKeys();
+ }
+ ACEInputBindings::BeginEdit();ACEInputBindings::Defaults();ACEInputBindings::Commit();
+ CheckRetailKeys();Hold({});
  {
   auto& Slate=FSlateApplication::Get();const auto PreviousFocus=Slate.GetKeyboardFocusedWidget();
   TSharedPtr<SEditableTextBox> Entry;
@@ -175,8 +232,8 @@ bool FACEInputBindingsTest::RunTest(const FString&)
  const auto Imported=ACEInputBindings::ImportRetailKeymap(Retail);
  if(!Imported.bSuccess)AddError(Imported.Error);
  TestTrue(TEXT("Retail text keymap imports"),Imported.bSuccess);
- TestTrue(TEXT("Unsupported actions, devices and modifiers are reported"),Imported.Skipped.Num()>=3);
- TestEqual(TEXT("Separate native contexts are reported separately"),Imported.UnchangedContexts.Num(),2);
+ TestTrue(TEXT("Unsupported devices and modifiers are reported"),Imported.Skipped.Num()==2);
+ TestEqual(TEXT("Separate native contexts are reported separately"),Imported.UnchangedContexts.Num(),1);
  TestEqual(TEXT("Import is a draft and keeps retail S backward"),ACEInputBindings::Get(EKeys::S,0).Key,EKeys::S);
  TestEqual(TEXT("Mouse autorun imports using the declared device index"),ACEInputBindings::Get(EKeys::NumLock,0).Key,EKeys::ThumbMouseButton);
  TestTrue(TEXT("Retail file mask bit 2 names MetaKeys ordinal 3, preserving Alt-A"),ACEInputBindings::Get(EKeys::Q,1)==FInputChord(EKeys::A,false,false,true,false));
@@ -225,11 +282,11 @@ bool FACEInputBindingsTest::RunTest(const FString&)
  ACEInputBindings::BeginEdit();ACEInputBindings::Defaults();
  const auto Custom=ACEInputBindings::ImportRetailKeymap(RetailCustomKeymap);
  TestTrue(TEXT("User retail keymap imports"),Custom.bSuccess);
- TestEqual(TEXT("All supported user-file action bindings import"),Custom.BindingCount,157);
- TestEqual(TEXT("Remaining unsupported controls are reported individually"),Custom.Skipped.Num(),18);
+ TestEqual(TEXT("All supported user-file action bindings import"),Custom.BindingCount,163);
+ TestEqual(TEXT("Remaining unsupported controls are reported individually"),Custom.Skipped.Num(),16);
  TestEqual(TEXT("Retail map view imports its keypad Enter"),ACEInputBindings::Get(ACEInputBindings::Action(TEXT("CameraViewMapMode")),0).Key,ACEInputBindings::NumpadEnterKey());
- TestEqual(TEXT("All explicit supported DoNothing overrides import, including chat toggles"),ACEInputBindings::GetBlockedBindings().Num(),19);
- TestEqual(TEXT("Native input contexts are accounted for separately"),Custom.UnchangedContexts.Num(),8);
+ TestEqual(TEXT("All explicit supported DoNothing overrides import, including chat toggles"),ACEInputBindings::GetBlockedBindings().Num(),20);
+ TestEqual(TEXT("Native input contexts are accounted for separately"),Custom.UnchangedContexts.Num(),7);
  AddInfo(FString::Printf(TEXT("Custom keymap: %d imported, %d diagnostics"),Custom.BindingCount,Custom.Skipped.Num()));
  for(const auto& Entry:Custom.Skipped)AddInfo(Entry);
  TestEqual(TEXT("Self binding from user file"),ACEInputBindings::Get(ACEInputBindings::Action(TEXT("SelectionSelf")),0).Key,EKeys::NumPadOne);
@@ -319,6 +376,24 @@ bool FACEInputBindingsTest::RunTest(const FString&)
  Movement->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::Gamepad_LeftY,IE_Axis,-1.f));
  Movement->PlayerInput->ProcessInputStack({},.016f,false);
  TestTrue(TEXT("Stick directions can be rebound just like buttons"),ACEInputBindings::Down(Movement,EKeys::W));
+ // Both player exports assign the same physical keys in global and magic maps.
+ ACEInputBindings::BeginEdit();
+ const auto CycleMap=ACEInputBindings::ImportRetailKeymap(TEXT(
+  "\"User Defined Keymap\" [ 00000000-0000-0000-0000-000000000000 ] Devices [ Keyboard [ GUID_SysKeyboard ] ] Bindings [ "
+  "ItemSelectionCommands [ SelectionPreviousMonster [ \"\" [ 0 DIK_MINUS ] ] SelectionNextMonster [ \"\" [ 0 DIK_EQUALS ] ] "
+  "SelectionPreviousSelection [ \"\" [ 0 DIK_P ] ] ] ToggleChatEntry [ ToggleChatEntry [ \"\" [ 0 DIK_TAB ] ] ] "
+  "MagicCombat [ UseSpellSlot_11 [ \"\" [ 0 DIK_MINUS ] ] UseSpellSlot_12 [ \"\" [ 0 DIK_EQUALS ] ] ] ]"));
+ TestTrue(TEXT("Retail selection and chat-entry actions import"),CycleMap.bSuccess && CycleMap.Skipped.IsEmpty());
+ TestEqual(TEXT("Both monster cycling conflicts are identified"),ACEInputBindings::MonsterCycleConflicts(false).Num(),2);
+ ACEInputBindings::MonsterCycleConflicts(true);
+ ACEInputBindings::Commit();
+ for(int32 Mode:{1,2,4,8})
+ {
+  ACEInputBindings::SetCombatContext(Mode);
+  Hold({EKeys::Hyphen});TestTrue(TEXT("Minus selects previous monster in every stance"),ACEInputBindings::Pressed(PC,EKeys::Semicolon));
+  Hold({EKeys::Equals});TestTrue(TEXT("Equals selects next monster in every stance"),ACEInputBindings::Pressed(PC,EKeys::Apostrophe));
+  Hold({EKeys::P});TestTrue(TEXT("P restores previous selection"),ACEInputBindings::Pressed(PC,ACEInputBindings::Action(TEXT("SelectionPreviousSelection"))));
+ }
  // Replay a supplied report without changing the user's live bindings or file.
  FString ReportedKeymap;
  if(FParse::Value(FCommandLine::Get(),TEXT("RetailKeymapTestFile="),ReportedKeymap))
@@ -347,5 +422,58 @@ bool FACEInputBindingsTest::RunTest(const FString&)
   CheckReported();ACEInputBindings::Reload();CheckReported();
  }
  return !HasAnyErrors();
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailUtilityKeysTest,"ACE.RetailParity.KeyboardUtilityWindows",
+ EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACERetailUtilityKeysTest::RunTest(const FString&)
+{
+ auto* GI=NewObject<UGameInstance>(GEngine);
+ GI->InitializeStandalone();
+ auto* World=GI->GetWorld();
+ auto* Viewport=NewObject<UGameViewportClient>(GEngine);
+ GI->GetWorldContext()->GameViewport=Viewport;
+ const auto Overlay=SNew(SOverlay);
+ Viewport->SetViewportOverlayWidget(nullptr,Overlay);
+ auto* PC=World->SpawnActor<AACEPlayerController>();
+ PC->PlayerInput=NewObject<UPlayerInput>(PC);
+ const FString Original=GGameUserSettingsIni;
+ GGameUserSettingsIni=FPaths::ProjectSavedDir()/TEXT("Automation/KeyboardWindows.ini");
+ FConfigFile Config;Config.NoSave=false;Config.bCanSaveAllSections=true;
+ GConfig->SetFile(GGameUserSettingsIni,&Config);ACEInputBindings::Reload();
+ ON_SCOPE_EXIT
+ {
+  GI->Shutdown();GEngine->DestroyWorldContext(World);World->DestroyWorld(false);
+  GGameUserSettingsIni=Original;ACEInputBindings::Reload();
+ };
+ auto Press=[&](TArray<FKey> Keys)
+ {
+  PC->PlayerInput->FlushPressedKeys();
+  for(auto Key:Keys)PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(Key,IE_Pressed,1.f));
+  PC->PlayerInput->ProcessInputStack({},.016f,false);PC->PollClientUtilityKeys();
+ };
+ const FString Imported=TEXT(R"KEYMAP(
+ Devices [ Keyboard [ GUID_SysKeyboard ] ] MetaKeys [ 1 [ 0 DIK_LSHIFT ] 2 [ 0 DIK_LCONTROL ] ]
+ Bindings [ UICommands [ ToggleHelp [ "" [ 0 DIK_F1 ] ] TogglePluginManager [ "" [ 0 DIK_F1 ] 0x3 ] ] ]
+ )KEYMAP");
+ for(bool Import:{false,true})
+ {
+  if(Import)
+  {
+   ACEInputBindings::BeginEdit();const auto Map=ACEInputBindings::ImportRetailKeymap(Imported);
+   TestTrue(TEXT("Utility shortcuts accepted in the default retail format"),Map.bSuccess && Map.Skipped.IsEmpty());ACEInputBindings::Commit();
+  }
+  Press({EKeys::F1});
+  if (!TestEqual(TEXT("F1 opens one viewport panel"),Overlay->GetChildren()->Num(),1))return false;
+  TestEqual(TEXT("F1 opens the help reader"),Overlay->GetChildren()->GetChildAt(0)->GetType(),FName(TEXT("SACERetailHelp")));
+  Press({EKeys::F1});
+  TestEqual(TEXT("Repeated F1 keeps one help window"),Overlay->GetChildren()->Num(),1);
+  TestTrue(TEXT("Help closes"),PC->CloseClientHelp());
+  Press({EKeys::RightControl,EKeys::LeftShift,EKeys::F1});
+  if (!TestEqual(TEXT("Manager shortcut opens one viewport panel"),Overlay->GetChildren()->Num(),1))return false;
+  TestEqual(TEXT("Modified F1 opens the real plugin manager"),Overlay->GetChildren()->GetChildAt(0)->GetType(),FName(TEXT("SACEPluginDesktop")));
+  Press({EKeys::LeftControl,EKeys::RightShift,EKeys::F1});
+  TestEqual(TEXT("Second manager shortcut closes the panel"),Overlay->GetChildren()->Num(),0);
+ }
+ return true;
 }
 #endif

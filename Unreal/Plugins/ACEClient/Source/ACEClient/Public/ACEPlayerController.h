@@ -249,10 +249,14 @@ public:
 	int32 GetObjectCursorTargeting() const { return ObjectCursorTargetMode; }
 
 public:
+    void OpenClientHelp();
+    bool CloseClientHelp();
+    void PollClientUtilityKeys();
     class UACEUIGameplayBinder* GetActionDeckBinder() const { return DatGameplayBinder; }
     friend class FACEActionDeckTest;
     friend class FACERetailCursorTest;
 protected:
+	TSharedPtr<SWidget> ClientHelpPanel;
 	bool bDesktopInterfaceHidden = false;
 	UPROPERTY()
 	TObjectPtr<UACELoginWidget> LoginWidget = nullptr;

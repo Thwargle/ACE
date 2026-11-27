@@ -39,6 +39,7 @@ class ACECLIENT_API AACESkyDomeActor : public AActor
 	friend class FACEMobileShadowTest;
 	friend class FACELowEndVideoSettingsTest;
 	friend class FACELegionsSkyTest;
+	friend class FACEYaraqArtworkTest;
 
 public:
 	AACESkyDomeActor();

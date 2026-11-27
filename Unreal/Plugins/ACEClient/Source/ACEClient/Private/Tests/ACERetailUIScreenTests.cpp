@@ -2204,14 +2204,21 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestFalse(TEXT("Unchanged configuration has no pending changes"),Video->HasPendingChanges());
             CheckCameraPreview(*this,Gameplay,Video,[&](const TCHAR* Page){Gameplay->SyncOptionsPanelTab(Page);});
             Gameplay->RefreshOptionsOverlays();
-            TestTrue(TEXT("Unchanged PendingApply and PendingReset use retail disabled state"),PendingApply && PendingReset && !PendingApply->bActivatable && !PendingReset->bActivatable);
+            TestTrue(TEXT("Apply can refresh a clean tab while Reset stays disabled"),PendingApply && PendingReset && PendingApply->bActivatable && !PendingReset->bActivatable);
+            const auto ActiveTab = Gameplay->ActiveOptionsTab;
+            if (!PendingApply) return false;
+            Canvas->PaintStates.FindOrAdd(PendingApply->InstanceId).bHasBrush = true;
+            Gameplay->HandleOptionsNamedClick(TEXT("ApplyButton"));
+            TestTrue(TEXT("Apply invalidates cached HUD paint"), Canvas->PaintStates.IsEmpty());
+            CaptureScreen(TEXT("OptionsRefreshed"));
+            TestTrue(TEXT("The next frame repaints the same open tab"), Gameplay->ActiveOptionsTab == ActiveTab && !Canvas->PaintStates.IsEmpty());
             auto* Toggle=Cast<UCheckBox>(Video->WidgetTree->FindWidget(TEXT("InvertMouseX")));
             if(Toggle)
             {
                 Toggle->SetIsChecked(!Toggle->IsChecked());Gameplay->RefreshOptionsOverlays();
                 TestTrue(TEXT("Changing an option enables Apply and Reset"),Video->HasPendingChanges() && PendingApply && PendingReset && PendingApply->bActivatable && PendingReset->bActivatable);
                 Toggle->SetIsChecked(!Toggle->IsChecked());Gameplay->RefreshOptionsOverlays();
-                TestTrue(TEXT("Restoring the original value disables both buttons"),!Video->HasPendingChanges() && PendingApply && PendingReset && !PendingApply->bActivatable && !PendingReset->bActivatable);
+                TestTrue(TEXT("Restoring the original value still permits a refresh"),!Video->HasPendingChanges() && PendingApply && PendingReset && PendingApply->bActivatable && !PendingReset->bActivatable);
             }
             int32 Collapses=0;
             const auto VisibilityHandle=Video->OnNativeVisibilityChanged.AddLambda([&](ESlateVisibility V)
@@ -2477,6 +2484,15 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Report scroll area ends above the dialog buttons"),ReportGeometry.LocalToAbsolute(ReportGeometry.GetLocalSize()).Y<=ReviewGeometry.GetAbsolutePosition().Y);
         NativeClick(TEXT("KeymapFileOK"));
         TestFalse(TEXT("Review returns to the mapping draft"),Gameplay->bKeymapImportOpen);
+        const FString CyclePath=FPaths::ProjectSavedDir()/TEXT("Automation/CycleFixture.keymap");
+        FFileHelper::SaveStringToFile(TEXT("Devices [ Keyboard [ GUID_SysKeyboard ] ] Bindings [ "
+            "ItemSelectionCommands [ SelectionNextMonster [ \"\" [ 0 DIK_EQUALS ] ] ] "
+            "MagicCombat [ UseSpellSlot_12 [ \"\" [ 0 DIK_EQUALS ] ] ] ]"),*CyclePath);
+        Gameplay->HandleKeymapImport(CyclePath);
+        TestTrue(TEXT("Overlapping monster and spell bindings offer the Targeting choice"),Gameplay->bKeymapHasCycleConflict);
+        NativeClick(TEXT("KeymapFileCancel")); // Secondary button is labelled Targeting for this report.
+        TestFalse(TEXT("Choosing Targeting releases the spell key in the draft"),ACEInputBindings::Get(ACEInputBindings::SpellSlot(11),0).Key.IsValid());
+        TestEqual(TEXT("The draft retains next monster on Equals"),ACEInputBindings::Get(EKeys::Apostrophe,0).Key,EKeys::Equals);
         ACEInputBindings::Revert();Gameplay->RefreshKeyboardOverlays();
         TestEqual(TEXT("Key editor exposes retail mappings plus a controller mapping"),Gameplay->KeyboardRows.Num(),ACEInputBindings::Actions().Num()*4);
         TestTrue(TEXT("Gamepad column has a visible heading"),Gameplay->KeyboardLabels.ContainsByPredicate([](const UTextBlock* T){return T && T->IsVisible() && T->GetText().ToString()==TEXT("Gamepad");}));
@@ -5079,6 +5095,11 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 TestFalse(TEXT("Give leaves the mouse out of Use-target mode"),Controller->bPendingUseTargeting);
                 TestFalse(TEXT("Give never sends Use or UseWithTarget"),HasAction(ACEGameAction::Use)||HasAction(ACEGameAction::UseWithTarget));
             };
+            Select(Recipient.Guid);Select(Gift.Guid);
+            Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::P,IE_Pressed,1.f));
+            Controller->PlayerInput->ProcessInputStack({},.016f,false);
+            Gameplay->PollAdditionalKeyboardActions(Controller);
+            TestEqual(TEXT("Retail previous-selection key restores the actual recipient"),Client->GetSelectedObject().Guid,Recipient.Guid);
             Select(Recipient.Guid);Select(Gift.Guid);Gameplay->SelectedStackAmount=7;
             Select(Gift.Guid);
             TestEqual(TEXT("Reselecting an item preserves its recipient"),Client->GetPreviousSelectedObjectGuid(),Recipient.Guid);
@@ -5203,7 +5224,12 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                     Gameplay->bPendingChatRefocus=false;
                 }
                 App.ClearKeyboardFocus();
-                TestTrue(TEXT("Slash opens chat from gameplay"),Controller->InputKey(
+                Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::Slash,IE_Pressed,1.f));
+                TestFalse(TEXT("Retail slash selection leaves chat closed"),Gameplay->IsChatEntryFocused());
+                ACEInputBindings::BeginEdit();
+                ACEInputBindings::Set(ACEInputBindings::Action(TEXT("Chat")),1,FInputChord(EKeys::Slash));
+                ACEInputBindings::Commit();
+                TestTrue(TEXT("A custom slash binding opens chat from gameplay"),Controller->InputKey(
                     FInputKeyEventArgs::CreateSimulated(EKeys::Slash,IE_Pressed,1.f)));
                 for (TCHAR C:FString(TEXT("/help")))
                     App.ProcessKeyCharEvent(FCharacterEvent(C,FModifierKeysState(),0,false));
@@ -5212,6 +5238,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 TestTrue(TEXT("Slash also opens chat from focused UI chrome"),Canvas->NativeOnPreviewKeyDown(
                     Canvas->GetCachedGeometry(),FKeyEvent(EKeys::Slash,FModifierKeysState(),0,false,0,0)).IsEventHandled());
                 App.ClearKeyboardFocus();
+                ACEInputBindings::BeginEdit();ACEInputBindings::Defaults();ACEInputBindings::Commit();
             }
             Session.CachedC2SPackets.Reset(); Entry->SetText(FText::GetEmpty());
             FSlateApplication::Get().SetKeyboardFocus(Entry->TakeWidget());

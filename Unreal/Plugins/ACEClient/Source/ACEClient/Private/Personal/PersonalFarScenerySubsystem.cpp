@@ -1,4 +1,5 @@
 #include "Personal/PersonalFarScenerySubsystem.h"
+#include "Sky/ACELegionsEnvironment.h"
 #include "Personal/PersonalFarTerrain.h"
 #include "Personal/PersonalFarTerrainSubsystem.h"
 #include "ACEClientSubsystem.h"
@@ -503,6 +504,7 @@ void UPersonalFarScenerySubsystem::PlanUnits(UACEDatSubsystem& Dat, FIntPoint Ce
 	const int32 Group = FMath::Clamp(CVarFarSceneryGroup.GetValueOnGameThread(), 1, 8);
 	const float Factor = PersonalFarScenery::SizeFactor();
 	const float BlockSize = BlockLength * WorldScale;
+	const auto Art = ACELegionsSky::ActiveEnvironment();
 	const bool bDetail = CVarFarSceneryDetail.GetValueOnGameThread() != 0;
 	const int32 MiddleRing = CVarFarSceneryMiddleRing.GetValueOnGameThread();
 	const int32 SimplestRing = FMath::Max(CVarFarScenerySimplestRing.GetValueOnGameThread(), MiddleRing);
@@ -597,6 +599,9 @@ void UPersonalFarScenerySubsystem::PlanUnits(UACEDatSubsystem& Dat, FIntPoint Ce
 					// Buildings keep the client's mesh and shell material at every distance.
 					continue;
 				}
+				// Reduced meshes bake AC1 materials. Use the outdoor setup mesh for imported artwork.
+				const uint32 Id = PersonalFarSceneryPlacement::TypeId(Entry.SetupId);
+				if (Art->ReplacesTree(Id) || Art->BoulderTexture(Id)) continue;
 				if (const PersonalFarSceneryMeshes::FLevelsPtr* Known = Levels.Find(Entry.SetupId))
 				{
 					Entry.Level = uint8((*Known)->Effective(Unit.Level));
@@ -1111,8 +1116,11 @@ void UPersonalFarScenerySubsystem::Stream(UACEDatSubsystem& Dat, const PersonalF
 	const int32 KeepRing = PersonalFarScenery::RetentionRing(BuildRing);
 	const bool bScaleChanged = WorldScale != BuiltWorldScale;
 	BuiltWorldScale = WorldScale;
-	if (bScaleChanged)
+	const auto Art = ACELegionsSky::ActiveEnvironment();
+	const uint64 SceneryArtwork = Art->SceneryCacheKey();
+	if (bScaleChanged || SceneryArtwork != BuiltSceneryArtwork)
 	{
+		BuiltSceneryArtwork = SceneryArtwork;
 		ClearAll();
 		Types.Reset();
 		MeshMade.Reset();

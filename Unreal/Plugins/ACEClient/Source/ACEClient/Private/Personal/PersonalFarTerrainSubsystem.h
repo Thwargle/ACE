@@ -69,6 +69,7 @@ private:
 	PersonalFarTerrainBake::FBakePtr Bake;
 	TFuture<PersonalFarTerrainBake::FBakePtr> PendingBake;
 	bool bBakeRequested = false;
+	uint64 ArtworkKey = 0;
 
 	/** What the current mesh was built from. */
 	FIntPoint BuiltCenter = FIntPoint(MIN_int32, MIN_int32);

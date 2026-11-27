@@ -247,6 +247,16 @@ void UACEUICanvasWidget::NativeConstruct()
 	SyncElementWidgets();
 }
 
+void UACEUICanvasWidget::RefreshPresentation()
+{
+	// Keep the live controls, keyboard focus, and window positions. The next
+	// normal tick resolves their brushes and geometry from the current layout.
+	PaintStates.Reset();
+	if (Manager) Manager->InvalidateNameLookupIndex();
+	InvalidateLayoutAndVolatility();
+	if (FSlateApplication::IsInitialized()) FSlateApplication::Get().InvalidateAllWidgets(false);
+}
+
 void UACEUICanvasWidget::TickGameplayState(bool bRefreshDesktopHUD)
 {
 	if (!GameplayBinder) return;

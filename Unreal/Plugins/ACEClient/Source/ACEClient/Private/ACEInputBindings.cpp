@@ -60,7 +60,6 @@ const TArray<FAction>& Actions()
  static const TArray<FAction> List=[]
  {
   // client_portal.dat 14000000 + 14000002: gmDefaultMap and DefaultMap.
-  // Enter/slash chat is the intentional AC:Unreal convenience binding.
   TArray<FAction> Result={
    {EKeys::W,TEXT("Move forward"),TEXT("Movement"),{FInputChord(EKeys::W),FInputChord(EKeys::Up)}},
    {EKeys::S,TEXT("Move backward"),TEXT("Movement"),{FInputChord(EKeys::X),FInputChord(EKeys::Down)}},
@@ -111,7 +110,7 @@ const TArray<FAction>& Actions()
    {EKeys::F,TEXT("Use selected object"),TEXT("UI"),{FInputChord(EKeys::R)}},
    {Action(TEXT("Pickup")),TEXT("Pick up selected object"),TEXT("UI"),{FInputChord(EKeys::F)}},
    {Action(TEXT("Examine")),TEXT("Examine selected object"),TEXT("UI"),{FInputChord(EKeys::E)}},
-   {Action(TEXT("Chat")),TEXT("Begin chat"),TEXT("UI"),{FInputChord(EKeys::Enter),FInputChord(EKeys::Slash)}},
+   {Action(TEXT("Chat")),TEXT("Begin chat"),TEXT("UI"),{FInputChord(EKeys::Enter)}},
    {Action(TEXT("ToggleChat")),TEXT("Toggle Chat Entry"),TEXT("UI"),{FInputChord(EKeys::Tab)}},
    {Action(TEXT("ToggleUCM")),TEXT("UCM Start / Stop"),TEXT("UI"),{}},
    {Action(TEXT("QuickShowUI")),TEXT("Quick-show pinned windows (hold)"),TEXT("UI"),{FInputChord(EKeys::LeftControl)}},
@@ -136,7 +135,7 @@ const TArray<FAction>& Actions()
    {Action(TEXT("Laugh")),TEXT("Laugh"),TEXT("Emotes"),{FInputChord(EKeys::I)}},
    {Action(TEXT("Cheer")),TEXT("Cheer"),TEXT("Emotes"),{FInputChord(EKeys::O)}},
    {Action(TEXT("Cry")),TEXT("Cry"),TEXT("Emotes"),{FInputChord(EKeys::U)}},
-   {EKeys::Zero,TEXT("Create shortcut"),TEXT("UI"),{FInputChord(EKeys::Zero),FInputChord(EKeys::Zero,false,true,false,false)}},
+   {EKeys::Zero,TEXT("Create shortcut"),TEXT("UI"),{FInputChord(EKeys::Zero),FInputChord(EKeys::Zero,false,true,false,false)},QuickslotContext},
   };
   static const FKey Digits[]={EKeys::One,EKeys::Two,EKeys::Three,EKeys::Four,EKeys::Five,EKeys::Six,EKeys::Seven,EKeys::Eight,EKeys::Nine};
   static const TCHAR* Labels[]={TEXT("Shortcut 1"),TEXT("Shortcut 2"),TEXT("Shortcut 3"),TEXT("Shortcut 4"),TEXT("Shortcut 5"),TEXT("Shortcut 6"),TEXT("Shortcut 7"),TEXT("Shortcut 8"),TEXT("Shortcut 9"),TEXT("Shortcut 10"),TEXT("Shortcut 11"),TEXT("Shortcut 12"),TEXT("Shortcut 13"),TEXT("Shortcut 14"),TEXT("Shortcut 15"),TEXT("Shortcut 16"),TEXT("Shortcut 17"),TEXT("Shortcut 18")};
@@ -145,11 +144,15 @@ const TArray<FAction>& Actions()
    TArray<FInputChord> Keys;
    if(I<9){Keys.Add(FInputChord(Digits[I]));Keys.Add(FInputChord(Digits[I],false,true,false,false));}
    else Keys.Add(FInputChord(Digits[I-9],false,false,true,false));
-   Result.Emplace(Shortcut(I),Labels[I],TEXT("Combat"),MoveTemp(Keys));
+   Result.Emplace(Shortcut(I),Labels[I],TEXT("Combat"),MoveTemp(Keys),QuickslotContext);
   }
   static const TCHAR* SpellLabels[]={TEXT("Magic: spell 1"),TEXT("Magic: spell 2"),TEXT("Magic: spell 3"),TEXT("Magic: spell 4"),TEXT("Magic: spell 5"),TEXT("Magic: spell 6"),TEXT("Magic: spell 7"),TEXT("Magic: spell 8"),TEXT("Magic: spell 9"),TEXT("Magic: spell 10"),TEXT("Magic: spell 11"),TEXT("Magic: spell 12")};
-  static const FKey ExtraSpellKeys[]={EKeys::Zero,EKeys::Hyphen,EKeys::Equals};
-  for(int32 I=0;I<12;++I)Result.Emplace(SpellSlot(I),SpellLabels[I],TEXT("Combat"),TArray<FInputChord>{FInputChord(I<9?Digits[I]:ExtraSpellKeys[I-9])},8);
+  for(int32 I=0;I<12;++I)
+  {
+   TArray<FInputChord> Keys;
+   if(I<9)Keys.Emplace(Digits[I]);
+   Result.Emplace(SpellSlot(I),SpellLabels[I],TEXT("Combat"),MoveTemp(Keys),8);
+  }
   Result.Append(ACERetailAdditionalActions());
   // Keep the three retail mapping slots intact, including imported keymaps.
   const TMap<FKey,FKey> Controller={
@@ -179,7 +182,12 @@ static int32 Context(FKey Key)
  static const TMap<FKey,int32> Contexts=[] {TMap<FKey,int32> Map;for(const auto& A:Actions())Map.Add(A.Key,A.Context);return Map;}();
  return Contexts.FindRef(Key);
 }
-static bool Active(FKey Key){const int32 Mode=Context(Key);return !Mode||Mode==ActiveContext;}
+static int32 Priority(int32 Mode)
+{
+ if(Mode==AlternateCameraContext)return 3;
+ if(Mode==QuickslotContext)return 1;
+ return Mode?2:0;
+}
 static void Load()
 {
  if(bLoaded)return; bLoaded=true;
@@ -225,7 +233,7 @@ static void Load()
  for(const auto& Text:Blocks)
  {
   TArray<FString> F;Text.ParseIntoArray(F,TEXT("|"),false);
-  if(F.Num()==7)LiveBlocked.Add({F[0],FInputChord(FKey(*F[1]),F[2]==TEXT("1"),F[3]==TEXT("1"),F[4]==TEXT("1"),F[5]==TEXT("1")),FCString::Atoi(*F[6])});
+  if(F.Num()==7)LiveBlocked.Add({F[0],FInputChord(FKey(*F[1]),F[2]==TEXT("1"),F[3]==TEXT("1"),F[4]==TEXT("1"),F[5]==TEXT("1")),F[0]==TEXT("QuickslotCommands")?QuickslotContext:FCString::Atoi(*F[6])});
  }
 }
 static int32 Specificity(const FInputChord& C){return C.bShift+C.bCtrl+C.bAlt+C.bCmd;}
@@ -257,7 +265,17 @@ static bool Allows(const FBinding& C,const FInputChord& Input,const APlayerContr
 }
 bool Matches(FKey Key,const FInputChord& Input,const APlayerController* PC)
 {
- Load();if(bEditing||!Active(Key))return false;
+ Load();if(bEditing)return false;
+ // CameraManager registers the alternate map only while the activation is held.
+ // Resolve the activation in the base map so it can always be released or rebound.
+ static const FKey CameraHold=Action(TEXT("CameraActivateAlternateMode"));
+ auto Active=[&](int32 Mode)
+ {
+  if(Mode==AlternateCameraContext)return Key!=CameraHold && PC && Down(PC,CameraHold);
+  return !Mode||Mode==QuickslotContext||Mode==ActiveContext;
+ };
+ const int32 Mode=Context(Key);
+ if(!Active(Mode))return false;
  // Input can already be queued when Override is enabled. Filtering only a
  // Slate event cannot protect the item/spell bars (or other polled actions).
  if(PC&&PC->GetGameInstance())
@@ -266,13 +284,13 @@ bool Matches(FKey Key,const FInputChord& Input,const APlayerController* PC)
  for(const auto& C:*Bindings)if(Allows(C,Input,PC))
  {
   bool MoreSpecific=false;
-  for(const auto& B:LiveBlocked)if((!B.Context||B.Context==ActiveContext)&&Allows(B.Chord,Input)
-   && (Specificity(B.Chord)>Specificity(C) || (Specificity(B.Chord)==Specificity(C) && (B.Context||!Context(Key)))))MoreSpecific=true;
+  for(const auto& B:LiveBlocked)if(Allows(B.Chord,Input)&&Active(B.Context)
+   && (Specificity(B.Chord)>Specificity(C) || (Specificity(B.Chord)==Specificity(C) && Priority(B.Context)>=Priority(Mode))))MoreSpecific=true;
   // Alt+A must strafe rather than also turn. Shift+W still moves while the
   // separate run/walk modifier is held; only an actual chord takes precedence.
-  if(const auto* Candidates=PhysicalBindings.Find(Input.Key))for(const auto& Other:*Candidates)if(Active(Other.ActionKey))
+  if(const auto* Candidates=PhysicalBindings.Find(Input.Key))for(const auto& Other:*Candidates)if(Other.ActionKey!=Key && Active(Context(Other.ActionKey)))
    if(Allows(Other.Chord,Input,PC) && (Specificity(Other.Chord)>Specificity(C)
-    || (Specificity(Other.Chord)==Specificity(C) && Context(Other.ActionKey)>0 && Context(Key)==0)))MoreSpecific=true;
+    || (Specificity(Other.Chord)==Specificity(C) && Priority(Context(Other.ActionKey))>Priority(Mode))))MoreSpecific=true;
   if(!MoreSpecific)return true;
  }
  return false;
@@ -395,6 +413,30 @@ void Set(FKey Key,int32 Slot,FInputChord Chord,const TArray<FKey>& ControllerMod
  if(Chord.Key.IsValid()&&Binding.ControllerModifiers.IsEmpty())DraftBlocked.RemoveAll([&](const FBlockedBinding& B){return B.Context==Context(Key)&&B.Chord==Chord;});
  if(Chord.Key.IsValid())for(auto& Pair:Draft)if(Context(Pair.Key)==Context(Key))for(auto& C:Pair.Value)if(C==Binding)C=FBinding();
  auto& B=Draft.FindOrAdd(Key);B.SetNum(BindingSlots);B[Slot]=Binding;
+}
+TArray<FString> MonsterCycleConflicts(bool bRelease)
+{
+ TArray<FString> Conflicts;
+ if(!bEditing)return Conflicts;
+ for(const auto& ActionDef:Actions())
+ {
+  if(ActionDef.Context!=2 && ActionDef.Context!=4 && ActionDef.Context!=8)continue;
+  // Retail selects the active combat map before global actions. Offer the
+  // player a choice for overlapping keyboard bindings on the two cycle keys.
+  for(int32 Slot=0;Slot<3;++Slot)
+  {
+   const FInputChord Combat=Get(ActionDef.Key,Slot);
+   if(!Combat.Key.IsValid() || !GetControllerModifiers(ActionDef.Key,Slot).IsEmpty())continue;
+   for(FKey Cycle:{EKeys::Semicolon,EKeys::Apostrophe})
+    for(int32 I=0;I<3;++I)
+     if(Combat==Get(Cycle,I) && GetControllerModifiers(Cycle,I).IsEmpty())
+     {
+      Conflicts.AddUnique(FString::Printf(TEXT("%s also uses %s"),ActionDef.Label,*Combat.GetInputText().ToString()));
+      if(bRelease)Set(ActionDef.Key,Slot,FInputChord());
+     }
+  }
+ }
+ return Conflicts;
 }
 void Commit()
 {
