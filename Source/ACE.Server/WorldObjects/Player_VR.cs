@@ -2,7 +2,7 @@ using System;
 using System.Numerics;
 using System.Linq;
 using System.Collections.Generic;
-using ACE.Common.Logging;
+using Microsoft.Extensions.Logging;
 using ACE.Entity.Enum;
 using ACE.Server.Entity;
 using ACE.Server.Entity.Actions;
@@ -30,7 +30,8 @@ namespace ACE.Server.WorldObjects
 
         private void RejectVRCombat(VRCombatRequest r, string reason)
         {
-            log.Debug($"[VR] {Name} rejected kind={r.Kind} seq={r.Sequence} weapon={r.Weapon:X8} target={r.Target:X8} cell={r.Cell:X8}/{Location?.Cell:X8}: {reason}");
+            log.LogDebug("[VR] {Name} rejected kind={Kind} seq={Sequence} weapon={Weapon:X8} target={Target:X8} cell={RequestCell:X8}/{PlayerCell:X8}: {Reason}",
+                Name, r.Kind, r.Sequence, r.Weapon, r.Target, r.Cell, Location?.Cell, reason);
             if ((DateTime.UtcNow - vrLastRejection).TotalSeconds < 1) return;
             vrLastRejection = DateTime.UtcNow;
             Session.Network.EnqueueSend(new GameEventCommunicationTransientString(Session, reason));
@@ -268,7 +269,8 @@ namespace ACE.Server.WorldObjects
             }
             if (!hit)
             {
-                log.Debug($"[VR] melee geometry seq={r.Sequence} target={target.Guid} start={r.Origin} end={r.Vector} body={offset} height={target.Height:F3}");
+                log.LogDebug("[VR] melee geometry seq={Sequence} target={TargetGuid} start={Start} end={End} body={Offset} height={Height:F3}",
+                    r.Sequence, target.Guid, r.Origin, r.Vector, offset, target.Height);
                 RejectVRCombat(r, "The swing missed the creature's body."); return;
             }
             var sampleHeight = Math.Clamp(Vector3.Lerp(r.Origin, r.Vector, contact).Z, offset.Z, offset.Z + target.Height);
@@ -289,7 +291,8 @@ namespace ACE.Server.WorldObjects
             UpdateVitalDelta(Stamina, -GetAttackStamina(GetPowerRange()));
             TryProcEquippedItems(this, this, true, weapon);
             var damage = DamageTarget(target, weapon);
-            log.Debug($"[VR] {Name} melee seq={r.Sequence} target={target.Guid} speed={speed:F2} damage={damage?.Damage:F1}");
+            log.LogDebug("[VR] {Name} melee seq={Sequence} target={TargetGuid} speed={Speed:F2} damage={Damage:F1}",
+                Name, r.Sequence, target.Guid, speed, damage?.Damage);
             if (damage != null && damage.HasDamage) TryProcEquippedItems(this, target, false, weapon);
             if (UnderLifestoneProtection) LifestoneProtectionDispel();
             OnAttackDone();
@@ -315,7 +318,8 @@ namespace ACE.Server.WorldObjects
             TryProcEquippedItems(this, this, true, weapon);
             EnqueueBroadcast(new GameMessageSound(Guid, GetLaunchMissileSound(weapon), 1f));
             var projectile = LaunchProjectile(GetEquippedMissileLauncher(), ammo, null, origin, r.AimRotation, r.Vector * speed, true);
-            log.Debug($"[VR] {Name} missile seq={r.Sequence} projectile={projectile?.Guid} origin={origin} velocity={r.Vector * speed}");
+            log.LogDebug("[VR] {Name} missile seq={Sequence} projectile={ProjectileGuid} origin={Origin} velocity={Velocity}",
+                Name, r.Sequence, projectile?.Guid, origin, r.Vector * speed);
             UpdateAmmoAfterLaunch(ammo);
             // Thrown weapons are their own equipped stack. Retail's ordinary
             // attack chain re-tracks it; VR has no follow-up reload animation.

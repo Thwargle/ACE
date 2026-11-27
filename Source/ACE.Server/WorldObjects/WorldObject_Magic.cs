@@ -5,8 +5,9 @@ using System.Linq;
 using System.Numerics;
 using System.Text;
 
+using Microsoft.Extensions.Logging;
+
 using ACE.Common;
-using ACE.Common.Logging;
 using ACE.Database;
 using ACE.DatLoader;
 using ACE.DatLoader.FileTypes;
@@ -932,7 +933,7 @@ namespace ACE.Server.WorldObjects
                 }
                 else
                 {
-                    log.Warn($"Unknown DamageType ({spell.DamageType}) for LifeProjectile {spell.Name} - {spell.Id}");
+                    log.LogWarning("Unknown DamageType ({DamageType}) for LifeProjectile {Name} - {Id}", spell.DamageType, spell.Name, spell.Id);
                     return;
                 }
             }
@@ -1513,7 +1514,7 @@ namespace ACE.Server.WorldObjects
         {
             if (spell.NumProjectiles == 0)
             {
-                log.Error($"{Name} ({Guid}).CreateSpellProjectiles({spell.Id} - {spell.Name}) - spell.NumProjectiles == 0");
+                log.LogError("{Name} ({Guid}).CreateSpellProjectiles({Id} - {SpellName}) - spell.NumProjectiles == 0", Name, Guid, spell.Id, spell.Name);
                 return new List<SpellProjectile>();
             }
 
@@ -1796,7 +1797,7 @@ namespace ACE.Server.WorldObjects
 
                 if (sp == null)
                 {
-                    log.Error($"{Name} ({Guid}).LaunchSpellProjectiles({spell.Id} - {spell.Name}) - failed to create spell projectile from wcid {spell.Wcid}");
+                    log.LogError("{Name} ({Guid}).LaunchSpellProjectiles({Id} - {SpellName}) - failed to create spell projectile from wcid {Wcid}", Name, Guid, spell.Id, spell.Name, spell.Wcid);
                     break;
                 }
 
@@ -1895,13 +1896,13 @@ namespace ACE.Server.WorldObjects
 
             if (weenie == null)
             {
-                log.Error($"{Name} ({Guid}).GetSetupRadius({spell.Id} - {spell.Name}): couldn't find weenie {projectileWcid}");
+                log.LogError("{Name} ({Guid}).GetSetupRadius({Id} - {SpellName}): couldn't find weenie {ProjectileWcid}", Name, Guid, spell.Id, spell.Name, projectileWcid);
                 return 0.0f;
             }
 
             if (!weenie.PropertiesDID.TryGetValue(PropertyDataId.Setup, out var setupId))
             {
-                log.Error($"{Name} ({Guid}).GetSetupRadius({spell.Id} - {spell.Name}): couldn't find setup ID for {weenie.WeenieClassId} - {weenie.ClassName}");
+                log.LogError("{Name} ({Guid}).GetSetupRadius({Id} - {SpellName}): couldn't find setup ID for {WeenieClassId} - {ClassName}", Name, Guid, spell.Id, spell.Name, weenie.WeenieClassId, weenie.ClassName);
                 return 0.0f;
             }
 
@@ -1937,13 +1938,13 @@ namespace ACE.Server.WorldObjects
 
                 if (weenie == null)
                 {
-                    log.Error($"{Name} ({Guid}).GetSpellProjectileSpeed({spell.Id} - {spell.Name}, {distance}): couldn't find weenie {projectileWcid}");
+                    log.LogError("{Name} ({Guid}).GetSpellProjectileSpeed({Id} - {SpellName}, {Distance}): couldn't find weenie {ProjectileWcid}", Name, Guid, spell.Id, spell.Name, distance, projectileWcid);
                     return 0.0f;
                 }
 
                 if (!weenie.PropertiesFloat.TryGetValue(PropertyFloat.MaximumVelocity, out var maxVelocity))
                 {
-                    log.Error($"{Name} ({Guid}).GetSpellProjectileSpeed({spell.Id} - {spell.Name}, {distance}): couldn't find MaxVelocity for {weenie.WeenieClassId} - {weenie.ClassName}");
+                    log.LogError("{Name} ({Guid}).GetSpellProjectileSpeed({Id} - {SpellName}, {Distance}): couldn't find MaxVelocity for {WeenieClassId} - {ClassName}", Name, Guid, spell.Id, spell.Name, distance, weenie.WeenieClassId, weenie.ClassName);
                     return 0.0f;
                 }
 
@@ -2056,7 +2057,7 @@ namespace ACE.Server.WorldObjects
 
             if (spell.Category != SpellCategory.NetherDamageOverTimeRaising && spell.Category != SpellCategory.NetherDamageOverTimeRaising2 && spell.Category != SpellCategory.NetherDamageOverTimeRaising3)
             {
-                log.Error($"{Name}.CalculateDamageOverTimeBase({spell.Id} - {spell.Name}, {target?.Name}) - unknown dot spell category {spell.Category}");
+                log.LogError("{Name}.CalculateDamageOverTimeBase({Id} - {SpellName}, {TargetName}) - unknown dot spell category {Category}", Name, spell.Id, spell.Name, target?.Name, spell.Category);
                 return enchantment_statModVal;
             }
 

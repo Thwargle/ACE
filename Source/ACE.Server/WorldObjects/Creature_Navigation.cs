@@ -1,7 +1,8 @@
 using System;
 using System.Numerics;
 
-using ACE.Common.Logging;
+using Microsoft.Extensions.Logging;
+
 using ACE.Entity;
 using ACE.Entity.Enum;
 using ACE.Entity.Enum.Properties;
@@ -433,7 +434,7 @@ namespace ACE.Server.WorldObjects
 
             if (Location.Landblock != newPosition.Landblock)
             {
-                log.Error($"{Name} tried to teleport from {Location} to a different landblock {newPosition}");
+                log.LogError("{Name} tried to teleport from {Location} to a different landblock {NewPosition}", Name, Location, newPosition);
                 return;
             }
 
