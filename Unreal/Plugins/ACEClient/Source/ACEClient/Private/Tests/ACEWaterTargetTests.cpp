@@ -56,7 +56,7 @@ bool FACEWaterTargetTest::RunTest(const FString& Place)
     auto* Mesh = Land->TerrainMesh.Get();
     const FVector Origin = FACEPosition::AceVectorToUnreal(FVector((Block>>24)*192,((Block>>16)&255)*192,0),100);
     Land->SetActorLocation(Origin); Mesh->bUseAsyncCooking = false;
-    auto* LandShader=LoadObject<UMaterialInterface>(nullptr,TEXT("/Game/ACE/RuntimeMaterials/M_ACELandLit_v44.M_ACELandLit_v44"));
+    auto* LandShader=LoadObject<UMaterialInterface>(nullptr,TEXT("/Game/ACE/RuntimeMaterials/M_ACELandLit_v45.M_ACELandLit_v45"));
     if (!TestNotNull(TEXT("Packaged terrain material is available"),LandShader)) return false;
     auto* PreviewParent=Dat->EnsureAceLandMaterialBase();
     Dat->LandMaterialBase=LandShader;

@@ -1361,6 +1361,14 @@ void UACEDatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	FACELoginSettings LoginSettings;
 	if (ACELoginSettings::Load(LoginSettings) && !LoginSettings.DatDirectory.IsEmpty())
 		DatDirectory = LoginSettings.DatDirectory;
+	if (!IsRunningCommandlet() && !GIsAutomationTesting && ACELegionsSky::HasCache())
+	{
+		Async(EAsyncExecution::ThreadPool, [Path=ACELegionsSky::CachePath(), Retail=DatDirectory]()
+		{
+			if (ACELegionsSky::RefreshImport(Path, Retail))
+				AsyncTask(ENamedThreads::GameThread, [] { ACELegionsSky::RefreshEnvironment(); });
+		});
+	}
 	if (bAutoLoadOnInitialize)
 	{
 		BeginBackgroundLoad();
@@ -1471,6 +1479,7 @@ void UACEDatSubsystem::LogLandTextureMemory(const TCHAR* Phase) const
 
 void UACEDatSubsystem::ClearLoadedState()
 {
+	LegionsBlendOverlays.Reset();
 	bPendingDiskCacheMaintenance = false;
 	if (CancelArtworkBake) CancelArtworkBake->Store(true);
 	// Invalidate in-flight landblock workers, then wait so they release DAT handles.
@@ -2270,7 +2279,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceUnlitTexturedMaterialBase()
 UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
 {
 	// PDO / material graph bumps without a full landmesh wipe.
-	static constexpr int32 LandMatGraphVersion = 44;
+	static constexpr int32 LandMatGraphVersion = 45;
 	static int32 AppliedLandMatGraphVersion = 0;
 	if (AppliedLandMatGraphVersion != LandMatGraphVersion)
 	{
@@ -2279,7 +2288,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
 
 		LandMaterialCache.Reset();
 	}
-	const TCHAR* Name = TEXT("M_ACELandLit_v44");
+	const TCHAR* Name = TEXT("M_ACELandLit_v45");
 	if (LandMaterialBase)
 	{
 		return LandMaterialBase;
@@ -2443,12 +2452,39 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
 	// the same shadow uniformly across near and far terrain.
 	// The microscopic relief is sampled independently of the diffuse repeat
 	// and road masks. Its own mip chain filters away at grazing angles.
-	Shaded->Code = TEXT("float3 ground=Land;")
+	Input(TEXT("CellUV"),CellUV);
+	auto* Repeats = NewObject<UMaterialExpressionVectorParameter>(Mat);
+	Repeats->ParameterName = TEXT("TerrainLayerRepeats");
+	Repeats->DefaultValue = FLinearColor::Transparent;
+	EditorOnly->ExpressionCollection.AddExpression(Repeats);
+	Input(TEXT("Repeats"), Repeats, 5);
+	auto* RoadRepeat = NewObject<UMaterialExpressionScalarParameter>(Mat);
+	RoadRepeat->ParameterName = TEXT("RoadRepeat");
+	EditorOnly->ExpressionCollection.AddExpression(RoadRepeat);
+	Input(TEXT("RoadRepeat"), RoadRepeat);
+
+	FString LayerCode = TEXT("float3 ground=Land; float detailWeight=Coverage; [branch] if (Repeats.x!=0) { ");
+	const TCHAR* Scales[] = {TEXT("Repeats.x"),TEXT("Repeats.y"),TEXT("Repeats.z"),TEXT("Repeats.w"),TEXT("RoadRepeat")};
+	const TCHAR* Weights[] = {TEXT("1"),TEXT("Land.r"),TEXT("Land.g"),TEXT("Land.b"),TEXT("Coverage")};
+	for (int32 I = 0; I < UE_ARRAY_COUNT(Scales); ++I)
+	{
+		const FString LayerName = FString::Printf(TEXT("TerrainLayer%d"), I);
+		auto* Layer = NewObject<UMaterialExpressionTextureObjectParameter>(Mat);
+		Layer->ParameterName = FName(*LayerName);
+		Layer->Texture = Sample->Texture;
+		EditorOnly->ExpressionCollection.AddExpression(Layer);
+		Input(Layer->ParameterName, Layer);
+		LayerCode += FString::Printf(TEXT("[branch] if (%s!=0) { float r=%s; ")
+			TEXT("float2 uv=r>0 ? TileUV : CellUV; uv=float2(-uv.x,uv.y)*abs(r); ")
+			TEXT("ground=lerp(ground,Texture2DSample(%s,%sSampler,uv).rgb,%s); ")
+			TEXT("detailWeight=lerp(detailWeight,%s,%s); } "), Scales[I], Scales[I], *LayerName, *LayerName, Weights[I], I == 4 ? TEXT("0") : TEXT("float(r>0)"), Weights[I]);
+	}
+	Shaded->Code = LayerCode + TEXT("} ")
 		TEXT("[branch] if(OverlayRepeat>0) ground=lerp(Land,Texture2DSample(Overlay,OverlaySampler,float2(-TileUV.x,TileUV.y)*OverlayRepeat).rgb,Coverage); ")
 		TEXT("[branch] if (DetailScale>0) { float2 uv=float2(-TileUV.x,TileUV.y)*DetailScale; ")
 		TEXT("float grain=Texture2DSample(Detail,DetailSampler,uv).a; ")
 		TEXT("float footprint=max(length(ddx(uv)),length(ddy(uv))); ")
-		TEXT("ground*=1.0+1.6*(grain-DetailMean)*Coverage*(1.0-smoothstep(.05,.25,footprint)); } ")
+		TEXT("ground*=1.0+1.6*(grain-DetailMean)*detailWeight*(1.0-smoothstep(.05,.25,footprint)); } ")
 		TEXT("[branch] if (Motion.x <= 0 || Motion.a <= 0) return ground; ")
 		TEXT("float2 uv=Position.xy*Motion.x+Offset.xy; return ground*lerp(1.0,Texture2DSample(Mask,MaskSampler,uv).rgb,saturate(Motion.a));");
 	auto* SkyTint = NewObject<UMaterialExpressionVectorParameter>(Mat);
@@ -4803,39 +4839,65 @@ void UACEDatSubsystem::ApplyLegionsGroundMaterial(UMaterialInstanceDynamic* Mate
 		LegionsBlendOverlays.Reset();
 		BlendOverlayCrc = Art->ContentCrc;
 	}
+	auto SurfaceTexture = [&](uint32 Id) -> UTexture2D*
+	{
+		auto& Texture = LegionsBlendOverlays.FindOrAdd(Id);
+		if (Texture) return Texture;
+		if (const auto* Levels = Art->Surfaces.Find(Id); Levels && !Levels->IsEmpty())
+		{
+			ACELegionsSky::FImage Image;
+			Image.Width = (*Levels)[0].Width;
+			Image.Height = (*Levels)[0].Height;
+			for (const auto& Level : *Levels)
+				Image.Mips.AddDefaulted_GetRef().Append(reinterpret_cast<const uint8*>(Level.Pixels.GetData()), Level.Pixels.Num() * sizeof(FColor));
+			Texture = ACELegionsSky::CreateImportedTexture(Image, TF_Default);
+		}
+		else if (TextureResolver && (Id >> 24) == 5)
+		{
+			FACEDatDecodedSurface Native;
+			if (TextureResolver->DecodeSurfaceTexture(Id, Native))
+				Texture = FACEDatTextureResolver::CreateTransientRgbaWithMips(Native.Width, Native.Height,
+					Native.Pixels, false, TA_Wrap, TA_Wrap, false, false, 0, TF_Default, false);
+		}
+		return Texture;
+	};
 	float OverlayRepeat = 0.f;
 	if (Blend && Blend->OverlaySurfaceId)
 	{
 		const uint32 Id = Blend->OverlaySurfaceId;
-		auto& Tex = LegionsBlendOverlays.FindOrAdd(Id);
-		if (!Tex)
+		if (auto* Texture = SurfaceTexture(Id))
 		{
-			if (const auto* Levels = Art->Surfaces.Find(Id); Levels && !Levels->IsEmpty())
-			{
-				ACELegionsSky::FImage Image;
-				Image.Width = (*Levels)[0].Width;
-				Image.Height = (*Levels)[0].Height;
-				for (const auto& Level : *Levels)
-					Image.Mips.AddDefaulted_GetRef().Append(reinterpret_cast<const uint8*>(Level.Pixels.GetData()), Level.Pixels.Num() * sizeof(FColor));
-				Tex = ACELegionsSky::CreateImportedTexture(Image);
-			}
-		}
-		if (Tex)
-		{
-			Material->SetTextureParameterValue(TEXT("TerrainOverlay"),Tex);
+			Material->SetTextureParameterValue(TEXT("TerrainOverlay"), Texture);
 			OverlayRepeat = Art->TerrainCellsAcross * FACELandblockMeshBuilder::CellSize / Art->TerrainRepeatMetres(Id);
 		}
 	}
+	const bool Layered = Blend && Blend->IsLayerMask();
+	float Repeats[5] = {};
+	if (Layered)
+	{
+		for (int32 I = 0; I < UE_ARRAY_COUNT(Blend->Layers); ++I)
+		{
+			const auto& Layer = Blend->Layers[I];
+			if (Layer.SurfaceId)
+				if (auto* Texture = SurfaceTexture(Layer.SurfaceId))
+				{
+					Material->SetTextureParameterValue(FName(*FString::Printf(TEXT("TerrainLayer%d"), I)), Texture);
+					Repeats[I] = Layer.Repeat;
+				}
+		}
+	}
+	Material->SetVectorParameterValue(TEXT("TerrainLayerRepeats"), FLinearColor(Repeats[0], Repeats[1], Repeats[2], Repeats[3]));
+	Material->SetScalarParameterValue(TEXT("RoadRepeat"), Repeats[4]);
 	Material->SetScalarParameterValue(TEXT("TerrainOverlayRepeat"),OverlayRepeat);
 	Material->SetScalarParameterValue(TEXT("UseRegionTerrainUV"),RegionTile ? 1.f : 0.f);
 	Material->SetVectorParameterValue(TEXT("MaskCellUVSize"), RegionTile && Art->UniformTerrainRepeats(PCode) == 1.f
 		? FLinearColor(1.f / Blend->CellsAcross, float(Blend->CellsAcross) / Blend->Width, 0, 0) : FLinearColor::Transparent);
 	float DetailScale = 0.f;
-	if ((RegionTile || OverlayRepeat > 0.f) && !Art->GroundDetail.Mips.IsEmpty())
+	if ((RegionTile || Layered || OverlayRepeat > 0.f) && !Art->GroundDetail.Mips.IsEmpty())
 	{
 		if (!LegionsGroundDetailTexture || GroundDetailCrc != Art->ContentCrc)
 		{
-			LegionsGroundDetailTexture = ACELegionsSky::CreateImportedTexture(Art->GroundDetail);
+			LegionsGroundDetailTexture = ACELegionsSky::CreateImportedTexture(Art->GroundDetail, TF_Default);
 			GroundDetailCrc = Art->ContentCrc;
 		}
 		if (LegionsGroundDetailTexture)

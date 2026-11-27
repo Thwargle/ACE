@@ -66,6 +66,7 @@ FString StagedPath(const FString& Destination);
 bool ImportStaged(const FString& Destination, FString& Error);
 bool HasCache(bool* NeedsWeather = nullptr, bool* HasEnvironment = nullptr, bool* HasGrassCards = nullptr, bool* HasDerethTrees = nullptr, bool* HasGroundDetail = nullptr, bool* HasBoulders = nullptr);
 int32 Revision();
+bool RefreshImport(const FString& Destination, const FString& RetailFolder);
 bool Import(const FString& DirectoryOrFile, const FString& Destination, FString& Error);
 bool Load(const FString& Filename, FBackdrop& Sky, FString& Error);
 }

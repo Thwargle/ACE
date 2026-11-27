@@ -505,44 +505,21 @@ bool FACEDatTextureResolver::ReadBlob(uint32 Id, TArray<uint8>& Out) const
 	return HighRes && HighRes->ReadFile(Id, Out);
 }
 
+static bool ReadTexturePixels(FACEDatDatabase* Dat, uint32 TextureId, FACEDatTexture& Out)
+{
+	if (!Dat || !TextureId) return false;
+	TArray<uint8> Blob;
+	if (!Dat->ReadFile(TextureId, Blob)) return false;
+	FACEDatCursor Cursor(Blob);
+	return ACEDatUnpack::UnpackTexture(Cursor, Out) && !Out.SourceData.IsEmpty();
+}
+
 bool FACEDatTextureResolver::LoadTexture(uint32 TextureId, FACEDatTexture& Out) const
 {
-	Out = FACEDatTexture();
-	if (TextureId == 0)
-	{
-		return false;
-	}
-	auto TryDat = [&](FACEDatDatabase* Dat) -> bool
-	{
-		if (!Dat)
-		{
-			return false;
-		}
-		TArray<uint8> Blob;
-		if (!Dat->ReadFile(TextureId, Blob))
-		{
-			return false;
-		}
-		FACEDatCursor Cur(Blob);
-		FACEDatTexture Tex;
-		if (!ACEDatUnpack::UnpackTexture(Cur, Tex))
-		{
-			return false;
-		}
-		Out = MoveTemp(Tex);
-		return true;
-	};
-
-	// Match ACViewer: portal stub often has Length==0; real pixels are in highres.
-	if (TryDat(Portal) && Out.SourceData.Num() > 0)
-	{
-		return true;
-	}
-	if (TryDat(HighRes) && Out.SourceData.Num() > 0)
-	{
-		return true;
-	}
-	return Out.Width > 0 && Out.Height > 0 && Out.SourceData.Num() > 0;
+	Out = {};
+	if (ReadTexturePixels(Portal, TextureId, Out)) return true;
+	Out = {};
+	return ReadTexturePixels(HighRes, TextureId, Out);
 }
 
 bool FACEDatTextureResolver::BuildWorkingPalette(const FACEObjDesc& Appearance, TArray<uint32>& OutColors) const
@@ -1193,22 +1170,19 @@ bool FACEDatTextureResolver::DecodeSurfaceTexture(uint32 SurfaceTextureId, FACED
 		return false;
 	}
 
-	FACEDatTexture Tex;
-	bool bGotTex = false;
+	// A SurfaceTexture may list alternatives and a custom highres archive may
+	// supply a larger payload under the same ID. Keep the best decodable image.
 	for (const uint32 TexId : St.Textures)
 	{
-		FACEDatTexture Candidate;
-		if (LoadTexture(TexId, Candidate) && Candidate.SourceData.Num() > 0
-			&& Candidate.Width > 0 && Candidate.Height > 0)
+		for (auto* Dat : {HighRes, Portal})
 		{
-			Tex = MoveTemp(Candidate);
-			bGotTex = true;
-			break;
+			FACEDatTexture Candidate;
+			if (!ReadTexturePixels(Dat, TexId, Candidate) || Candidate.Width <= 0 || Candidate.Height <= 0
+				|| int64(Candidate.Width) * Candidate.Height <= int64(Out.Width) * Out.Height) continue;
+			FACEDatDecodedSurface Decoded;
+			if (DecodeTexture(Candidate, nullptr, Decoded) && Decoded.bHasPixels)
+				Out = MoveTemp(Decoded);
 		}
-	}
-	if (!bGotTex || !DecodeTexture(Tex, nullptr, Out))
-	{
-		return false;
 	}
 	Out.SurfaceId = SurfaceTextureId;
 	return Out.bHasPixels;

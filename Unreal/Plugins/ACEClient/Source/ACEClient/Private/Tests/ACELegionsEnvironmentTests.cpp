@@ -94,7 +94,9 @@ bool FACELegionsEnvironmentTest::RunTest(const FString&)
 	{
 		if (!TestTrue(TEXT("Read selected artwork from the imported pack"), LoadEnvironment(Pack, Mask, Env))) return false;
 		TestEqual(TEXT("Authored detail follows grass and ground"), !Env.GroundDetail.Mips.IsEmpty(), bool(Mask & (Grass | Ground)));
-		TestEqual(TEXT("Sand follows ground"), Env.Terrain(10) != nullptr, bool(Mask & Ground));
+		const auto* SandLevels = Env.Surfaces.Find(0x40000256);
+		TestEqual(TEXT("Sand follows ground when the full-size source is installed"), Env.Terrain(10) != nullptr,
+			bool(Mask & Ground) && SandLevels && !SandLevels->IsEmpty() && (*SandLevels)[0].Width >= 512);
 		TestEqual(TEXT("Grassland follows grass"), Env.Terrain(1) != nullptr, bool(Mask & Grass));
 		TestEqual(TEXT("Boulder stone is independent of trees and terrain"), Env.BoulderTexture(0x020005c9), (Mask & Boulders) ? 0x400005beu : 0u);
 		TestEqual(TEXT("Only selected scenery textures are decoded"), !Env.SceneryTextures.IsEmpty(), bool(Mask & (Trees | Boulders)));
@@ -110,7 +112,7 @@ bool FACELegionsEnvironmentTest::RunTest(const FString&)
 		TestFalse(TEXT("Large cut stump retains its AC1 shape"), Env.ReplacesTree(0x020003de));
 		TestEqual(TEXT("Tree mapping follows trees"), Env.ReplacesTree(0x02000258), bool(Mask & Trees));
 		TestFalse(TEXT("Unmapped scenery retains its setup"), Env.ReplacesTree(0x02001063));
-		TestFalse(TEXT("Water and roads retain AC1 artwork"), Env.Terrain(16) || Env.Terrain(32));
+		TestFalse(TEXT("Water retains AC1 artwork"), Env.Terrain(16) != nullptr);
 		if (Mask < Trees) Keys[Mask] = Env.TerrainCacheKey(123);
 		else TestEqual(TEXT("Tree selection leaves terrain cache reusable"), Env.TerrainCacheKey(123), Keys[Mask & (Grass | Ground)]);
 	}
@@ -147,16 +149,45 @@ bool FACELegionsEnvironmentTest::RunTest(const FString&)
 		auto Art = MakeShared<FEnvironment,ESPMode::ThreadSafe>(Env);
 		FACELandblockMeshBuilder Builder(&Portal,nullptr,&Textures,nullptr,Art);
 		if (!TestTrue(TEXT("Read AC1 terrain blend table"),Builder.EnsureTexMerge())) return false;
-		const uint32 RoadCode=Builder.GetPalCode(1,1,0,0,10,10,10,10);
+		const uint32 RoadCode=Builder.GetPalCode(1,1,0,0,1,1,1,1);
 		TArray<FColor> RoadPixels;
 		int32 RoadW=0,RoadH=0;
 		if (!TestTrue(TEXT("Bake a road across Legions sand"),Builder.BakePCode(RoadCode,RoadPixels,RoadW,RoadH,Env.TerrainTileCells(RoadCode)))) return false;
 		TestTrue(TEXT("Road pixels exclude terrain detail"),RoadPixels.ContainsByPredicate([](const FColor& C){return C.A==0;}));
 		TestTrue(TEXT("Surrounding sand retains terrain detail"),RoadPixels.ContainsByPredicate([](const FColor& C){return C.A==255;}));
 		TestTrue(TEXT("Detail blends over the road shoulder"),RoadPixels.ContainsByPredicate([](const FColor& C){return C.A>0 && C.A<255;}));
-		for (uint32 Type : {10u,11u})
+		const uint32 ComplexRoad = Builder.GetPalCode(1,1,1,0,1,3,2,16);
+		auto Prepare = [&](FACELandblockMeshBuilder& SourceBuilder, uint32 Code)
 		{
-			const uint32 Code = Builder.GetPalCode(0,0,0,0,Type,Type,Type,Type);
+			FACEBuiltLandblockMesh Mesh;
+			auto& Section = Mesh.Sections.AddDefaulted_GetRef();
+			Section.PCode = Code;
+			SourceBuilder.HydrateSectionBakes(Mesh, 0);
+			return Section.SharedBake;
+		};
+		auto Mixed = Prepare(Builder, ComplexRoad);
+		if (!TestTrue(TEXT("Four corners and a road get independent diffuse layers"), Mixed && Mixed->IsLayerMask())) return false;
+		TestEqual(TEXT("Road masks retain their 24 m cell projection"), Mixed->CellsAcross, 1);
+		TestEqual(TEXT("Cobblestone samples the installed AC2 artwork"), Mixed->Layers[4].SurfaceId, 0x40000b0fu);
+		TestEqual(TEXT("Road paving repeats every 10 m"), Mixed->Layers[4].Repeat, 12.f);
+		for (int32 I = 0; I < 4; ++I)
+			TestTrue(TEXT("All four corners retain their source projection"), (I % 2 == 0) == (Mixed->Layers[I].Repeat > 0));
+		const auto Masks = Mixed->CopyBasePixels();
+		TestTrue(TEXT("Road includes opaque paving and uncovered shoulder"), Masks.ContainsByPredicate([](FColor P){return P.A==255;})
+			&& Masks.ContainsByPredicate([](FColor P){return P.A==0;}));
+		// A previously imported pack has no AC2 cobblestone. The same PCode
+		// must bind the native road without downsampling it into a regional sheet.
+		Art->Surfaces.Remove(0x40000b0f);
+		FACELandblockMeshBuilder OldPackBuilder(&Portal, nullptr, &Textures, nullptr, Art);
+		auto Old = Prepare(OldPackBuilder, ComplexRoad);
+		if (!TestTrue(TEXT("Existing packs preserve the mixed terrain mask"), Old && Old->IsLayerMask())) return false;
+		TestEqual(TEXT("AC1 road fallback uses its DAT surface"), Old->Layers[4].SurfaceId, 0x05001458u);
+		TestEqual(TEXT("AC1 road fallback retains its two repeats per cell"), Old->Layers[4].Repeat, -2.f);
+		Art->Surfaces.Add(0x40000b0f, Env.Surfaces.FindChecked(0x40000b0f));
+		for (uint32 Type : {10u,32u})
+		{
+			if (!Env.Terrain(Type)) continue; // Lower-resolution portal-only installs use AC1 here.
+			const uint32 Code = Type == 32 ? Builder.GetPalCode(1,1,1,1,10,10,10,10) : Builder.GetPalCode(0,0,0,0,Type,Type,Type,Type);
 			const int32 Cells = Env.TerrainTileCells(Code);
 			TestEqual(TEXT("120 m world tile covers five AC1 cells"),Cells,5);
 			TArray<FColor> Pixels;
@@ -185,14 +216,44 @@ bool FACELegionsEnvironmentTest::RunTest(const FString&)
 				{
 					const float U=(X+.5f)/W, V=(Y+.5f)/H;
 					auto Ref=Filtered(Expected,U*Repeats,V*Repeats);
-					Ref.A=1;
+					Ref.A=Type==32 ? 0 : 1;
 					TestTrue(TEXT("Mixed tile samples the native diffuse at world positions"),
 						Ref.ToFColor(false).ReinterpretAsLinear().Equals(Pixels[Y*W+(W-1-X)].ReinterpretAsLinear(),1.1f/255.f));
 				}
 		}
 	}
-	TestTrue(TEXT("Decoded grass and beach have distinct pixels"), Grassland && Sand && Grassland->bHasPixels &&
-		Sand->bHasPixels && Grassland->Pixels != Sand->Pixels);
+	TestTrue(TEXT("Decoded grass and beach have distinct pixels"), Grassland && Grassland->bHasPixels &&
+		(!Sand || (Sand->bHasPixels && Grassland->Pixels != Sand->Pixels)));
+	for (uint32 Type : {3u,4u,8u,9u,11u,12u,13u,16u,17u,18u,19u,20u,21u,22u,23u,24u,26u,27u,28u,31u})
+		TestNull(TEXT("Unmatched terrain retains AC1"), Env.Terrain(Type));
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACELegionsRefreshTest, "ACE.Graphics.LegionsArtwork.AutoRefresh",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FACELegionsRefreshTest::RunTest(const FString&)
+{
+	using namespace ACELegionsSky;
+	FString Source, Legacy;
+	if (!FParse::Value(FCommandLine::Get(), TEXT("AC2SkyTestDat="), Source) ||
+		!FParse::Value(FCommandLine::Get(), TEXT("AC2LegacyPack="), Legacy))
+	{
+		AddInfo(TEXT("Supply AC2SkyTestDat and AC2LegacyPack to test migration of a previous installation."));
+		return true;
+	}
+	const FString Folder = FPaths::ProjectSavedDir() / TEXT("Automation/LegionsRefresh") / FGuid::NewGuid().ToString();
+	auto& Files = IFileManager::Get();
+	Files.MakeDirectory(*Folder,true);
+	ON_SCOPE_EXIT { Files.DeleteDirectory(*Folder, false, true); };
+	const FString Pack = Folder / TEXT("Legions.sky");
+	TestFalse(TEXT("No existing import leaves AC2 disabled"), RefreshImport(Pack,Source));
+	if (!TestTrue(TEXT("Install legacy cache without source metadata"), Files.Copy(*Pack,*Legacy) == COPY_OK)) return false;
+	if (!TestTrue(TEXT("Find matching DATs and upgrade previous import"), RefreshImport(Pack,Source))) return false;
+	FEnvironment Env;
+	if (!TestTrue(TEXT("Refreshed pack loads with ground only"),LoadEnvironment(Pack,Ground,Env))) return false;
+	TestTrue(TEXT("Road diffuse present after automatic migration"),Env.Terrain(32) && Env.Terrain(32)->SurfaceId==0x40000b0f);
+	TestFalse(TEXT("Grass selection remains independent"),Env.Terrain(1) != nullptr);
+	TestFalse(TEXT("Subsequent launch reuses the refreshed pack"),RefreshImport(Pack,Source));
 	return !HasAnyErrors();
 }
 
@@ -540,6 +601,47 @@ bool FACEYaraqArtworkTest::RunTest(const FString&)
 				Changed+=FMath::Abs(int32(A[I].R)-B[I].R)+FMath::Abs(int32(A[I].G)-B[I].G)+FMath::Abs(int32(A[I].B)-B[I].B)>12;
 		return Changed;
 	};
+	if (FParse::Param(FCommandLine::Get(), TEXT("AC2YaraqRoad")))
+	{
+		// The road follows x=72 m in 7D64 and branches east at y=96 m.
+		// Frame a section of paving and both grass shoulders at the same distance.
+		const float X = 72.f, Y = 109.f;
+		if (!TestTrue(TEXT("Capture is on the Yaraq road"), FACELandblockMeshBuilder::IsOnRoad(*Terrain,X,Y))) return false;
+		const int32 SW = 2*9+4, SE = SW+9;
+		const auto* W = Terrain->Terrain;
+		const uint32 Code = FACELandblockMeshBuilder::GetPalCode(W[SW]&3,W[SE]&3,W[SE+1]&3,W[SW+1]&3,
+			(W[SW]>>2)&31,(W[SE]>>2)&31,(W[SE+1]>>2)&31,(W[SW+1]>>2)&31);
+		const FVector Center = Land->GetActorLocation()+FVector(-X*100,Y*100,0);
+		float Z = 0.f;
+		if (!Dat->SampleOutdoorGroundZ(Center.X,Center.Y,100,Z)) return false;
+		Camera->SetWorldLocationAndRotation(FVector(Center.X,Center.Y,Z+920), FRotator(-90,90,0));
+		const auto Before = Capture(TEXT("road-ac1.png"));
+		Toggle(TEXT("LegionsGround"),true);
+		Toggle(TEXT("LegionsGrass"),true);
+		Dat->ConsumeLandMeshReloadRequest();
+		Land->Destroy();
+		Land=World->SpawnActor<AACELandblockActor>();
+		if (!DrawLand()) return false;
+		const double Deadline = FPlatformTime::Seconds()+30;
+		UTexture* Paving = nullptr;
+		do
+		{
+			FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
+			const auto* Mesh = Dat->FindLandblockMesh(Block);
+			const auto* Section = Mesh ? Mesh->Sections.FindByPredicate([&](const auto& S){return S.PCode==Code;}) : nullptr;
+			if (Section && Section->SharedBake && Section->SharedBake->IsLayerMask())
+			{
+				auto* Material = Dat->GetOrCreateLandMaterial(Code, Section->BakedPixels, Section->BakeWidth, Section->BakeHeight, Section->SharedBake);
+				if (Material) Material->GetTextureParameterValue(TEXT("TerrainLayer4"),Paving);
+			}
+			if (!Paving) FPlatformProcess::Sleep(.02f);
+		} while (!Paving && FPlatformTime::Seconds()<Deadline);
+		if (!TestNotNull(TEXT("Live road material has a dedicated paving texture"), Paving)) return false;
+		TestEqual(TEXT("GPU paving retains the installed top mip"), int32(Paving->GetSurfaceWidth()), ActiveEnvironment()->Terrain(32)->Width);
+		const auto After = Capture(TEXT("road-ac2.png"));
+		TestTrue(TEXT("Rendered Yaraq road view changes on import"), Compare(Before,After)>500);
+		return !HasAnyErrors();
+	}
 	if (Shore)
 	{
 		auto* South=World->SpawnActor<AACELandblockActor>();
@@ -575,7 +677,7 @@ bool FACEYaraqArtworkTest::RunTest(const FString&)
 			Ready=Mesh!=nullptr;
 			if (Mesh) for(const auto& Section : Mesh->Sections)
 				if (ActiveEnvironment()->TerrainTileCells(Section.PCode)>1)
-					Ready &= Section.SharedBake && (Section.SharedBake->CellsAcross>1 || Section.SharedBake->OverlaySurfaceId);
+					Ready &= Section.SharedBake && (Section.SharedBake->CellsAcross>1 || Section.SharedBake->OverlaySurfaceId || Section.SharedBake->IsLayerMask());
 			if (!Ready) FPlatformProcess::Sleep(.02f);
 		} while (!Ready && FPlatformTime::Seconds()<Until);
 		if (!TestTrue(TEXT("Imported Al-Arqis shoreline finished streaming"),Ready)) return false;

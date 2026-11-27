@@ -214,7 +214,7 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
   Toggle->OnCheckStateChanged.AddDynamic(this,&UACEVideoSettingsWidget::ChangeLegionsEnvironment);
   LegionsEnvironmentChecks.Add(Key,Toggle);
  };
- ArtworkToggle(TEXT("LegionsGround"),TEXT("AC2 ground textures"),TEXT("Replace mapped rock, dirt, sand, marsh, snow and ice textures as the landscape streams back in."));
+ ArtworkToggle(TEXT("LegionsGround"),TEXT("AC2 ground textures"),TEXT("Use matching AC2 ground and road textures. Other surfaces keep their AC1 artwork."));
  ArtworkToggle(TEXT("LegionsGrass"),TEXT("AC2 grass textures"),TEXT("Use Legions grass on grassy terrain."));
  ArtworkToggle(TEXT("LegionsGroundCover"),TEXT("AC2 interactive grass"),TEXT("Draw grass tufts outdoors that bend as you walk through them."));
  ArtworkToggle(TEXT("LegionsBoulders"),TEXT("AC2 boulder textures"),TEXT("Use Legions stone textures on matching outdoor boulders."));

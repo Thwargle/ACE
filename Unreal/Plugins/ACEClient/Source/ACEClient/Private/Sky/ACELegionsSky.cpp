@@ -9,6 +9,10 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Serialization/MemoryWriter.h"
+#if PLATFORM_WINDOWS
+#include "Windows/WindowsHWrapper.h"
+#include <shobjidl.h>
+#endif
 
 namespace ACELegionsSky
 {
@@ -35,6 +39,15 @@ constexpr int32 MaxRecords = 640;
 constexpr uint32 PackVersion = 0x334B534C; // LSK3 includes the region's rain schedules.
 TAtomic<int32> ImportRevision{0};
 FCriticalSection CacheMutex;
+FCriticalSection ImportMutex;
+// Increment when a fresh import selects different records from the same DATs.
+constexpr int32 ArtworkRecipe = 2;
+#if PLATFORM_WINDOWS || PLATFORM_LINUX
+FString ImportLockName(const FString& Destination)
+{
+	return FString::Printf(TEXT("ACUnrealLegions%08X"), FCrc::StrCrc32(*FPaths::ConvertRelativePathToFull(Destination)));
+}
+#endif
 using FRecords = TMap<uint32, TArray<uint8>>;
 
 // Sticky bounds checks, including nested record counts. Little-endian AC2 DAT.
@@ -323,13 +336,16 @@ bool ReadTexture(FSource& Src, uint32 Id, TMap<uint32, FImage>& Images, bool Wor
 	return true;
 }
 
-// Stage-zero diffuse maps of the Legions region. AC1 keeps its original cell size,
-// road overlays and blend masks. Water and unmapped land types fall through.
+// Stage-zero diffuse maps verified against the Legions SurfaceDesc and the
+// AC1 TexMerge artwork. Zero preserves the AC1 material and its authored tiling.
 constexpr uint32 TerrainTextures[] = {
-	0x40000349, 0x40000241, 0x40000245, 0x40000241, // rock, grassland, ice, lush grass
-	0x4000068c, 0x40000257, 0x4000024a, 0x4000024c, // marsh, mud, obsidian, packed dirt
-	0x4000024c, 0x40000241, 0x40000256, 0x4000024e, // patchy dirt/grass, yellow/gray sand
-	0, 0x40000250, 0x40000244, 0x40000251           // rocky sand, sedimentary rock, semi-barren, snow
+    0x40000525, 0x40000241, 0x400006db, 0,          // barren rock, grassland, cracked ice, lush grass
+    0, 0x40000257, 0x4000024a, 0x4000042d,          // sparse marsh, mud, obsidian, packed dirt
+    0, 0, 0x40000256, 0,                            // patchy dirt/grass, rippled sand, grey sand
+    0, 0, 0x40000244, 0x40000251,                   // rocky sand, sedimentary rock, semi-barren rock, snow
+    0, 0, 0, 0, 0, 0, 0, 0,                         // water, forest floor, faux water and sea slime
+    0, 0x400011ac, 0, 0, 0, 0x40000252, 0x4000025a, 0, // argila, lava, ash, blue ice, mosses, Olthoi, desolate
+    0x40000b0f                                      // dressed cobblestone road
 };
 uint8 TerrainGroup(uint32 Type)
 {
@@ -558,7 +574,9 @@ bool DecodeEnvironment(FSource& Src, uint8 Selected, FEnvironment& Env)
 	for (uint32 Type = 0; Type < UE_ARRAY_COUNT(TerrainTextures); ++Type)
 	{
 		const uint32 Id = TerrainTextures[Type];
-		if (Id && (Selected & TerrainGroup(Type)) && !Env.Surfaces.Contains(Id) && !ReadSurface(Id)) return false;
+		// Previously imported packs may lack an individual counterpart.
+		if (Id && (Selected & TerrainGroup(Type)) && !Env.Surfaces.Contains(Id) && Src.Get(Id).Ok && !ReadSurface(Id))
+			return false;
 	}
 	// Packs imported before the detail stage contain the diffuse records only.
 	if ((Selected & (Ground | Grass)) && Src.Get(FEnvironment::DetailTextureId).Ok)
@@ -1075,7 +1093,7 @@ const FACEDatDecodedSurface* FEnvironment::Terrain(uint32 Type, int32 MaxSize) c
 {
 	if (Type >= UE_ARRAY_COUNT(TerrainTextures) || !(Enabled & TerrainGroup(Type))) return nullptr;
 	const auto* Levels = Surfaces.Find(TerrainTextures[Type]);
-	if (!Levels || Levels->IsEmpty()) return nullptr;
+	if (!Levels || Levels->IsEmpty() || FMath::Min((*Levels)[0].Width, (*Levels)[0].Height) < 512) return nullptr;
 	for (const auto& Level : *Levels)
 		if (Level.Width <= MaxSize && Level.Height <= MaxSize) return &Level;
 	return &Levels->Last();
@@ -1093,6 +1111,7 @@ const FTree* FEnvironment::FindTree(uint32 SetupId) const
 
 float FEnvironment::UniformTerrainRepeats(uint32 PCode)
 {
+	if (IsFullRoad(PCode)) return 120.f / TerrainRepeatMetres(TerrainTextures[32]);
 	const uint32 Type = PCode & 31;
 	if (((PCode >> 20) & 255) || Type >= UE_ARRAY_COUNT(TerrainTextures) || !TerrainTextures[Type]) return 1.f;
 	for (int32 Shift : {5,10,15})
@@ -1103,14 +1122,14 @@ float FEnvironment::UniformTerrainRepeats(uint32 PCode)
 int32 FEnvironment::TerrainTileCells(uint32 PCode) const
 {
 	if (!(Enabled & (Ground | Grass))) return 1;
-	bool AllRoad = true;
 	bool Imported = false;
 	for (int32 Corner = 0; Corner < 4; ++Corner)
 	{
-		AllRoad &= ((PCode >> (20+Corner*2)) & 3) != 0;
 		Imported |= Terrain((PCode >> (Corner*5)) & 31) != nullptr;
 	}
-	return Imported && !AllRoad ? TerrainCellsAcross : 1;
+	if (IsFullRoad(PCode)) Imported = false;
+	if ((PCode & 0x0ff00000) && Terrain(32)) Imported = true;
+	return Imported ? TerrainCellsAcross : 1;
 }
 
 // A simple AC1/AC2 boundary can keep both source textures at native resolution.
@@ -1157,7 +1176,7 @@ uint64 FEnvironment::SceneryCacheKey() const
 uint64 FEnvironment::TerrainCacheKey(uint64 Original) const
 {
 	const uint8 TerrainMask = Enabled & (Grass | Ground);
-	return Original && TerrainMask ? Original ^ (uint64(ContentCrc) << 16) ^ (0x4c53000600000000ull | TerrainMask) : Original;
+	return TerrainMask ? Original ^ (uint64(ContentCrc) << 16) ^ (0x4c53000700000000ull | TerrainMask) : Original;
 }
 
 FString CachePath()
@@ -1218,7 +1237,7 @@ bool PublishCache(const FString& Incoming, const FString& Destination, FString& 
 	return true;
 }
 
-bool ImportArchives(const FString& Portal, const FString& HighRes, const FString& Destination, FString& Error)
+bool ImportArchives(const FString& Portal, const FString& HighRes, const FString& Destination, FString& Error, uint32 MinVersion = 0, uint32* PublishedCrc = nullptr)
 {
 	FSource Src;
 	Src.HasPortal = Src.Portal.Open(Portal);
@@ -1282,6 +1301,11 @@ bool ImportArchives(const FString& Portal, const FString& HighRes, const FString
 			if (!Keep.Contains(It.Key())) It.RemoveCurrent();
 	}
 	uint32 Version = WithScenery ? SceneryPack : WithDetail ? GroundDetailPack : WithDereth ? DerethPack : WithTrees ? TreePack : WithGrass ? GrassPack : WithEnvironment ? EnvironmentPack : PackVersion;
+	if (Version < MinVersion)
+	{
+		Error = TEXT("The available DATs provide less artwork than the installed import.");
+		return false;
+	}
 	uint32 Count = Src.Records.Num();
 	Writer << Version << Count;
 	for (auto& Pair : Src.Records)
@@ -1298,10 +1322,31 @@ bool ImportArchives(const FString& Portal, const FString& HighRes, const FString
 	Files.MakeDirectory(*Dir, true);
 	const FString Temp = FPaths::CreateTempFilename(*Dir, TEXT("legions-"), TEXT(".tmp"));
 	if (FFileHelper::SaveArrayToFile(Pack, *Temp) && PublishCache(Temp, Destination, Error))
+	{
+		if (PublishedCrc) *PublishedCrc = Crc;
 		return true;
+	}
 	Files.Delete(*Temp, false, true);
 	Error = TEXT("The imported sky could not be saved.");
 	return false;
+}
+// Keep the local path outside the transferable .sky file. Bind the receipt
+// to its pack so restoring/copying a different pack invalidates the stamp.
+bool ImportFolder(const FString& Folder, const FString& Destination, FString& Error, uint32 MinVersion = 0)
+{
+	uint32 Crc = 0;
+	if (!ImportArchives(Folder / TEXT("portal.dat"), Folder / TEXT("highres.dat"), Destination, Error, MinVersion, &Crc))
+		return false;
+	const FString Receipt = FString::Printf(TEXT("%d\n%08X\n%s"), ArtworkRecipe, Crc, *FPaths::ConvertRelativePathToFull(Folder));
+	const FString Temp = FPaths::CreateTempFilename(*FPaths::GetPath(Destination), TEXT("source-"));
+	auto& Files = IFileManager::Get();
+	if (!FFileHelper::SaveStringToFile(Receipt, *Temp, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM) ||
+		!Files.Move(*(Destination + TEXT(".import")), *Temp, true))
+	{
+		Files.Delete(*Temp, false);
+		UE_LOG(LogTemp, Warning, TEXT("AC2 artwork imported, but its source folder could not be saved."));
+	}
+	return true;
 }
 }
 
@@ -1316,7 +1361,12 @@ bool Import(const FString& DirectoryOrFile, const FString& Destination, FString&
 		Error = TEXT("Choose an AC2 Legions folder containing portal.dat.");
 		return false;
 	}
-	return ImportArchives(Folder / TEXT("portal.dat"), Folder / TEXT("highres.dat"), Destination, Error);
+	FScopeLock Lock(&ImportMutex);
+#if PLATFORM_WINDOWS || PLATFORM_LINUX
+	FSystemWideCriticalSection FileLock(ImportLockName(Destination), FTimespan::FromSeconds(30));
+	if (!FileLock.IsValid()) { Error = TEXT("Another client is importing artwork. Try again shortly."); return false; }
+#endif
+	return ImportFolder(Folder, Destination, Error);
 }
 
 FString StagedPath(const FString& Destination)
@@ -1326,6 +1376,7 @@ FString StagedPath(const FString& Destination)
 
 bool ImportStaged(const FString& Destination, FString& Error)
 {
+	FScopeLock Lock(&ImportMutex);
 	auto& Files = IFileManager::Get();
 	const FString Source = StagedPath(Destination);
 	uint32 Version = 0;
@@ -1385,6 +1436,113 @@ static bool ReadPack(const FString& Filename, FSource& Src, uint32& Version, uin
 		Src.Records.Add(Id, TArray<uint8>(Bytes));
 	}
 	return R.Ok && R.Pos == Pack.Num() - 4;
+}
+
+bool RefreshImport(const FString& Destination, const FString& RetailFolder)
+{
+	FScopeLock Lock(&ImportMutex);
+	auto& Files = IFileManager::Get();
+	if (!Files.FileExists(*Destination) && !Files.FileExists(*(Destination + TEXT(".previous")))) return false;
+	const FDateTime InitialStamp = Files.GetTimeStamp(*Destination);
+#if PLATFORM_WINDOWS || PLATFORM_LINUX
+	FSystemWideCriticalSection FileLock(ImportLockName(Destination), FTimespan::FromSeconds(30));
+	if (!FileLock.IsValid()) return false;
+#endif
+	const FString Actual = Files.FileExists(*Destination) ? Destination : Destination + TEXT(".previous");
+	TArray<FString> Receipt;
+	FFileHelper::LoadFileToStringArray(Receipt, *(Destination + TEXT(".import")));
+	if (Receipt.Num() == 3 && Receipt[0] == LexToString(ArtworkRecipe))
+	{
+		TUniquePtr<FArchive> Reader(Files.CreateFileReader(*Actual));
+		if (Reader && Reader->TotalSize() >= 12)
+		{
+			uint32 Crc = 0;
+			Reader->Seek(Reader->TotalSize()-4);
+			*Reader << Crc;
+			if (!Reader->IsError() && Receipt[1] == FString::Printf(TEXT("%08X"), Crc))
+			{
+				if (Files.GetTimeStamp(*Destination) == InitialStamp) return false;
+				// A second client completed the refresh while this one waited.
+				++ImportRevision;
+				return true;
+			}
+		}
+	}
+	FSource Old;
+	uint32 Version, Crc;
+	if (!ReadPack(Destination, Old, Version, Crc) || Old.Records.IsEmpty()) return false;
+
+	TArray<FString> Candidates;
+	auto Add = [&](FString Folder)
+	{
+		FPaths::NormalizeDirectoryName(Folder);
+		if (!Folder.IsEmpty() && Files.FileExists(*(Folder / TEXT("portal.dat")))) Candidates.AddUnique(Folder);
+	};
+	if (Receipt.Num() == 3) Add(Receipt[2]);
+#if PLATFORM_WINDOWS
+	// The old Windows picker used the application's default dialog state.
+	// Ask that picker for its startup folder without opening a window.
+	const HRESULT Init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+	IFileOpenDialog* Dialog = nullptr;
+	if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&Dialog))))
+	{
+		IShellItem* Item = nullptr;
+		if (SUCCEEDED(Dialog->GetFolder(&Item)))
+		{
+			PWSTR Path = nullptr;
+			if (SUCCEEDED(Item->GetDisplayName(SIGDN_FILESYSPATH, &Path))) { Add(Path); CoTaskMemFree(Path); }
+			Item->Release();
+		}
+		Dialog->Release();
+	}
+	if (SUCCEEDED(Init)) CoUninitialize();
+#endif
+	auto Neighbours = [&](const FString& Parent)
+	{
+		if (Parent.IsEmpty()) return;
+		TArray<FString> Names;
+		Files.FindFiles(Names, *(Parent / TEXT("*")), false, true);
+		for (const auto& Name : Names) Add(Parent / Name);
+	};
+	if (!RetailFolder.IsEmpty())
+	{
+		const FString Retail = FPaths::ConvertRelativePathToFull(RetailFolder);
+		Add(Retail);
+		Neighbours(Retail);
+		Neighbours(FPaths::GetPath(Retail));
+	}
+#if PLATFORM_WINDOWS
+	Neighbours(TEXT("C:/Turbine"));
+	Neighbours(FString(FPlatformMisc::GetEnvironmentVariable(TEXT("ProgramFiles(x86)"))) / TEXT("Turbine"));
+#endif
+	for (const FString& Folder : Candidates)
+	{
+		FArchiveFile Portal, High;
+		if (!Portal.Open(Folder / TEXT("portal.dat"))) continue;
+		const bool HasHigh = High.Open(Folder / TEXT("highres.dat"));
+		// Match every previously imported record, including optional high-res
+		// mips. A different or incomplete installation cannot replace the pack.
+		bool Match = true;
+		for (const auto& Record : Old.Records)
+		{
+			TArray<uint8> Bytes;
+			if (HasHigh && (Record.Key >> 24) == 0x41 && High.Read(Record.Key,Bytes) && Bytes == Record.Value) continue;
+			if (Portal.Read(Record.Key,Bytes) && Bytes == Record.Value) continue;
+			Match = false;
+			break;
+		}
+		if (Match)
+		{
+			FString Error;
+			if (ImportFolder(Folder, Destination, Error, Version))
+			{
+				UE_LOG(LogTemp, Display, TEXT("Automatically refreshed AC2 artwork from its DATs."));
+				return true;
+			}
+			UE_LOG(LogTemp, Warning, TEXT("AC2 artwork refresh: %s"), *Error);
+		}
+	}
+	return false;
 }
 
 bool LoadEnvironment(const FString& Filename, uint8 Selected, FEnvironment& Out)

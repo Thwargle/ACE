@@ -142,6 +142,8 @@ public:
 
 private:
 	bool FillSectionBake(FACEBuiltLandblockSection& Section);
+	const FACEDatTerrainTex* TerrainDescriptor(uint32 TerrainType) const;
+	void BuildLayerMask(uint32 PCode, const uint32 Codes[3], FACETerrainBlend& Blend);
 	const FACEDatDecodedSurface* LoadTerrainSurface(uint32 TerrainType, float& OutTiling, int32 CellsAcross);
 	FColor SampleTiled(const FACEDatDecodedSurface& Surf, float U, float V, float Tiling) const;
 	static void RotateUV(float U, float V, int32 Rot, float& OutU, float& OutV);
@@ -152,7 +154,7 @@ private:
 	void GetRoadCodes(uint32 PCode, uint32 OutRCodes[2], bool& bAllRoad) const;
 	bool ResolveGpuBlend(uint32 PCode, struct FACELandGpuBlend& Out);
 	FColor SampleAlpha(const FACEDatDecodedSurface& Alpha, float U, float V, int32 Rot) const;
-	void MergeOverlay(TArray<FColor>& Pixels, int32 Size, const FACEDatDecodedSurface& Overlay, float OverlayTiling, const FACEDatDecodedSurface& Alpha, int32 Rot, int32 CellsAcross = 1) const;
+	void MergeOverlay(TArray<FColor>& Pixels, int32 Size, const FACEDatDecodedSurface& Overlay, float OverlayTiling, const FACEDatDecodedSurface& Alpha, int32 Rot, int32 CellsAcross = 1, bool bDetail = true) const;
 
 	FACEDatDatabase* Portal = nullptr;
 	FACEDatDatabase* Cell = nullptr;

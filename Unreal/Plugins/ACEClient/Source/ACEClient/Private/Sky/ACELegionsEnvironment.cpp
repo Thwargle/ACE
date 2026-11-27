@@ -1,7 +1,7 @@
 #include "Sky/ACELegionsEnvironment.h"
 #include "TextureResource.h"
 
-UTexture2D* ACELegionsSky::CreateImportedTexture(const FImage& Image)
+UTexture2D* ACELegionsSky::CreateImportedTexture(const FImage& Image, TextureFilter Filter)
 {
 	auto* Tex = UTexture2D::CreateTransient(Image.Width, Image.Height, Image.Format);
 	if (!Tex)
@@ -9,7 +9,7 @@ UTexture2D* ACELegionsSky::CreateImportedTexture(const FImage& Image)
 	Tex->SRGB = true;
 	Tex->AddressX = TA_Wrap;
 	Tex->AddressY = TA_Wrap;
-	Tex->Filter = TF_Trilinear;
+	Tex->Filter = Filter;
 	Tex->NeverStream = true;
 	auto& Mips = Tex->GetPlatformData()->Mips;
 	for (int32 I = 0; I < Image.Mips.Num(); ++I)

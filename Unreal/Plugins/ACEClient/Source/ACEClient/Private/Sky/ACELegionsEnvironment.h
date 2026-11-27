@@ -61,7 +61,11 @@ struct FEnvironment
 	static constexpr int32 TerrainCellsAcross = 5;
 	int32 TerrainTileCells(uint32 PCode) const;
 	uint32 TerrainBlendPair(uint32 PCode, uint32& NativeType) const;
-	static float TerrainRepeatMetres(uint32 SurfaceId) { return SurfaceId == 0x4000024eu ? 10.f : 20.f; }
+	static float TerrainRepeatMetres(uint32 SurfaceId) { return SurfaceId == 0x40000b0fu ? 10.f : 20.f; }
+	static bool IsFullRoad(uint32 PCode)
+	{
+		return ((PCode | (PCode >> 1)) & 0x05500000u) == 0x05500000u;
+	}
 	static float UniformTerrainRepeats(uint32 PCode);
 	const FTree* FindTree(uint32 SetupId) const;
 	bool ReplacesTree(uint32 SetupId) const { return FindTree(SetupId) != nullptr; }
@@ -77,5 +81,5 @@ bool LoadEnvironment(const FString& Path, uint8 Selected, FEnvironment& Out);
 using FEnvironmentPtr = TSharedPtr<const FEnvironment, ESPMode::ThreadSafe>;
 FEnvironmentPtr ActiveEnvironment();
 void RefreshEnvironment();
-UTexture2D* CreateImportedTexture(const FImage& Image);
+UTexture2D* CreateImportedTexture(const FImage& Image, TextureFilter Filter = TF_Trilinear);
 }

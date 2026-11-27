@@ -5,6 +5,14 @@ struct ACECLIENT_API FACETerrainBlend
 {
     int32 CellsAcross = 1; // Runtime projection for this palette and artwork selection.
     uint32 OverlaySurfaceId = 0; // A separate world-space diffuse over this cell-local RGB and coverage mask.
+    struct FLayer
+    {
+        uint32 SurfaceId = 0;
+        // AC2 repeats per world tile (positive) or AC1 repeats per cell (negative).
+        float Repeat = 0.f;
+    };
+    FLayer Layers[5] = {}; // Base, up to three terrain transitions, then road.
+    bool IsLayerMask() const { return Layers[0].SurfaceId != 0; }
     TArray<FColor> Pixels;
     int32 Width = 0;
     int32 Height = 0;

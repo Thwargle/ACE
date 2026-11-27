@@ -24,12 +24,12 @@ Click **Apply** in the in-game Options panel whenever you want to refresh the in
 
 In **Graphics Options**, browse to your Legions `portal.dat` or paste its path.
 Select **Import** and choose the sky, ground textures, grass textures, interactive grass, tree models and boulder textures independently.
-Ground covers mapped rock, dirt, swamp, sand, snow and ice. Grass changes grassy ground cover.
+Ground includes cobblestone roads and matching rock, dirt, sand, snow, ice, moss and lava textures. Unmatched surfaces keep their AC1 artwork.
 Interactive grass uses Legions' meadow clumps at their authored size. Blades bend underfoot on grassy terrain.
 The tree option fits Legions broadleaves, conifers, palms, bare trees and small cut stumps to matching AC1 scenery across Dereth.
-Outdoor changes refresh in game. The sky follows AC1 time and weather.
-Reimport an older DAT selection to unlock the new scenery. Boulder textures use the original rock shapes and collision. The import uses adjacent
-`highres.dat` when available and saves locally to `Saved/Skies/Legions.sky`.
+Boulders keep their original shapes and collision. Outdoor changes refresh in game. The sky follows AC1 time and weather.
+
+On startup, the client refreshes existing imports when it finds the matching DATs. If it cannot locate an older installation, import its `portal.dat` once in **Graphics Options** to save the folder for future updates. The importer uses the adjacent `highres.dat` when available and saves the artwork to `Saved/Skies/Legions.sky`.
 
 For controlled comparisons, the [admin sky preview mod](../Source/Mods/LocalSkyPreview/README.md)
 provides `/weather`, `/time set` and `/timelapse [multiplier]`.

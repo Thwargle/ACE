@@ -586,6 +586,13 @@ uint32 FACELandblockMeshBuilder::GetPalCode(int32 R1, int32 R2, int32 R3, int32 
 	return SizeBits | RoadBits | TerrainBits;
 }
 
+const FACEDatTerrainTex* FACELandblockMeshBuilder::TerrainDescriptor(uint32 TerrainType) const
+{
+    for (const auto& Desc : TexMerge.TerrainDesc)
+        if (Desc.TerrainType == TerrainType) return &Desc.TerrainTex;
+    return TexMerge.TerrainDesc.IsEmpty() ? nullptr : &TexMerge.TerrainDesc[0].TerrainTex;
+}
+
 const FACEDatDecodedSurface* FACELandblockMeshBuilder::LoadTerrainSurface(uint32 TerrainType, float& OutTiling, int32 CellsAcross)
 {
 	OutTiling = 1;
@@ -598,19 +605,7 @@ const FACEDatDecodedSurface* FACELandblockMeshBuilder::LoadTerrainSurface(uint32
 		return Cached->Get();
 	}
 
-	const FACEDatTerrainTex* Tex = nullptr;
-	for (const FACEDatTMTerrainDesc& Desc : TexMerge.TerrainDesc)
-	{
-		if (Desc.TerrainType == TerrainType)
-		{
-			Tex = &Desc.TerrainTex;
-			break;
-		}
-	}
-	if (!Tex && TexMerge.TerrainDesc.Num() > 0)
-	{
-		Tex = &TexMerge.TerrainDesc[0].TerrainTex;
-	}
+	const FACEDatTerrainTex* Tex = TerrainDescriptor(TerrainType);
 	if (!Tex || !Textures || Tex->TexGID == 0)
 	{
 		return nullptr;
@@ -620,7 +615,7 @@ const FACEDatDecodedSurface* FACELandblockMeshBuilder::LoadTerrainSurface(uint32
 	const int32 Size = TexMerge.BaseTexSize ? int32(TexMerge.BaseTexSize) : BakeSize;
 	if (const auto* Imported = Artwork->Terrain(TerrainType))
 	{
-		// Region 13000000 gives grey sand a 10 m repeat and the other
+		// Region 13000000 gives cobblestone a 10 m repeat and the other
 		// imported base materials a 20 m repeat. AC1 cells span 24 m.
 		OutTiling = CellSize / ACELegionsSky::FEnvironment::TerrainRepeatMetres(Imported->SurfaceId);
 		return Artwork->Terrain(TerrainType,FMath::CeilToInt(Size / (OutTiling*CellsAcross)));
@@ -667,7 +662,7 @@ FColor FACELandblockMeshBuilder::SampleAlpha(const FACEDatDecodedSurface& Alpha,
 	return Alpha.SampleUV(RU, RV);
 }
 
-void FACELandblockMeshBuilder::MergeOverlay(TArray<FColor>& Pixels, int32 Size, const FACEDatDecodedSurface& Overlay, float OverlayTiling, const FACEDatDecodedSurface& Alpha, int32 Rot, int32 CellsAcross) const
+void FACELandblockMeshBuilder::MergeOverlay(TArray<FColor>& Pixels, int32 Size, const FACEDatDecodedSurface& Overlay, float OverlayTiling, const FACEDatDecodedSurface& Alpha, int32 Rot, int32 CellsAcross, bool bDetail) const
 {
 	if (!Overlay.bHasPixels || !Alpha.bHasPixels || Size <= 0)
 	{
@@ -700,7 +695,7 @@ void FACELandblockMeshBuilder::MergeOverlay(TArray<FColor>& Pixels, int32 Size, 
 				static_cast<uint8>((BaseWeight * Base.R + OverlayWeight * Over.R) >> 8),
 				static_cast<uint8>((BaseWeight * Base.G + OverlayWeight * Over.G) >> 8),
 				static_cast<uint8>((BaseWeight * Base.B + OverlayWeight * Over.B) >> 8),
-				CellsAcross > 1 ? (BaseWeight * Base.A + OverlayWeight * ((Overlay.SurfaceId >> 24) == 0x40 ? 255u : 0u)) >> 8 : 255u);
+				CellsAcross > 1 ? (BaseWeight * Base.A + OverlayWeight * (bDetail && (Overlay.SurfaceId >> 24) == 0x40 ? 255u : 0u)) >> 8 : 255u);
 		}
 	}
 }
@@ -1008,7 +1003,7 @@ bool FACELandblockMeshBuilder::BakePCode(uint32 PCode, TArray<FColor>& OutPixels
 			// U-flip write to match mesh LandUVs mirrored for AceVectorToUnreal(-X).
 			FColor& Pixel = OutPixels[Y * Size + (Size - 1 - X)];
 			Pixel = SampleTiled(*BaseSurf, U, V, BaseTile);
-			if (CellsAcross > 1) Pixel.A = (BaseSurf->SurfaceId >> 24) == 0x40 ? 255 : 0;
+			if (CellsAcross > 1) Pixel.A = !bAllRoad && (BaseSurf->SurfaceId >> 24) == 0x40 ? 255 : 0;
 		}
 	}
 
@@ -1050,7 +1045,7 @@ bool FACELandblockMeshBuilder::BakePCode(uint32 PCode, TArray<FColor>& OutPixels
 				{
 					continue;
 				}
-				MergeOverlay(OutPixels, Size, *RoadSurf, RoadTile, Alpha, Rot,CellsAcross);
+				MergeOverlay(OutPixels, Size, *RoadSurf, RoadTile, Alpha, Rot,CellsAcross, false);
 			}
 		}
 	}
@@ -1058,22 +1053,59 @@ bool FACELandblockMeshBuilder::BakePCode(uint32 PCode, TArray<FColor>& OutPixels
 	return true;
 }
 
+// Masks repeat per AC1 cell. Diffuse maps stay separate so a road, its
+// shoulder, and all four terrain corners can each use their native texture.
+void FACELandblockMeshBuilder::BuildLayerMask(uint32 PCode, const uint32 Codes[3], FACETerrainBlend& Blend)
+{
+    uint32 Roads[2] = {};
+    bool AllRoad = false;
+    GetRoadCodes(PCode, Roads, AllRoad);
+    FACEDatDecodedSurface Masks[5];
+    int32 Rotations[5] = {};
+    int32 Size = 1;
+    for (int32 I = 0; I < 5; ++I)
+    {
+        const bool Found = I < 3
+            ? Codes[I] && FindTerrainAlpha(PCode, Codes[I], Masks[I], Rotations[I])
+            : Roads[I-3] && FindRoadAlpha(PCode, Roads[I-3], Masks[I], Rotations[I]);
+        if (Found) Size = FMath::Max3(Size, Masks[I].Width, Masks[I].Height);
+    }
+    Blend.Width = Blend.Height = Size;
+    Blend.Pixels.SetNumUninitialized(Size * Size);
+    for (int32 Y = 0; Y < Size; ++Y)
+        for (int32 X = 0; X < Size; ++X)
+        {
+            const float U = (X + .5f) / Size, V = (Y + .5f) / Size;
+            auto Retained = [&](int32 I) -> int32
+            {
+                return Masks[I].bHasPixels ? SampleAlpha(Masks[I], U, V, Rotations[I]).R : 255;
+            };
+            Blend.Pixels[Y * Size + Size - 1 - X] = FColor(
+                255 - Retained(0), 255 - Retained(1), 255 - Retained(2),
+                255 - (Retained(3) * Retained(4) + 127) / 255);
+        }
+}
+
 bool FACELandblockMeshBuilder::FillSectionBake(FACEBuiltLandblockSection& Section)
 {
     const uint64 ArtworkKey = Artwork->TerrainCacheKey(CacheFingerprint);
-    uint32 NativeType = 0;
-    const uint32 OverlayId = Artwork->TerrainBlendPair(Section.PCode, NativeType);
+    const int32 Cells = Artwork->TerrainTileCells(Section.PCode);
+    const bool Mixed = Cells > 1 && Artwork->UniformTerrainRepeats(Section.PCode) == 1.f;
+    uint32 Types[4] = {}, Codes[3] = {}, NativeType = 0;
+    int32 Count = 0;
+    if (Mixed) GetTerrainLayers(Section.PCode, Types, Codes, Count);
+    const uint32 OverlayId = Mixed && Count == 2 ? Artwork->TerrainBlendPair(Section.PCode, NativeType) : 0;
+    const bool UseLayers = Mixed && !OverlayId;
     Section.SharedBake = BlendCache->GetOrBuild(Section.PCode, ArtworkKey, [&]() -> FACETerrainBlendCache::FBlendPtr
     {
         auto Blend = MakeShared<FACETerrainBlend, ESPMode::ThreadSafe>();
         if (!(CacheFingerprint != 0 && ACEPCodeTileCache::LoadPrepared(Section.PCode, CacheFingerprint, *Blend, ArtworkKey)))
         {
-            const int32 Cells = Artwork->TerrainTileCells(Section.PCode);
-            if (OverlayId)
+            if (UseLayers)
+                BuildLayerMask(Section.PCode, Codes, *Blend);
+            else if (OverlayId)
             {
-                uint32 Types[4] = {}, Codes[3] = {};
-                int32 Count = 0, Rotation = 0;
-                GetTerrainLayers(Section.PCode, Types, Codes, Count);
+                int32 Rotation = 0;
                 FACEDatDecodedSurface Mask;
                 float Tiling = 1.f;
                 const auto* Native = LoadTerrainSurface(NativeType, Tiling, 1);
@@ -1101,7 +1133,7 @@ bool FACELandblockMeshBuilder::FillSectionBake(FACEBuiltLandblockSection& Sectio
             }
             else if (Cells > 1 && Artwork->UniformTerrainRepeats(Section.PCode) > 1.f)
             {
-                const auto* Native = Artwork->Terrain(Section.PCode & 31);
+                const auto* Native = Artwork->Terrain(Artwork->IsFullRoad(Section.PCode) ? RoadTerrainType : Section.PCode & 31);
                 Blend->Width = Native->Width;
                 Blend->Height = Native->Height;
                 Blend->Pixels.SetNumUninitialized(Native->Pixels.Num());
@@ -1110,7 +1142,7 @@ bool FACELandblockMeshBuilder::FillSectionBake(FACEBuiltLandblockSection& Sectio
                     {
                         FColor& Pixel = Blend->Pixels[Y*Native->Width+Native->Width-1-X];
                         Pixel = Native->Pixels[Y*Native->Width+X];
-                        Pixel.A = 255;
+                        Pixel.A = Artwork->IsFullRoad(Section.PCode) ? 0 : 255;
                     }
             }
             else if (!BakePCode(Section.PCode,Blend->Pixels,Blend->Width,Blend->Height,Cells)) return nullptr;
@@ -1118,7 +1150,19 @@ bool FACELandblockMeshBuilder::FillSectionBake(FACEBuiltLandblockSection& Sectio
             if (CacheFingerprint != 0)
                 ACEPCodeTileCache::SavePrepared(Section.PCode, CacheFingerprint, *Blend, ArtworkKey);
         }
-        Blend->CellsAcross = OverlayId ? 1 : Artwork->TerrainTileCells(Section.PCode);
+        if (UseLayers)
+        {
+            auto SetLayer = [&](int32 Index, uint32 Type)
+            {
+                if (const auto* Imported = Artwork->Terrain(Type))
+                    Blend->Layers[Index] = {Imported->SurfaceId, Cells * CellSize / Artwork->TerrainRepeatMetres(Imported->SurfaceId)};
+                else if (const auto* Desc = TerrainDescriptor(Type))
+                    Blend->Layers[Index] = {Desc->TexGID, -float(FMath::Max(1u, Desc->TexTiling))};
+            };
+            for (int32 I = 0; I < Count; ++I) SetLayer(I, Types[I]);
+            if ((Section.PCode >> 20) & 255) SetLayer(4, RoadTerrainType);
+        }
+        Blend->CellsAcross = Mixed ? 1 : Cells;
         Blend->OverlaySurfaceId = OverlayId;
         return Blend;
     });

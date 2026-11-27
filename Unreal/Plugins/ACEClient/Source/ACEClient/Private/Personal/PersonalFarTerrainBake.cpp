@@ -14,7 +14,7 @@
 namespace
 {
 	constexpr uint32 FarTerrainCacheMagic = 0x54464150; // "PAFT"
-	constexpr uint32 FarTerrainCacheVersion = 5;
+	constexpr uint32 FarTerrainCacheVersion = 6;
 	constexpr int32 BakeVertexDim = FACELandblockMeshBuilder::VertexDim;
 
 	/**
@@ -233,6 +233,8 @@ uint64 SourceKey(const FString& DatDirectory, ACELegionsSky::FEnvironmentPtr Art
 	HashDatFile(DatDirectory / TEXT("client_cell_1.dat"), Hash, bOk);
 	const uint32 CellHash = Hash;
 	HashDatFile(DatDirectory / TEXT("client_portal.dat"), Hash, bOk);
+	const FString HighRes = DatDirectory / TEXT("client_highres.dat");
+	if (IFileManager::Get().FileExists(*HighRes)) HashDatFile(HighRes, Hash, bOk);
 	const uint64 Key = (uint64(CellHash) << 32) | Hash;
 	return bOk ? Art->TerrainCacheKey(FMath::Max<uint64>(Key, 1)) : 0;
 }
@@ -272,7 +274,9 @@ bool Build(const FString& DatDirectory, FPersonalFarTerrainBake& Out, ACELegions
 
 	int32 TypesFound = 0;
 	{
-		FACEDatTextureResolver Textures(&Portal, nullptr);
+		FACEDatDatabase HighRes;
+		const bool HasHighRes = HighRes.Open(DatDirectory / TEXT("client_highres.dat"));
+		FACEDatTextureResolver Textures(&Portal, HasHighRes ? &HighRes : nullptr);
 		FACELandblockMeshBuilder Builder(&Portal, &Cell, &Textures, nullptr, Art);
 		if (!Builder.EnsureTexMerge())
 		{
@@ -286,7 +290,8 @@ bool Build(const FString& DatDirectory, FPersonalFarTerrainBake& Out, ACELegions
 				++TypesFound;
 			}
 		}
-		AverageBakedColor(Builder, FACELandblockMeshBuilder::GetPalCode(1, 1, 1, 1, 0, 0, 0, 0), Out.Palette[FPersonalFarTerrainBake::RoadCode]);
+		const uint32 Road = FACELandblockMeshBuilder::GetPalCode(1,1,1,1,0,0,0,0);
+		AverageBakedColor(Builder, Road, Out.Palette[FPersonalFarTerrainBake::RoadCode], Art->TerrainTileCells(Road));
 	}
 	if (TypesFound == 0)
 	{

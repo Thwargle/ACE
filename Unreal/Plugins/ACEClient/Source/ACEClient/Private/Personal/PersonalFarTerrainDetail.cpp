@@ -24,7 +24,7 @@ namespace
 	{
 		FString Directory;
 		ACELegionsSky::FEnvironmentPtr Artwork;
-		FACEDatDatabase Portal, Cell;
+		FACEDatDatabase Portal, Cell, HighRes;
 		TUniquePtr<FACEDatTextureResolver> Textures;
 		TUniquePtr<FACELandblockMeshBuilder> Builder;
 		bool bTried = false;
@@ -36,7 +36,8 @@ namespace
 				bTried = true;
 				if (Portal.Open(Directory / TEXT("client_portal.dat")) && Cell.Open(Directory / TEXT("client_cell_1.dat")))
 				{
-					Textures = MakeUnique<FACEDatTextureResolver>(&Portal, nullptr);
+					const bool HasHighRes = HighRes.Open(Directory / TEXT("client_highres.dat"));
+					Textures = MakeUnique<FACEDatTextureResolver>(&Portal, HasHighRes ? &HighRes : nullptr);
 					Builder = MakeUnique<FACELandblockMeshBuilder>(&Portal, &Cell, Textures.Get(), nullptr, Artwork);
 					if (!Builder->EnsureTexMerge())
 					{
