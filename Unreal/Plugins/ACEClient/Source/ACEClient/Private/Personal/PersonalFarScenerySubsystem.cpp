@@ -22,6 +22,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 #include "RenderTimer.h"
 #include "TimerManager.h"
 #include "UObject/UObjectIterator.h"
@@ -29,7 +30,7 @@
 namespace
 {
 	TAutoConsoleVariable<float> CVarFarSceneryBudgetMs(TEXT("personal.FarScenery.BudgetMs"), 1.f,
-		TEXT("Game thread time per update (10 per second) the far scenery may use to add and remove landblocks, in ms."));
+		TEXT("Game thread budget in ms per frame for creating ready far scenery. The streaming plan updates at 10 Hz."));
 
 	FAutoConsoleCommandWithWorld FarSceneryLogFrameRate(TEXT("personal.FarScenery.LogFrameRate"),
 		TEXT("Writes the frame rate and the game, render and GPU times of the last 10 seconds to the log."),
@@ -143,6 +144,12 @@ void UPersonalFarScenerySubsystem::ClearAll()
 			if (Actor.IsValid()) Actor->Destroy();
 		}
 	}
+	if (UWorld* World = GetWorld()) World->GetTimerManager().ClearTimer(BuildTimer);
+	BuildOrder.Reset();
+	LevelsWanted.Reset();
+	PlacementRadius = INDEX_NONE;
+	UnrequestedBlocks.Reset();
+	++PlacementGeneration;
 	Blocks.Reset();
 	Units.Reset();
 	Retiring.Reset();
@@ -218,6 +225,7 @@ bool UPersonalFarScenerySubsystem::ApplyVisibility(FIntPoint Center)
 
 void UPersonalFarScenerySubsystem::HideAll()
 {
+	if (UWorld* World = GetWorld()) World->GetTimerManager().ClearTimer(BuildTimer);
 	bAllHidden = true;
 	for (auto& Pair : Units)
 	{
@@ -241,31 +249,33 @@ void UPersonalFarScenerySubsystem::StartPlacement(const PersonalFarTerrainBake::
 	{
 		return;
 	}
-	TArray<FIntPoint> Missing;
-	for (int32 DX = -OuterRing; DX <= OuterRing; ++DX)
+	if (Center != PlacementCenter || OuterRing != PlacementRadius)
 	{
-		for (int32 DY = -OuterRing; DY <= OuterRing; ++DY)
-		{
-			const FIntPoint Block = Center + FIntPoint(DX, DY);
-			if (PersonalFarScenery::IsWanted(Block, Center, OuterRing) && !Blocks.Contains(Block))
+		PlacementCenter = Center;
+		PlacementRadius = OuterRing;
+		UnrequestedBlocks.Reset();
+		for (int32 DX = -OuterRing; DX <= OuterRing; ++DX)
+			for (int32 DY = -OuterRing; DY <= OuterRing; ++DY)
 			{
-				Missing.Add(Block);
+				const FIntPoint Block = Center + FIntPoint(DX, DY);
+				if (PersonalFarScenery::IsWanted(Block, Center, OuterRing) && !Blocks.Contains(Block))
+					UnrequestedBlocks.Add(Block);
 			}
-		}
+		UnrequestedBlocks.Sort([Center](const FIntPoint& A, const FIntPoint& B) { return DistanceSquared(A, Center) > DistanceSquared(B, Center); });
 	}
-	if (Missing.Num() == 0)
-	{
-		return;
-	}
-	Missing.Sort([Center](const FIntPoint& A, const FIntPoint& B) { return DistanceSquared(A, Center) < DistanceSquared(B, Center); });
-	Missing.SetNum(FMath::Min(Missing.Num(), PlaceBatch));
+	if (UnrequestedBlocks.IsEmpty()) return;
+	// Return the immediate surroundings early, then amortize full planning passes over more blocks.
+	const int32 Count = FMath::Min(UnrequestedBlocks.Num(), Blocks.IsEmpty() ? PlaceBatch : 4 * PlaceBatch);
+	TArray<FIntPoint> Missing;
+	Missing.Reserve(Count);
+	for (int32 I = 0; I < Count; ++I) Missing.Add(UnrequestedBlocks.Pop(EAllowShrinking::No));
 	for (const FIntPoint Block : Missing)
 	{
 		Blocks.Add(Block);
 	}
 	bPlacing = true;
 	Async(EAsyncExecution::ThreadPool,
-		[Weak = TWeakObjectPtr<UPersonalFarScenerySubsystem>(this), Data = Bake, Scenes = Source, WorldScale, Missing = MoveTemp(Missing)]()
+		[Weak = TWeakObjectPtr<UPersonalFarScenerySubsystem>(this), Data = Bake, Scenes = Source, Generation = PlacementGeneration, WorldScale, Missing = MoveTemp(Missing)]()
 	{
 		TArray<FPlaced> Placed;
 		Placed.Reserve(Missing.Num());
@@ -289,11 +299,12 @@ void UPersonalFarScenerySubsystem::StartPlacement(const PersonalFarTerrainBake::
 				Type.MaxScale = FMath::Max(Type.MaxScale, Scale);
 			}
 		}
-		AsyncTask(ENamedThreads::GameThread, [Weak, Placed = MoveTemp(Placed)]() mutable
+		AsyncTask(ENamedThreads::GameThread, [Weak, Generation, Placed = MoveTemp(Placed)]() mutable
 		{
 			if (UPersonalFarScenerySubsystem* Self = Weak.Get())
 			{
-				Self->ApplyPlaced(MoveTemp(Placed));
+				Self->bPlacing = false;
+				if (Self->PlacementGeneration == Generation) Self->ApplyPlaced(MoveTemp(Placed));
 			}
 		});
 	});
@@ -301,7 +312,6 @@ void UPersonalFarScenerySubsystem::StartPlacement(const PersonalFarTerrainBake::
 
 void UPersonalFarScenerySubsystem::ApplyPlaced(TArray<FPlaced>&& Placed)
 {
-	bPlacing = false;
 	for (FPlaced& Result : Placed)
 	{
 		// A landblock that left the set while the worker ran is not in the map any more.
@@ -456,6 +466,12 @@ void UPersonalFarScenerySubsystem::AddComponent(UACEDatSubsystem& Dat, FUnit& Un
 	Instances->SetupAttachment(Actor->GetRootComponent());
 	Instances->SetStaticMesh(Mesh);
 	Instances->SetMobility(EComponentMobility::Movable);
+	if (!LevelMesh && Level > 0 && Mesh->GetNumLODs() > 1)
+	{
+		// Far units already select a detail ring. Submit only that LOD for the entire
+		// instance group instead of setting up draws for every LOD of this tree.
+		Instances->SetForcedLodModel(FMath::Min(Level + 1, Mesh->GetNumLODs()));
+	}
 	if (LevelMesh)
 	{
 		for (int32 Slot = 0; Slot < LevelMesh->Materials.Num(); ++Slot)
@@ -496,7 +512,7 @@ void UPersonalFarScenerySubsystem::AddComponent(UACEDatSubsystem& Dat, FUnit& Un
 	Instances->RegisterComponent();
 	++Unit.Components;
 	Unit.Instances += Transforms.Num();
-	Unit.Triangles += int64(Mesh->GetNumTriangles(0)) * Transforms.Num();
+	Unit.Triangles += int64(Mesh->GetNumTriangles(FMath::Max(Instances->GetForcedLodModel() - 1, 0))) * Transforms.Num();
 }
 
 void UPersonalFarScenerySubsystem::PlanUnits(UACEDatSubsystem& Dat, FIntPoint Center, float WorldScale)
@@ -508,6 +524,7 @@ void UPersonalFarScenerySubsystem::PlanUnits(UACEDatSubsystem& Dat, FIntPoint Ce
 	const bool bDetail = CVarFarSceneryDetail.GetValueOnGameThread() != 0;
 	const int32 MiddleRing = CVarFarSceneryMiddleRing.GetValueOnGameThread();
 	const int32 SimplestRing = FMath::Max(CVarFarScenerySimplestRing.GetValueOnGameThread(), MiddleRing);
+	BuildOrder.Reset();
 	++PlanSerial;
 	bool bPending = false;
 	// One mesh request per object type and plan, not one per landblock.
@@ -599,9 +616,14 @@ void UPersonalFarScenerySubsystem::PlanUnits(UACEDatSubsystem& Dat, FIntPoint Ce
 					// Buildings keep the client's mesh and shell material at every distance.
 					continue;
 				}
-				// Reduced meshes bake AC1 materials. Use the outdoor setup mesh for imported artwork.
+				// The imported tree already carries its own reduced geometry and material slots.
 				const uint32 Id = PersonalFarSceneryPlacement::TypeId(Entry.SetupId);
-				if (Art->ReplacesTree(Id) || Art->BoulderTexture(Id)) continue;
+				if (const auto* Tree = Art->FindTree(Id))
+				{
+					Entry.Level = uint8(FMath::Min<int32>(Unit.Level, Tree->DistanceLevels.Num()));
+					continue;
+				}
+				if (Art->BoulderTexture(Id)) continue;
 				if (const PersonalFarSceneryMeshes::FLevelsPtr* Known = Levels.Find(Entry.SetupId))
 				{
 					Entry.Level = uint8((*Known)->Effective(Unit.Level));
@@ -624,7 +646,18 @@ void UPersonalFarScenerySubsystem::PlanUnits(UACEDatSubsystem& Dat, FIntPoint Ce
 			Hash = HashCombine(Hash, HashCombine(GetTypeHash(Entry.Block), GetTypeHash(Entry.SetupId * 4u + Entry.Level)));
 		}
 		Unit.WantSignature = Hash;
+		if (Unit.bPending) continue;
+		if (!Unit.bBuilt || Unit.BuiltSignature != Hash)
+		{
+			BuildOrder.Add(It.Key());
+		}
+		else
+		{
+			// Empty blocks can change group membership without changing its drawable geometry.
+			Unit.BuiltMembers = Unit.Members;
+		}
 	}
+	BuildOrder.Sort([Center](const FIntVector& A, const FIntVector& B) { return UnitDistanceSquared(A, Center) > UnitDistanceSquared(B, Center); });
 	// While a mesh is still on a worker the plan is made again at the next update.
 	bPlanDirty = bPending;
 	RequestLevels(Dat.GetDatDirectory(), WorldScale);
@@ -640,7 +673,7 @@ void UPersonalFarScenerySubsystem::RequestLevels(const FString& DatDirectory, fl
 	TArray<uint32> Wanted = LevelsWanted.Array();
 	LevelsWanted.Reset();
 	Async(EAsyncExecution::ThreadPool,
-		[Weak = TWeakObjectPtr<UPersonalFarScenerySubsystem>(this), Wanted = MoveTemp(Wanted), Meshes = MeshSource, DatDirectory, WorldScale]() mutable
+		[Weak = TWeakObjectPtr<UPersonalFarScenerySubsystem>(this), Wanted = MoveTemp(Wanted), Meshes = MeshSource, Generation = PlacementGeneration, DatDirectory, WorldScale]() mutable
 	{
 		if (!Meshes)
 		{
@@ -659,11 +692,12 @@ void UPersonalFarScenerySubsystem::RequestLevels(const FString& DatDirectory, fl
 				Built.Add(SetupId, MakeShared<PersonalFarSceneryMeshes::FLevels, ESPMode::ThreadSafe>());
 			}
 		}
-		AsyncTask(ENamedThreads::GameThread, [Weak, Built = MoveTemp(Built), Meshes]() mutable
+		AsyncTask(ENamedThreads::GameThread, [Weak, Generation, Built = MoveTemp(Built), Meshes]() mutable
 		{
 			if (UPersonalFarScenerySubsystem* Self = Weak.Get())
 			{
-				Self->ApplyLevels(MoveTemp(Built), Meshes);
+				Self->bLevelsBusy = false;
+				if (Self->PlacementGeneration == Generation) Self->ApplyLevels(MoveTemp(Built), Meshes);
 			}
 		});
 	});
@@ -671,7 +705,8 @@ void UPersonalFarScenerySubsystem::RequestLevels(const FString& DatDirectory, fl
 
 void UPersonalFarScenerySubsystem::ApplyLevels(TMap<uint32, PersonalFarSceneryMeshes::FLevelsPtr>&& Built, PersonalFarSceneryMeshes::FSourcePtr UsedSource)
 {
-	bLevelsBusy = false;
+	// Planning may have seen these types again while the worker was running.
+	for (const auto& Pair : Built) LevelsWanted.Remove(Pair.Key);
 	MeshSource = UsedSource;
 	Levels.Append(MoveTemp(Built));
 	bPlanDirty = true;
@@ -686,7 +721,8 @@ bool UPersonalFarScenerySubsystem::MakeMesh(UACEDatSubsystem& Dat, uint32 SetupI
 	}
 	const double Start = FPlatformTime::Seconds();
 	UStaticMesh* Mesh = nullptr;
-	if (Level > 0)
+	const uint32 DatId = PersonalFarSceneryPlacement::TypeId(SetupId);
+	if (Level > 0 && !ACELegionsSky::ActiveEnvironment()->ReplacesTree(DatId))
 	{
 		// A simpler model: own mesh, no collision, the materials of the client.
 		const PersonalFarSceneryMeshes::FLevelsPtr* Known = Levels.Find(SetupId);
@@ -706,7 +742,7 @@ bool UPersonalFarScenerySubsystem::MakeMesh(UACEDatSubsystem& Dat, uint32 SetupI
 	{
 		// The client's own mesh, by the client's cache key for that kind (AACELandblockActor::GetOrCreateSceneryHism, TrySpawnOneScenery).
 		const bool bBuilding = PersonalFarSceneryPlacement::TypeKind(SetupId) == PersonalFarSceneryPlacement::EKind::Building;
-		Mesh = Dat.GetOrCreateSetupStaticMesh(PersonalFarSceneryPlacement::TypeId(SetupId), WorldScale, /*bEnableCollision*/ true,
+		Mesh = Dat.GetOrCreateSetupStaticMesh(DatId, WorldScale, /*bEnableCollision*/ true,
 			PersonalFarSceneryPlacement::TypePlacement(SetupId), /*bParticleGfx*/ false, /*bStencilHoleClip*/ bBuilding, /*bOutdoorLit*/ !bBuilding);
 	}
 	const double Seconds = FPlatformTime::Seconds() - Start;
@@ -718,27 +754,18 @@ bool UPersonalFarScenerySubsystem::MakeMesh(UACEDatSubsystem& Dat, uint32 SetupI
 	return MeshMade.Add(Key, Mesh != nullptr);
 }
 
-bool UPersonalFarScenerySubsystem::BuildUnits(UACEDatSubsystem& Dat, FIntPoint Center, float WorldScale, double Start, double Budget)
+bool UPersonalFarScenerySubsystem::BuildUnits(UACEDatSubsystem& Dat, float WorldScale, double Start, double Budget)
 {
-	TArray<FIntVector> Order;
-	bool bLeft = false;
-	for (const auto& Pair : Units)
-	{
-		const FUnit& Unit = Pair.Value;
-		if (Unit.bPending)
-		{
-			bLeft = true;
-		}
-		else if (!Unit.bBuilt || Unit.BuiltSignature != Unit.WantSignature)
-		{
-			Order.Add(Pair.Key);
-		}
-	}
-	Order.Sort([Center](const FIntVector& A, const FIntVector& B) { return UnitDistanceSquared(A, Center) < UnitDistanceSquared(B, Center); });
+	if (BuildOrder.IsEmpty() || LastBuildFrame == GFrameCounter) return !BuildOrder.IsEmpty();
+	LastBuildFrame = GFrameCounter;
+	++BuildSlices;
+	const double BuildStart = FPlatformTime::Seconds();
+	ON_SCOPE_EXIT { BuildSeconds += FPlatformTime::Seconds() - BuildStart; };
 	const float Factor = PersonalFarScenery::SizeFactor();
-	int32 Built = 0;
-	for (const FIntVector& Key : Order)
+	while (!BuildOrder.IsEmpty())
 	{
+		if (FPlatformTime::Seconds() - Start >= Budget) return true;
+		const FIntVector Key = BuildOrder.Last();
 		FUnit& Unit = Units.FindChecked(Key);
 		// The static meshes first, one at a time: a new one can take tens of ms.
 		for (const FIncluded& Entry : Unit.Included)
@@ -752,10 +779,7 @@ bool UPersonalFarScenerySubsystem::BuildUnits(UACEDatSubsystem& Dat, FIntPoint C
 				MakeMesh(Dat, Entry.SetupId, Entry.Level, WorldScale);
 			}
 		}
-		if (Built > 0 && FPlatformTime::Seconds() - Start >= Budget)
-		{
-			return true;
-		}
+		if (FPlatformTime::Seconds() - Start >= Budget) return true;
 		// Old components out and new ones in within one update, so nothing is missing in between.
 		AActor* Actor = Unit.Actor.Get();
 		if (Actor)
@@ -824,9 +848,9 @@ bool UPersonalFarScenerySubsystem::BuildUnits(UACEDatSubsystem& Dat, FIntPoint C
 		Unit.bBuilt = true;
 		Unit.BuiltSignature = Unit.WantSignature;
 		Unit.BuiltMembers = Unit.Members;
-		++Built;
+		BuildOrder.Pop(EAllowShrinking::No);
 	}
-	return bLeft;
+	return false;
 }
 
 void UPersonalFarScenerySubsystem::UpdateRetiring()
@@ -932,9 +956,9 @@ void UPersonalFarScenerySubsystem::LogStats(double FillSeconds) const
 {
 	const FStats Stats = GetStats();
 	UE_LOG(LogTemp, Log,
-		TEXT("PersonalFarScenery: %d landblocks in the set, %d with objects, %d hidden, %d components, %d instances, %lld triangles, %d instances too small to draw, %d units. Filled in %.1f s; game thread %.1f ms in all, longest update %.2f ms"),
+		TEXT("PersonalFarScenery: %d landblocks in the set, %d with objects, %d hidden, %d components, %d instances, %lld triangles, %d instances too small to draw, %d units. Filled in %.1f s; game thread %.1f ms in all, longest update %.2f ms. Planning %.1f ms, building %.1f ms over %d frames"),
 		Stats.InSet, Stats.Landblocks, Stats.Hidden, Stats.Components, Stats.Instances, Stats.Triangles, Stats.TooSmall, Stats.Units,
-		FillSeconds, WorkSeconds * 1000., LongestUpdate * 1000.);
+		FillSeconds, WorkSeconds * 1000., LongestUpdate * 1000., PlanningSeconds * 1000., BuildSeconds * 1000., BuildSlices);
 }
 
 void UPersonalFarScenerySubsystem::LogFrameRate(const TCHAR* What) const
@@ -1086,6 +1110,33 @@ void UPersonalFarScenerySubsystem::Update()
 		}
 	}
 	Stream(*Dat, Bake, Center, Terrain->WorldScale, Dat->GetWorldFogEndCm(), [&NearShown](FIntPoint Block) { return NearShown.Contains(Block); });
+	ScheduleBuildFrame();
+}
+
+void UPersonalFarScenerySubsystem::ScheduleBuildFrame()
+{
+	if (!BuildOrder.IsEmpty() && !BuildTimer.IsValid())
+		BuildTimer = GetWorld()->GetTimerManager().SetTimerForNextTick(this, &UPersonalFarScenerySubsystem::ContinueBuilding);
+}
+
+void UPersonalFarScenerySubsystem::ContinueBuilding()
+{
+	BuildTimer.Invalidate();
+	const auto* Game = GetWorld()->GetGameInstance();
+	auto* Dat = Game ? Game->GetSubsystem<UACEDatSubsystem>() : nullptr;
+	const auto* Client = Game ? Game->GetSubsystem<UACEClientSubsystem>() : nullptr;
+	if (!Dat || !Client || Dat->IsInPortalSpace() || bAllHidden || bSwitchedOff ||
+		!PersonalFarTerrain::IsOn() || !PersonalFarScenery::IsOn()) return;
+	const uint32 Cell = uint32(Client->GetPlayerPosition().CellId);
+	if (LastCenter != FIntPoint(Cell >> 24, (Cell >> 16) & 255) || !Presenter.IsValid() ||
+		!Presenter->NeedsExteriorTerrain(Cell)) return;
+	const double Start = FPlatformTime::Seconds();
+	const double Budget = FMath::Clamp(CVarFarSceneryBudgetMs.GetValueOnGameThread(), 0.1f, 100.f) * 0.001;
+	BuildUnits(*Dat, BuiltWorldScale, Start, Budget);
+	const double Used = FPlatformTime::Seconds() - Start;
+	WorkSeconds += Used;
+	LongestUpdate = FMath::Max(LongestUpdate, Used);
+	ScheduleBuildFrame();
 }
 
 void UPersonalFarScenerySubsystem::Stream(UACEDatSubsystem& Dat, const PersonalFarTerrainBake::FBakePtr& Bake, FIntPoint Center, float WorldScale,
@@ -1132,6 +1183,7 @@ void UPersonalFarScenerySubsystem::Stream(UACEDatSubsystem& Dat, const PersonalF
 		if (!PersonalFarScenery::IsWanted(It.Key(), Center, KeepRing))
 		{
 			It.RemoveCurrent();
+			PlacementRadius = INDEX_NONE;
 			bPlanDirty = true;
 		}
 	}
@@ -1151,9 +1203,17 @@ void UPersonalFarScenerySubsystem::Stream(UACEDatSubsystem& Dat, const PersonalF
 		PlannedSettings = Settings;
 		bPlanDirty = true;
 	}
+	if (!bBusy)
+	{
+		PlanningSeconds = 0.;
+		BuildSeconds = 0.;
+		BuildSlices = 0;
+	}
 	if (bPlanDirty)
 	{
+		const double PlanStart = FPlatformTime::Seconds();
 		PlanUnits(Dat, Center, WorldScale);
+		PlanningSeconds += FPlatformTime::Seconds() - PlanStart;
 	}
 
 	// Handoff: a landblock next to the client's own scenery is hidden while that scenery is complete and shown.
@@ -1174,7 +1234,7 @@ void UPersonalFarScenerySubsystem::Stream(UACEDatSubsystem& Dat, const PersonalF
 	const bool bVisibilityLeft = ApplyVisibility(Center);
 
 	const double Budget = FMath::Clamp(CVarFarSceneryBudgetMs.GetValueOnGameThread(), 0.1f, 100.f) * 0.001;
-	bool bWork = BuildUnits(Dat, Center, WorldScale, Start, Budget);
+	bool bWork = BuildUnits(Dat, WorldScale, Start, Budget);
 	UpdateRetiring();
 	ReleaseActors(Start, Budget);
 	const double Used = FPlatformTime::Seconds() - Start;

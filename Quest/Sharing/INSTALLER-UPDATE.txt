@@ -3,7 +3,7 @@ AC:VR - INSTALLER AND DIAGNOSTIC TOOLS (revision 14)
 This small ZIP updates the Windows installer and diagnostic tools. It does not contain the APK
 or game data, and it does not change the game version.
 
-If v166 hangs on three dots, download the complete v169 Quest installer
+If v166 hangs on three dots, download the complete v170 Quest installer
 bundle and run Update-Quest.cmd from its extracted folder to replace the APK.
 
 1. Close the old installer window.

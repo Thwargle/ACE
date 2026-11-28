@@ -19,6 +19,8 @@ struct FTree
 	TArray<FVector> Vertices, Normals;
 	TArray<FVector2D> UVs;
 	TArray<FTreeSection> Sections;
+	// Same material slots and bind-pose vertices as the full mesh, ordered near to far.
+	TArray<TArray<FTreeSection>> DistanceLevels;
 	FBox Bounds{ForceInit};
 };
 

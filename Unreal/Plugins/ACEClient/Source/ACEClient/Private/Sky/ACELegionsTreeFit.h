@@ -2,8 +2,14 @@
 
 #include "CoreMinimal.h"
 
+struct FACEBuiltSetupMesh;
+struct FMeshDescription;
+
 namespace ACELegionsSky
 {
+	struct FTree;
+	bool BuildTreeRenderLevels(const FACEBuiltSetupMesh& Setup, const FTree& Tree, TIndirectArray<FMeshDescription>& Out);
+
 	// Find the trunk at a low horizontal slice, then compare the crown outline
 	// around that trunk. Both games use a Z-up mesh after DAT axis conversion.
 	struct FTreeSilhouette

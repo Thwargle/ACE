@@ -50,12 +50,14 @@ UACEUIResourceResolver* UACEDatSubsystem::GetUiResources()
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Engine/StaticMesh.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "LandscapeProxy.h"
 #include "LandscapeComponent.h"
 #include "EngineUtils.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "MeshDescription.h"
 #include "StaticMeshAttributes.h"
+#include "StaticMeshResources.h"
 #include "TextureResource.h"
 #include "Misc/Paths.h"
 #include "Misc/PackageName.h"
@@ -1255,6 +1257,12 @@ void UACEDatSubsystem::SetFarSceneryFadeRadius(UWorld* World, float RadiusCm, bo
 				Instance->SetVectorParameterValue(TEXT("FarSceneryLimits"), FLinearColor(FMath::Max(RadiusCm, 0.f), bEnabled ? 1.f : 0.f, Anchor.X, Anchor.Y));
 }
 
+static UMaterialInterface* LegionsLeafMaterialParent()
+{
+	return CreateAceOverlayMaterial(TEXT("M_ACELegionsLeaves_v1"), EACEAceMaterialKind::Masked,
+		false, false, false, false, /*bTwoSided*/true, /*bWorldLit*/true);
+}
+
 static UMaterialInterface* LegionsGrassMaterialParent()
 {
 	return CreateAceOverlayMaterial(TEXT("M_ACELegionsGrass_v1"), EACEAceMaterialKind::LegionsGrass,
@@ -1269,12 +1277,12 @@ TArray<UMaterialInterface*> UACEDatSubsystem::GetRuntimeMaterialParents()
 		EnsureAceBuildingShellMaterialBase(), EnsureAceUnlitMaskedMaterialBase(), EnsureAceOutdoorLitMaterialBase(),
 		EnsureAceOutdoorLitMaskedMaterialBase(), EnsureAceUnlitTranslucentMaterialBase(), EnsureAceUnlitAdditiveMaterialBase(),
 		EnsureFarSceneryMaterialBase(0), EnsureFarSceneryMaterialBase(1), EnsureFarSceneryMaterialBase(2),
-		EnsureFarSceneryMaterialBase(3), EnsureFarSceneryMaterialBase(4),
+		EnsureFarSceneryMaterialBase(3), EnsureFarSceneryMaterialBase(4), EnsureFarSceneryMaterialBase(5),
 		EnsureAceParticleTranslucentMaterialBase(), EnsureAceParticleAdditiveMaterialBase(),
 		EnsureAceBatchedParticleMaterialBase(false), EnsureAceBatchedParticleMaterialBase(true),
 		EnsureAceSkyTranslucentMaterialBase(), EnsureAceSkyTranslucentWrapMaterialBase(), EnsureAceSkyOpaqueMaterialBase(),
 		EnsureAceSkyAdditiveMaterialBase(), EnsureAceSkyVertexColorMaterialBase(), EnsureAceSkyColorFillMaterialBase(),
-		FACELegionsSkyRenderer::MaterialParent(false), FACELegionsSkyRenderer::MaterialParent(true), LegionsGrassMaterialParent(),
+		FACELegionsSkyRenderer::MaterialParent(false), FACELegionsSkyRenderer::MaterialParent(true), LegionsGrassMaterialParent(), LegionsLeafMaterialParent(),
 		EnsureAceWeatherTranslucentMaterialBase(), EnsureAceWeatherAdditiveMaterialBase(), GetVRComfortMaterial(),
 		UACEVRWidgetComponent::GetFilteredMaterial(),
 		ACEVRPointerVisuals::GetMaterial(false), ACEVRPointerVisuals::GetMaterial(true)
@@ -4418,7 +4426,8 @@ UMaterialInterface* UACEDatSubsystem::EnsureFarSceneryMaterialBase(uint8 Kind)
 	}
 	UMaterialInterface* Source = Kind == 2 ? EnsureAceBuildingShellMaterialBase()
 		: Kind == 1 ? EnsureAceOutdoorLitMaskedMaterialBase() : EnsureAceOutdoorLitMaterialBase();
-	if (Kind >= 3)
+	if (Kind == 5) Source = LegionsLeafMaterialParent();
+	if (Kind == 3 || Kind == 4)
 		Source = CreateAceOverlayMaterial(Kind == 4 ? TEXT("M_ACEEnvCellMasked_v3") : TEXT("M_ACEEnvCell_v3"),
 			Kind == 4 ? EACEAceMaterialKind::Masked : EACEAceMaterialKind::Opaque,
 			false, false, false, false, false, true, false, false, true);
@@ -4519,6 +4528,7 @@ UMaterialInterface* UACEDatSubsystem::GetFarSceneryMaterial(UMaterialInterface* 
 	if (Original == EnsureAceBuildingShellMaterialBase()->GetMaterial()) Kind = 2;
 	else if (Original == EnsureAceOutdoorLitMaskedMaterialBase()->GetMaterial()) Kind = 1;
 	else if (Original == EnsureAceOutdoorLitMaterialBase()->GetMaterial()) Kind = 0;
+	else if (Original->GetName() == TEXT("M_ACELegionsLeaves_v1")) Kind = 5;
 	else if (Original->GetName() == TEXT("M_ACEEnvCell_v3")) Kind = 3;
 	else if (Original->GetName() == TEXT("M_ACEEnvCellMasked_v3")) Kind = 4;
 	else return Source; // Authored translucent/additive/portal surfaces retain their own blend.
@@ -4527,7 +4537,7 @@ UMaterialInterface* UACEDatSubsystem::GetFarSceneryMaterial(UMaterialInterface* 
 	auto* Material = UMaterialInstanceDynamic::Create(Base, this);
 	Material->CopyMaterialUniformParameters(Source);
 	Cache.Add(Source, Material);
-	if (Kind < 3 && !bPreserveLighting)
+	if ((Kind < 3 || Kind == 5) && !bPreserveLighting)
 	{
 		ApplyDistanceFogToMid(Material);
 		WorldLightingInstances.Add(Material, EObjectLightEnvironment::Outdoors);
@@ -4923,7 +4933,7 @@ UMaterialInstanceDynamic* UACEDatSubsystem::GetImportedSceneryMaterial(uint32 Id
 	if (auto* Existing = ImportedSceneryMaterials.FindRef(MaterialKey).Get()) return Existing;
 	const auto* Image = Id == 0x40000008 ? &Art->GrassCards : Art->SceneryTextures.Find(Id);
 	auto* Base = Id == 0x40000008 ? LegionsGrassMaterialParent()
-		: bMasked ? EnsureAceOutdoorLitMaskedMaterialBase() : EnsureAceOutdoorLitMaterialBase();
+		: bMasked ? LegionsLeafMaterialParent() : EnsureAceOutdoorLitMaterialBase();
 	if (!Image || Image->Mips.IsEmpty() || !Base) return nullptr;
 	auto* Texture = ACELegionsSky::CreateImportedTexture(*Image);
 	if (!Texture) return nullptr;
@@ -4980,8 +4990,21 @@ UStaticMesh* UACEDatSubsystem::GetOrCreateSetupStaticMesh(uint32 SetupId, float 
 		bool bCollisionOnly = false;
 	};
 	TArray<FFlatSection> Flat;
+	TIndirectArray<FMeshDescription> TreeMeshes;
+	TArray<UMaterialInterface*> SlotMats;
+	const auto& Artwork = ACELegionsSky::ActiveEnvironment();
+	const bool bOutdoorScenery = bOutdoorLit && !bPhysicsCollisionOnly && !bParticleGfx && !bStencilHoleClip;
+	if (const auto* Tree = bOutdoorScenery ? Artwork->FindTree(SetupId) : nullptr)
+	{
+		for (const auto& Section : Tree->Sections)
+			SlotMats.Add(GetImportedSceneryMaterial(Section.Texture, Section.Masked));
+		if (SlotMats.Contains(nullptr) || !ACELegionsSky::BuildTreeRenderLevels(*Built, *Tree, TreeMeshes))
+			SlotMats.Reset();
+	}
 
-	for (const FACEBuiltSetupPart& Part : Built->Parts)
+	const TConstArrayView<FACEBuiltSetupPart> NativeParts = TreeMeshes.IsEmpty()
+		? MakeArrayView(Built->Parts) : TConstArrayView<FACEBuiltSetupPart>();
+	for (const FACEBuiltSetupPart& Part : NativeParts)
 	{
 		const FTransform& Bind = Part.BindTransform;
 		for (const FACEBuiltMeshSection& Sec : Part.Sections)
@@ -5090,13 +5113,11 @@ UStaticMesh* UACEDatSubsystem::GetOrCreateSetupStaticMesh(uint32 SetupId, float 
 			}
 		}
 	}
-	if (Flat.Num() == 0)
+	if (Flat.IsEmpty() && TreeMeshes.IsEmpty())
 	{
 		return nullptr;
 	}
 
-	const auto& Artwork = ACELegionsSky::ActiveEnvironment();
-	const bool bOutdoorScenery = bOutdoorLit && !bPhysicsCollisionOnly && !bParticleGfx && !bStencilHoleClip;
 	const uint32 StoneId = bOutdoorScenery ? Artwork->BoulderTexture(SetupId) : 0;
 	UMaterialInterface* Stone = StoneId ? GetImportedSceneryMaterial(StoneId, false) : nullptr;
 	if (Stone)
@@ -5119,114 +5140,9 @@ UStaticMesh* UACEDatSubsystem::GetOrCreateSetupStaticMesh(uint32 SetupId, float 
 			}
 		}
 	}
-	if (const auto* Imported = bOutdoorScenery ? Artwork->FindTree(SetupId) : nullptr)
-	{
-		FBox Original(ForceInit);
-		for (const auto& Section : Flat)
-			for (const FVector& P : Section.Verts) Original += P;
-		const auto& Tree = *Imported;
-		TArray<UMaterialInterface*, TInlineAllocator<3>> Materials;
-		for (const auto& Section : Tree.Sections)
-			Materials.Add(GetImportedSceneryMaterial(Section.Texture,Section.Masked));
-		if (Original.GetSize().GetMin() > UE_SMALL_NUMBER && !Materials.Contains(nullptr))
-		{
-			auto OriginalTriangles = [&](auto Visit)
-			{
-				for (const auto& S : Flat)
-					for (int32 I=0; I+2<S.Tris.Num(); I+=3)
-						if (S.Verts.IsValidIndex(S.Tris[I]) && S.Verts.IsValidIndex(S.Tris[I+1]) && S.Verts.IsValidIndex(S.Tris[I+2]))
-							Visit(S.Verts[S.Tris[I]],S.Verts[S.Tris[I+1]],S.Verts[S.Tris[I+2]]);
-			};
-			auto ImportedTriangles = [&](auto Visit)
-			{
-				for (const auto& S : Tree.Sections)
-					for (int32 I=0; I<S.Indices.Num(); I+=3)
-						Visit(Tree.Vertices[S.Indices[I]],Tree.Vertices[S.Indices[I+1]],Tree.Vertices[S.Indices[I+2]]);
-			};
-			const ACELegionsSky::FTreeSilhouette TargetShape(Original,OriginalTriangles), SourceShape(Tree.Bounds,ImportedTriangles);
-			const FQuat Rotation = TargetShape.RotationFrom(SourceShape);
-			// Fit the planted tree inside its AC1 height and crown footprint using one
-			// scale. Independently fitting X/Y/Z turns palms into flat fans or spears.
-			FBox Turned(ForceInit);
-			for (const auto& S : Tree.Sections)
-				for (int32 Index : S.Indices) Turned += Rotation.RotateVector(Tree.Vertices[Index]);
-			const FVector Fit = Original.GetSize() / Turned.GetSize();
-			const bool Planted = Tree.Bounds.Min.Z < 0 && Original.Min.Z < 0 &&
-				Tree.Bounds.Max.Z > UE_SMALL_NUMBER && Original.Max.Z > 0;
-			const double Scale = FMath::Min3(Fit.X, Fit.Y, Planted ? Original.Max.Z / Tree.Bounds.Max.Z : Fit.Z);
-			const FVector Base = Rotation.RotateVector(FVector(SourceShape.Trunk,0)) * Scale;
-			const FVector Offset(TargetShape.Trunk.X-Base.X,TargetShape.Trunk.Y-Base.Y,
-				Planted ? 0. : Original.Min.Z - Scale * Tree.Bounds.Min.Z);
-			// The planting point can be on a roof. Some AC2 trunks have a long buried
-			// spike that would otherwise pass through the ceiling of the room below.
-			const double RootBottom = Turned.Min.Z * Scale + Offset.Z;
-			const bool bShortenRoot = Planted && RootBottom < Original.Min.Z - UE_SMALL_NUMBER;
-			double RootHinge = 0.;
-			if (bShortenRoot)
-			{
-				// Keep the lowest ring above the AC1 base fixed, along with everything above it.
-				for (const auto& S : Tree.Sections)
-					for (int32 Index : S.Indices)
-					{
-						const double Z = Tree.Vertices[Index].Z * Scale;
-						if (Z > Original.Min.Z && Z < RootHinge) RootHinge = Z;
-					}
-			}
-			const double RootScale = bShortenRoot ? (RootHinge - Original.Min.Z) / (RootHinge - RootBottom) : 1.;
-			Flat.Reset();
-			for (int32 Slot = 0; Slot < Tree.Sections.Num(); ++Slot)
-			{
-				auto& Section = Flat.AddDefaulted_GetRef();
-				Section.Mat = Materials[Slot];
-				TMap<int32, int32> Local;
-				for (int32 Index : Tree.Sections[Slot].Indices)
-				{
-					if (const int32* Existing = Local.Find(Index))
-						Section.Tris.Add(*Existing);
-					else
-					{
-						FVector P = Rotation.RotateVector(Tree.Vertices[Index]) * Scale + Offset;
-						FVector N = Rotation.RotateVector(Tree.Normals[Index]);
-						if (bShortenRoot && P.Z < RootHinge)
-						{
-							P.Z = Original.Min.Z + (P.Z - RootBottom) * RootScale;
-							N.Z /= RootScale;
-							N.Normalize();
-						}
-						const int32 NewIndex = Section.Verts.Add(P);
-						Section.Norms.Add(N);
-						Section.UVs.Add(Tree.UVs[Index]);
-						Local.Add(Index, NewIndex);
-						Section.Tris.Add(NewIndex);
-					}
-				}
-				if (Tree.Sections[Slot].Masked && !Section.Mat->IsTwoSided())
-				{
-					// AC2 leaf cards can be seen from below. The cooked AC1 cutout
-					// material culls backfaces, so give the reverse face its own normal.
-					const int32 Count = Section.Tris.Num(), OffsetIndex = Section.Verts.Num();
-					for (int32 I = 0; I < OffsetIndex; ++I)
-					{
-						const FVector P = Section.Verts[I], N = -Section.Norms[I];
-						const FVector2D UV = Section.UVs[I];
-						Section.Verts.Add(P);
-						Section.Norms.Add(N);
-						Section.UVs.Add(UV);
-					}
-					for (int32 I = 0; I < Count; I += 3)
-					{
-						const int32 A = Section.Tris[I], B = Section.Tris[I+1], C = Section.Tris[I+2];
-						Section.Tris.Append({A + OffsetIndex, C + OffsetIndex, B + OffsetIndex});
-					}
-				}
-			}
-		}
-	}
 
-	// When PhysicsPolygons exist, drop soft-alpha draw tris from the complex body by
-	// excluding non-colliding sections from the collision-enabled mesh description.
-	// Keep them in the visual mesh: BuildFromMeshDescriptions uses one desc, so instead
-	// include all sections but mark collision-only materials as fully translucent after.
+	// Native AC1 sections keep their per-corner attributes. The collision body uses
+	// the separately built AC1 physics mesh even when the draw mesh is an AC2 tree.
 	FMeshDescription MeshDesc;
 	FStaticMeshAttributes Attributes(MeshDesc);
 	Attributes.Register();
@@ -5237,7 +5153,6 @@ UStaticMesh* UACEDatSubsystem::GetOrCreateSetupStaticMesh(uint32 SetupId, float 
 	TPolygonGroupAttributesRef<FName> MaterialSlotNames = Attributes.GetPolygonGroupMaterialSlotNames();
 	UVs.SetNumChannels(1);
 
-	TArray<UMaterialInterface*> SlotMats;
 	SlotMats.Reserve(Flat.Num());
 
 	for (const FFlatSection& Sec : Flat)
@@ -5312,15 +5227,34 @@ UStaticMesh* UACEDatSubsystem::GetOrCreateSetupStaticMesh(uint32 SetupId, float 
 	}
 
 	TArray<const FMeshDescription*> Descs;
-	Descs.Add(&MeshDesc);
+	if (TreeMeshes.IsEmpty())
+	{
+		Descs.Add(&MeshDesc);
+	}
+	else
+	{
+		for (const FMeshDescription& Level : TreeMeshes) Descs.Add(&Level);
+	}
 	UStaticMesh::FBuildMeshDescriptionsParams Params;
 	Params.bBuildSimpleCollision = false;
 	Params.bFastBuild = true;
 	Params.bAllowCpuAccess = bEnableCollision && !bParticleGfx;
 	Params.bMarkPackageDirty = false;
-	// Editor builds require source models even for transient fast-built meshes.
-	Params.bCommitMeshDescription = true;
+	// Imported trees are transient. Keep the editor source model count for LOD queries
+	// without copying and serializing every level a second time on the game thread.
+	Params.bCommitMeshDescription = TreeMeshes.IsEmpty();
+#if WITH_EDITOR
+	if (!TreeMeshes.IsEmpty()) StaticMesh->SetNumSourceModels(Descs.Num());
+#endif
 	StaticMesh->BuildFromMeshDescriptions(Descs, Params);
+	if (TreeMeshes.Num() > 1)
+	{
+		// Projected tree diameter as a fraction of the screen. Keep the authored crown
+		// nearby; reserve the coarsest silhouette for small trees in the distance.
+		auto& Sizes = StaticMesh->GetRenderData()->ScreenSize;
+		Sizes[1].Default = TreeMeshes.Num() == 2 ? .08f : .16f;
+		if (TreeMeshes.Num() > 2) Sizes[2].Default = .045f;
+	}
 
 	StaticMesh->CalculateExtendedBounds();
 	if (StaticMesh->GetBounds().SphereRadius < 40.f)
@@ -5422,6 +5356,14 @@ void UACEDatSubsystem::BindSetupStaticMeshMaterials(UStaticMeshComponent* Comp, 
 		bPhysicsCollisionOnly);
 	const TArray<TObjectPtr<UMaterialInterface>>* Slots = SetupStaticMeshSlotMaterials.Find(CacheKey);
 	UStaticMesh* Mesh = Comp->GetStaticMesh();
+	if (bOutdoorLit && Mesh && ACELegionsSky::IsMappedTree(SetupId))
+	{
+		// Scenery is already batched by species and landblock. Per-instance GPU LOD
+		// selection submits every level for each small batch. Use one screen-size
+		// choice per component, including when an existing batch changes artwork.
+		if (auto* Instances = Cast<UInstancedStaticMeshComponent>(Comp))
+			Instances->bUseGpuLodSelection = Mesh->GetNumLODs() == 1;
+	}
 	const int32 Num = Mesh ? Mesh->GetNumSections(0) : (Slots ? Slots->Num() : Comp->GetNumMaterials());
 	for (int32 Si = 0; Si < Num; ++Si)
 	{

@@ -352,7 +352,7 @@ uint8 TerrainGroup(uint32 Type)
 	return Type == 1 || Type == 3 || Type == 9 ? Grass : Ground;
 }
 
-// First draw LOD of native Legions scenery. Record IDs identify the material's base
+// Native Legions scenery. Record IDs identify the material's base
 // texture and whether its cards need cutouts; several meshes share bark and leaves.
 struct FTreeMaterial { uint32 Material, Texture; bool Masked; };
 constexpr FTreeMaterial TreeMaterials[] = {
@@ -493,24 +493,58 @@ bool DecodeTree(FSource& Src, FEnvironment& Env, uint32 Mesh, bool CompactAtlas 
 	}
 	R.Take((4 - (R.Pos & 3)) & 3);
 	R.Take(40);
-	if (!R.Count(64) || !NV) return false;
-	R.Take(8);
-	const int32 Fragments = R.Count(Slots);
-	for (int32 I = 0; I < Fragments; ++I)
+	const int32 Levels = R.Count(64);
+	if (!Levels || !NV) return false;
+	const auto MaterialSlots = Tree.Sections;
+	int32 PreviousCount = MAX_int32;
+	uint32 FullSlots = 0;
+	for (int32 Level = 0; Level < Levels; ++Level)
 	{
-		const int32 Slot = R.Count(Slots - 1), Count = R.Count(50000);
-		if (!R.Ok || Count % 3) return false;
-		auto& Indices = Tree.Sections[Slot].Indices;
-		for (int32 K = 0; K < Count; ++K)
+		R.Take(8);
+		const int32 Fragments = R.Count(Slots);
+		auto Sections = MaterialSlots;
+		uint32 UsedSlots = 0;
+		int32 TotalIndices = 0;
+		for (int32 I = 0; I < Fragments; ++I)
 		{
-			const int32 Index = R.Scalar<uint16>();
-			if (!R.Ok || Index >= NV) return false;
-			Indices.Add(Index);
-			Tree.Bounds += Tree.Vertices[Index];
+			const int32 Slot = R.Count(Slots - 1), Count = R.Count(50000);
+			if (!R.Ok || Count % 3) return false;
+			auto& Indices = Sections[Slot].Indices;
+			Indices.Reserve(Indices.Num() + Count);
+			for (int32 K = 0; K < Count; ++K)
+			{
+				const int32 Index = R.Scalar<uint16>();
+				if (!R.Ok || Index >= NV) return false;
+				Indices.Add(Index);
+				if (Level == 0) Tree.Bounds += Tree.Vertices[Index];
+			}
+			if (Count) UsedSlots |= 1u << Slot;
+			TotalIndices += Count;
+			R.Take((4 - (R.Pos & 3)) & 3);
 		}
-		R.Take((4 - (R.Pos & 3)) & 3);
+		Sections.RemoveAll([](const FTreeSection& S){ return S.Indices.IsEmpty(); });
+		if (Level == 0)
+		{
+			Tree.Sections = MoveTemp(Sections);
+			FullSlots = UsedSlots;
+		}
+		else
+		{
+			// Some final levels are billboard impostors with a different atlas or no trunk.
+			if (UsedSlots != FullSlots || TotalIndices >= PreviousCount) continue;
+			Tree.DistanceLevels.Add(MoveTemp(Sections));
+		}
+		PreviousCount = TotalIndices;
 	}
-	Tree.Sections.RemoveAll([](const FTreeSection& S){ return S.Indices.IsEmpty(); });
+	// Limit upload and build cost to one intermediate model and the lightest usable one.
+	if (Tree.DistanceLevels.Num() > 2)
+	{
+		auto Middle = MoveTemp(Tree.DistanceLevels[(Tree.DistanceLevels.Num() - 1) / 2]);
+		auto Far = MoveTemp(Tree.DistanceLevels.Last());
+		Tree.DistanceLevels.Reset(2);
+		Tree.DistanceLevels.Add(MoveTemp(Middle));
+		Tree.DistanceLevels.Add(MoveTemp(Far));
+	}
 	if (!R.Ok || Tree.Sections.IsEmpty() || Tree.Bounds.GetSize().GetMin() <= UE_SMALL_NUMBER) return false;
 	for (const auto& Section : Tree.Sections)
 		if (!ReadTexture(Src,Section.Texture,Env.SceneryTextures,true,false,CompactAtlas)) return false;

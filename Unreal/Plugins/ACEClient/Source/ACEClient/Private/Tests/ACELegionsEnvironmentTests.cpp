@@ -125,6 +125,10 @@ bool FACELegionsEnvironmentTest::RunTest(const FString&)
 	if (!LegacyTree || LegacyTree->Sections.Num() != 2) return false;
 	TestEqual(TEXT("Native canopy triangles"), LegacyTree->Sections[0].Indices.Num()/3, 148);
 	TestEqual(TEXT("Native trunk triangles"), LegacyTree->Sections[1].Indices.Num()/3, 70);
+	if (!TestEqual(TEXT("Keep two authored distance levels"), LegacyTree->DistanceLevels.Num(), 2)) return false;
+	TestEqual(TEXT("Use native distant canopy"), LegacyTree->DistanceLevels.Last()[0].Indices.Num()/3, 38);
+	TestEqual(TEXT("Use native distant trunk"), LegacyTree->DistanceLevels.Last()[1].Indices.Num()/3, 4);
+
 	TestTrue(TEXT("Common evergreen gets the native conifer"),Env.FindTree(0x02000258) == Env.FindTree(0x02000257) && Env.FindTree(0x02000258) != LegacyTree);
 	for (uint32 Id : {0x020003a2u,0x020004b1u,0x0200062bu,0x0200129bu,0x020012feu})
 		TestTrue(TEXT("Dereth biome tree mapped"), Env.ReplacesTree(Id));
@@ -292,6 +296,30 @@ bool FACELegionsWorldTest::RunTest(const FString&)
 	ON_SCOPE_EXIT { Game->Shutdown(); GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
 	auto* Dat = Game->GetSubsystem<UACEDatSubsystem>();
 	if (!Dat || !TestTrue(TEXT("Load retail landscape and scenery"), Dat->LoadDatDirectory(Retail))) return false;
+	if (Expected & Trees && FParse::Param(FCommandLine::Get(), TEXT("AC2TreeBenchmark")))
+	{
+		TArray<uint32> Models = Dat->GetPortalDat()->GetFileIds(0x01);
+		Models.Append(Dat->GetPortalDat()->GetFileIds(0x02));
+		Models.Sort();
+		double BuildSeconds = 0.;
+		int32 Count = 0, NearTriangles = 0, FarTriangles = 0, NearVertices = 0;
+		for (uint32 Id : Models)
+		{
+			if (!Active->FindTree(Id)) continue;
+			Dat->GetOrBuildSetupMeshShared(Id, 100, 0);
+			const double Start = FPlatformTime::Seconds();
+			auto* Mesh = Dat->GetOrCreateSetupStaticMesh(Id, 100, false, 0, false, false, true);
+			BuildSeconds += FPlatformTime::Seconds() - Start;
+			if (!TestNotNull(TEXT("Build imported tree for rendering"), Mesh)) return false;
+			++Count;
+			NearTriangles += Mesh->GetNumTriangles(0);
+			FarTriangles += Mesh->GetNumTriangles(Mesh->GetNumLODs() - 1);
+			NearVertices += Mesh->GetRenderData()->LODResources[0].GetNumVertices();
+		}
+		AddInfo(FString::Printf(TEXT("Built %d imported tree setups in %.1f ms; near %d vertices, %d triangles; distant %d triangles"),
+			Count, BuildSeconds * 1000., NearVertices, NearTriangles, FarTriangles));
+	}
+
 	auto* Options = CreateWidget<UACEVideoSettingsWidget>(World,UACEVideoSettingsWidget::StaticClass());
 	if (!TestNotNull(TEXT("Open Graphics Options"), Options)) return false;
 	const auto Slate = Options->TakeWidget();
@@ -375,6 +403,31 @@ bool FACELegionsWorldTest::RunTest(const FString&)
 				Triangles += Section.Indices.Num()/3 * (Section.Masked && !Material->IsTwoSided() ? 2 : 1);
 			}
 			TestEqual(TEXT("Draw imported topology"),Mesh->GetNumTriangles(0),Triangles);
+			if (!TestEqual(TEXT("Build every selected tree LOD"), Mesh->GetNumLODs(), 1 + Tree->DistanceLevels.Num())) return false;
+			for (int32 Level = 0; Level < Mesh->GetNumLODs(); ++Level)
+			{
+				const auto& Sections = Level ? Tree->DistanceLevels[Level-1] : Tree->Sections;
+				const auto& RenderLOD = Mesh->GetRenderData()->LODResources[Level];
+				if (!TestEqual(TEXT("Tree LOD preserves materials"), RenderLOD.Sections.Num(), Sections.Num())) return false;
+				TSet<int32> ReferencedVertices;
+				for (const auto& Section : Sections)
+					for (int32 Index : Section.Indices) ReferencedVertices.Add(Index);
+				TestTrue(TEXT("Tree LOD reuses its indexed vertices"), RenderLOD.GetNumVertices() <= ReferencedVertices.Num());
+				for (int32 Slot = 0; Slot < Sections.Num(); ++Slot)
+				{
+					TestEqual(TEXT("Tree LOD binds original slot"), RenderLOD.Sections[Slot].MaterialIndex, Slot);
+					TestEqual(TEXT("Tree LOD draws each authored triangle once"), int32(RenderLOD.Sections[Slot].NumTriangles), Sections[Slot].Indices.Num()/3);
+					if (Sections[Slot].Masked)
+					{
+						auto* Leaf = Mesh->GetMaterial(Slot);
+						TestTrue(TEXT("Leaf cards visible on both sides"), Leaf->IsTwoSided());
+						auto* Far = Dat->GetFarSceneryMaterial(Leaf);
+						TestTrue(TEXT("Far fade preserves two-sided leaves"), Far && Far != Leaf && Far->IsTwoSided());
+					}
+				}
+				if (Level)
+					TestTrue(TEXT("Distant trees use fewer triangles"), Mesh->GetNumTriangles(Level) < Mesh->GetNumTriangles(Level-1));
+			}
 		}
 		if (Capture && Id != 0x020003ee)
 		{

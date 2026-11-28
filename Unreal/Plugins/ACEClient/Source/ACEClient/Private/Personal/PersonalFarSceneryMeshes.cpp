@@ -189,30 +189,25 @@ static UStaticMesh* BuildMesh(UObject* Outer, const TArray<const FSection*>& Dra
 		const FSection& Section = *Drawn[Slot];
 		const FPolygonGroupID Group = MeshDesc.CreatePolygonGroup();
 		SlotNames[Group] = FName(*FString::Printf(TEXT("ACE_%d"), Slot));
-		TArray<FVertexID> Vertices;
-		Vertices.Reserve(Section.Vertices.Num());
-		for (const FVector& Vertex : Section.Vertices)
+		// The DAT builder splits vertices at changes in UV or normal already.
+		TArray<FVertexInstanceID> Corners;
+		Corners.Reserve(Section.Vertices.Num());
+		for (int32 I = 0; I < Section.Vertices.Num(); ++I)
 		{
-			const FVertexID Id = MeshDesc.CreateVertex();
-			Positions[Id] = FVector3f(Vertex);
-			Vertices.Add(Id);
+			const FVertexID Vertex = MeshDesc.CreateVertex();
+			Positions[Vertex] = FVector3f(Section.Vertices[I]);
+			const FVertexInstanceID Corner = MeshDesc.CreateVertexInstance(Vertex);
+			Normals[Corner] = Section.Normals.IsValidIndex(I) ? FVector3f(Section.Normals[I]) : FVector3f::UpVector;
+			UVs.Set(Corner, 0, Section.UVs.IsValidIndex(I) ? FVector2f(Section.UVs[I]) : FVector2f::ZeroVector);
+			Corners.Add(Corner);
 		}
+		MeshDesc.ReserveNewTriangles(Section.Triangles.Num() / 3);
 		for (int32 T = 0; T + 2 < Section.Triangles.Num(); T += 3)
 		{
-			const int32 Index[3] = {Section.Triangles[T], Section.Triangles[T + 1], Section.Triangles[T + 2]};
-			if (!Vertices.IsValidIndex(Index[0]) || !Vertices.IsValidIndex(Index[1]) || !Vertices.IsValidIndex(Index[2]))
-			{
-				continue;
-			}
-			TArray<FVertexInstanceID, TInlineAllocator<3>> Corners;
-			for (const int32 I : Index)
-			{
-				const FVertexInstanceID Corner = MeshDesc.CreateVertexInstance(Vertices[I]);
-				Normals[Corner] = Section.Normals.IsValidIndex(I) ? FVector3f(Section.Normals[I]) : FVector3f::UpVector;
-				UVs.Set(Corner, 0, Section.UVs.IsValidIndex(I) ? FVector2f(Section.UVs[I]) : FVector2f::ZeroVector);
-				Corners.Add(Corner);
-			}
-			MeshDesc.CreatePolygon(Group, Corners);
+			const int32 A = Section.Triangles[T], B = Section.Triangles[T + 1], C = Section.Triangles[T + 2];
+			if (!Corners.IsValidIndex(A) || !Corners.IsValidIndex(B) || !Corners.IsValidIndex(C)) continue;
+			const FVertexInstanceID Triangle[] = {Corners[A], Corners[B], Corners[C]};
+			MeshDesc.CreateTriangle(Group, Triangle);
 		}
 	}
 
@@ -241,8 +236,11 @@ static UStaticMesh* BuildMesh(UObject* Outer, const TArray<const FSection*>& Dra
 	Params.bFastBuild = true;
 	Params.bAllowCpuAccess = false;
 	Params.bMarkPackageDirty = false;
-	// Editor builds require source models even for transient fast-built meshes.
-	Params.bCommitMeshDescription = true;
+	// The editor queries the LOD count, but these runtime meshes are never saved as assets.
+	Params.bCommitMeshDescription = false;
+#if WITH_EDITOR
+	Mesh->SetNumSourceModels(Descriptions.Num());
+#endif
 	Mesh->BuildFromMeshDescriptions(Descriptions, Params);
 	Mesh->CalculateExtendedBounds();
 	if (Mesh->GetBounds().SphereRadius < 40.f)

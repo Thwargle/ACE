@@ -45,9 +45,9 @@ class UPersonalFarScenerySubsystem : public UWorldSubsystem
 	friend class FPersonalFarSceneryDrawTest;
 	friend class FACELegionsSkyTest;
 public:
-	/** Seconds between updates. Nothing runs per frame. */
+	/** Seconds between placement, planning and near/far visibility updates. */
 	static constexpr float UpdateSeconds = 0.1f;
-	/** Landblocks handed to a worker at once. */
+	/** Landblocks handed to the first placement job. Later jobs can cover larger rings. */
 	static constexpr int32 PlaceBatch = 64;
 	static constexpr int32 MaxPooledActors = 64;
 
@@ -171,7 +171,9 @@ private:
 	 * Build the units whose content changed, nearest first, until the time is used up.
 	 * True when something is left to build.
 	 */
-	bool BuildUnits(UACEDatSubsystem& Dat, FIntPoint Center, float WorldScale, double Start, double Budget);
+	bool BuildUnits(UACEDatSubsystem& Dat, float WorldScale, double Start, double Budget);
+	void ScheduleBuildFrame();
+	void ContinueBuilding();
 	/** Create the static mesh of an object type once. False when it cannot be made. */
 	bool MakeMesh(UACEDatSubsystem& Dat, uint32 SetupId, int32 Level, float WorldScale);
 	/** Send the object types whose lower-detail models are not known yet to a worker. */
@@ -209,6 +211,14 @@ private:
 
 	TWeakObjectPtr<UACETerrainPresenterComponent> Presenter;
 	FTimerHandle UpdateTimer;
+	FTimerHandle BuildTimer;
+	uint64 LastBuildFrame = MAX_uint64;
+	/** Ready units, nearest at the end. Rebuilt only when the placement/visibility plan changes. */
+	TArray<FIntVector> BuildOrder;
+	FIntPoint PlacementCenter = FIntPoint(MIN_int32, MIN_int32);
+	int32 PlacementRadius = INDEX_NONE;
+	TArray<FIntPoint> UnrequestedBlocks;
+	uint32 PlacementGeneration = 0;
 
 	PersonalFarSceneryPlacement::FSourcePtr Source;
 	TFuture<PersonalFarSceneryPlacement::FSourcePtr> PendingSource;
@@ -235,6 +245,9 @@ private:
 	bool bComplete = false;
 	double BusySince = 0.;
 	double WorkSeconds = 0.;
+	double PlanningSeconds = 0.;
+	double BuildSeconds = 0.;
+	int32 BuildSlices = 0;
 	double LongestUpdate = 0.;
 
 	/** Time and frame counter at the last updates: gives the frame rate over the last 10 seconds. */

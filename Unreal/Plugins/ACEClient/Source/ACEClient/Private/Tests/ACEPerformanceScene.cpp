@@ -6,6 +6,8 @@
 #include "ACEPlaySessionRedirect.h"
 #include "ACERenderAudit.h"
 #include "ACEFrameDiagnostics.h"
+#include "ACERuntimeOptions.h"
+#include "Sky/ACELegionsEnvironment.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACETerrainPresenterComponent.h"
 #include "Dat/ACEEnvCellMeshBuilder.h"
@@ -37,6 +39,8 @@
 #include "UObject/UObjectIterator.h"
 #include "HAL/PlatformMemory.h"
 #include "RHI.h"
+#include "DynamicRHI.h"
+#include "RenderTimer.h"
 #include "Scalability.h"
 
 // Retail ACE weenie 43592; the model/effect inputs are shared by the rendered
@@ -82,15 +86,24 @@ public:
   }
   const FString Scene=Args.Num()?Args[0]:TEXT("outdoor");
   const bool bCaulTower=Scene==TEXT("caul-tower");
-  if(Scene!=TEXT("outdoor") && Scene!=TEXT("indoor") && Scene!=TEXT("effects") && Scene!=TEXT("caul") && !bCaulTower && Scene!=TEXT("swarm") && Scene!=TEXT("wasps") && Scene!=TEXT("frozen") && Scene!=TEXT("frozen-tuskers") && Scene!=TEXT("glenden") && Scene!=TEXT("facility"))return;
+  const bool bSawatoGrove = Scene == TEXT("sawato-grove");
+  if(!bSawatoGrove && Scene!=TEXT("outdoor") && Scene!=TEXT("indoor") && Scene!=TEXT("effects") && Scene!=TEXT("caul") && !bCaulTower && Scene!=TEXT("swarm") && Scene!=TEXT("wasps") && Scene!=TEXT("frozen") && Scene!=TEXT("frozen-tuskers") && Scene!=TEXT("glenden") && Scene!=TEXT("facility"))return;
   UE_LOG(LogTemp,Display,TEXT("ACE PerfScene preparing %s"),*Scene);
   // The login path intentionally defers cell DAT indexing. This offline setup
   // phase is outside the timed sample and needs both databases immediately.
   if(!Dat->LoadDatDirectory(Dat->GetDatDirectory()))return;
   auto Run=MakeShared<FACEPerformanceScene>();Run->World=World;Run->Scene=Scene;
+  Run->bCompareTreeArt = Scene == TEXT("outdoor") && FParse::Param(FCommandLine::Get(), TEXT("ACEPerfCompareTrees"));
+  Run->bOriginalTrees = (ACELegionsSky::ActiveEnvironment()->Enabled & ACELegionsSky::Trees) != 0;
   Run->bControlResolution=FParse::Value(FCommandLine::Get(),TEXT("ACEPerfResolution="),Run->PerfResolution)
    || FParse::Param(FCommandLine::Get(),TEXT("ACEPerfCleanView"));
   FACEPosition Spawn;Spawn.CellId=0x7D640001;Spawn.Location=FVector(100,100,0);
+  // Look through the authored grove from the Sawato outdoor artwork survey.
+  if (bSawatoGrove)
+  {
+   Spawn.CellId = 0xC95B0001;
+   Spawn.Location = FVector(65, 56, 0);
+  }
   // Dense authored ambient particles at the landblock captured on Quest.
   if(Scene==TEXT("caul"))Spawn.CellId=0x09050001;
   if(bCaulTower)
@@ -189,9 +202,11 @@ public:
   // A static camera benchmark has no walking input. Keep the reported cell
   // while the asynchronous dungeon loads instead of predicting a fall in it.
   if(Scene==TEXT("wasps") || Scene==TEXT("glenden") || Scene==TEXT("facility"))PC->bSyncPossessedPawn=false;
-  int32 Count=(Scene==TEXT("frozen") || Scene==TEXT("facility") || bCaulTower)?0:Scene==TEXT("frozen-tuskers")?12:Scene==TEXT("swarm")?64:(Scene==TEXT("indoor") || Scene==TEXT("glenden"))?8:32;
+  int32 Count=(bSawatoGrove || Scene==TEXT("frozen") || Scene==TEXT("facility") || bCaulTower)?0:Scene==TEXT("frozen-tuskers")?12:Scene==TEXT("swarm")?64:(Scene==TEXT("indoor") || Scene==TEXT("glenden"))?8:32;
   FString CaulPolicy;
   if(bCaulTower)FParse::Value(FCommandLine::Get(),TEXT("ACEPerfCaulUCM="),CaulPolicy);
+  if (Scene == TEXT("outdoor") && FParse::Value(FCommandLine::Get(), TEXT("ACEPerfOutdoorCrowd="), Count))
+   Count = FMath::Clamp(Count, 0, 32);
   if(bCaulTower && (!CaulPolicy.IsEmpty() || FParse::Param(FCommandLine::Get(),TEXT("ACEPerfCaulCrowd"))))Count=112;
   Run->bCrowdMotion=FParse::Param(FCommandLine::Get(),TEXT("ACEPerfCrowdMotion"));
   if(Scene==TEXT("wasps") || (Scene==TEXT("glenden") && Run->bCrowdMotion))
@@ -317,7 +332,7 @@ public:
   const bool Interior=Scene==TEXT("indoor") || Scene==TEXT("glenden") || Scene==TEXT("swarm") || Scene==TEXT("wasps") || Scene==TEXT("facility");
   FVector Eye=Interior ? Center+Forward*100+FVector(0,0,170)
    : Center-Forward*900+FVector(0,0,600);
-  const FVector LookAt=Center+Forward*800+FVector(0,0,100);
+  FVector LookAt=Center+Forward*800+FVector(0,0,100);
   if(!Interior)
   {
    // Caul is steep enough that a fixed backward offset can put the camera
@@ -327,6 +342,11 @@ public:
     const FVector P=FMath::Lerp(Eye,LookAt,I/8.f); float GroundZ=0;
     if(Dat->SampleOutdoorGroundZ(P.X,P.Y,100,GroundZ)) Eye.Z=FMath::Max(Eye.Z,GroundZ+600.f);
    }
+  }
+  if (bSawatoGrove)
+  {
+   Eye = Center + FVector(0, 0, 1900);
+   LookAt = Center + FACEPosition::AceVectorToUnreal(FVector(42, -4, 31 - Spawn.Location.Z), 100);
   }
   Run->Camera->SetActorLocation(Eye);
   Run->CameraOrigin=Eye;
@@ -338,7 +358,7 @@ public:
   Run->StartTime=FPlatformTime::Seconds();
   FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([Run](float){return Run->Tick();}));
   UE_LOG(LogTemp,Display,TEXT("ACE PerfScene %s: %d synthetic NPCs, 45-second warmup, %.0f-second sample."),*Scene,Count,
-   Run->CastingSeconds>0?Run->CastingSeconds:Run->Wasps.IsEmpty()?30.f:60.f);
+   Run->CastingSeconds>0?Run->CastingSeconds:Run->Wasps.IsEmpty()?(Run->bCompareTreeArt?15.f:30.f):60.f);
  }
 private:
  void LogResources(const TCHAR* Phase) const
@@ -370,6 +390,13 @@ private:
  double SampleStartTime=0;
  uint64 PreviousFrame=uint64(-1);
  TArray<double> Frames;
+ double SamplePrimitives = 0, SampleDraws = 0;
+ double SampleGameMs = 0, SampleRenderMs = 0, SampleRHIMs = 0, SampleGPUMs = 0;
+ int32 GPUTimedFrames = 0;
+ bool bRequestedGPUProfile = false;
+ bool bCompareTreeArt = false, bOriginalTrees = false;
+ int32 TreePass = 0;
+ double ResumeSampleTime = 0;
  TArray<FACEWorldObject> SnowCreatures;
  int32 SnowPhase=0;
  TArray<FACEWorldObject> Wasps;
@@ -631,7 +658,11 @@ private:
  }
  bool Tick()
  {
-  if(!World.IsValid() || !Camera.IsValid())return false;
+  if (!World.IsValid() || !Camera.IsValid())
+  {
+   if (bCompareTreeArt && TreePass == 1) ACELegionsSky::RefreshEnvironment();
+   return false;
+  }
   // Slate/loading pumps may tick the core ticker more than once per frame.
   if(PreviousFrame==GFrameCounter)return true;
   PreviousFrame=GFrameCounter;
@@ -736,7 +767,12 @@ private:
    }
    return true;
   }
-  if(!bSampling && Elapsed>=45)
+  if (!bRequestedGPUProfile && Elapsed >= 39 && FParse::Param(FCommandLine::Get(), TEXT("ACEPerfProfileGPU")))
+  {
+   bRequestedGPUProfile = true;
+   GEngine->Exec(World.Get(), TEXT("ProfileGPU"));
+  }
+  if(!bSampling && Elapsed>=45 && Now >= ResumeSampleTime)
   {
    bSampling=true;SampleStartTime=Now;
    if(!FTraceAuxiliary::IsConnected() && !FParse::Param(FCommandLine::Get(),TEXT("ACEPerfNoTrace")))
@@ -763,9 +799,19 @@ private:
     CrowdFrames[Block].Add(Ms);
    }
    Frames.Add(Ms);
+   SamplePrimitives += GNumPrimitivesDrawnRHI[0];
+   SampleDraws += GNumDrawCallsRHI[0];
+   SampleGameMs += FPlatformTime::ToMilliseconds(GGameThreadTime);
+   SampleRenderMs += FPlatformTime::ToMilliseconds(GRenderThreadTime);
+   SampleRHIMs += FPlatformTime::ToMilliseconds(GRHIThreadTime);
+   if (const uint32 Cycles = GDynamicRHI ? RHIGetGPUFrameCycles() : 0)
+   {
+    SampleGPUMs += FPlatformTime::ToMilliseconds(Cycles);
+    ++GPUTimedFrames;
+   }
    if(!Wasps.IsEmpty())WaspFrames[WaspPhase].Add(Ms);
   }
-  if(!bSampling || Now-SampleStartTime<(CastingSeconds>0?CastingSeconds:Wasps.IsEmpty()?30:60))return true;
+  if(!bSampling || Now-SampleStartTime<(CastingSeconds>0?CastingSeconds:Wasps.IsEmpty()?(bCompareTreeArt?15:30):60))return true;
   if(bPlayerMotion)
   {
    SetMovementKeys(Cast<AACEPlayerController>(PC),{});
@@ -785,6 +831,11 @@ private:
   FVector2D Size;GEngine->GameViewport->GetViewportSize(Size);
   const FString Summary=FString::Printf(TEXT("{\"scene\":\"%s\",\"synthetic\":true,\"width\":%.0f,\"height\":%.0f,\"frames\":%d,\"mean_ms\":%.3f,\"p50_ms\":%.3f,\"p95_ms\":%.3f,\"p99_ms\":%.3f,\"mean_fps\":%.2f}"),
    *Scene,Size.X,Size.Y,Frames.Num(),Total/Frames.Num(),Percentile(.5),Percentile(.95),Percentile(.99),1000*Frames.Num()/Total);
+  UE_LOG(LogTemp, Display, TEXT("ACE PerfScene mean RHI work: %.0f primitives, %.0f draws per frame"),
+   SamplePrimitives / Frames.Num(), SampleDraws / Frames.Num());
+  UE_LOG(LogTemp, Display, TEXT("ACE PerfScene mean thread times: game %.2f ms, render %.2f ms, RHI %.2f ms, GPU %.2f ms (%d GPU samples)"),
+   SampleGameMs / Frames.Num(), SampleRenderMs / Frames.Num(), SampleRHIMs / Frames.Num(),
+   SampleGPUMs / FMath::Max(1, GPUTimedFrames), GPUTimedFrames);
   FFileHelper::SaveStringToFile(Summary,*(Directory/TEXT("summary.json")));
   if(LagLink)
   {
@@ -819,12 +870,33 @@ private:
    Comparison+=TEXT("]");FFileHelper::SaveStringToFile(Comparison,*(Directory/TEXT("crowd-comparison.json")));
   }
   UE_LOG(LogTemp,Display,TEXT("ACE PerfScene result %s"),*Summary);
+  if (bCompareTreeArt)
+  {
+   const bool bShowingTrees = (ACELegionsSky::ActiveEnvironment()->Enabled & ACELegionsSky::Trees) != 0;
+   const FString Label = FString::Printf(TEXT("trees-%d-%s"), TreePass + 1, bShowingTrees ? TEXT("ac2") : TEXT("ac1"));
+   FFileHelper::SaveStringToFile(Summary, *(Directory / (Label + TEXT(".json"))));
+   UE_LOG(LogTemp, Display, TEXT("ACE PerfScene %s %s"), *Label, *Summary);
+   if (++TreePass < 3)
+   {
+    // Swap the artwork in the same loaded town and keep the player's saved choice.
+    const float Saved = ACERuntimeOptions::Get(TEXT("LegionsTrees"));
+    ACERuntimeOptions::Set(TEXT("LegionsTrees"), (TreePass == 1 ? !bOriginalTrees : bOriginalTrees) ? 1.f : 0.f);
+    ACELegionsSky::RefreshEnvironment();
+    ACERuntimeOptions::Set(TEXT("LegionsTrees"), Saved);
+    Frames.Reset();
+    SamplePrimitives = SampleDraws = SampleGameMs = SampleRenderMs = SampleRHIMs = SampleGPUMs = 0;
+    GPUTimedFrames = 0;
+    bSampling = false;
+    ResumeSampleTime = FPlatformTime::Seconds() + 20;
+    return true;
+   }
+  }
   if(FParse::Param(FCommandLine::Get(),TEXT("ACEPerfQuit")))GEngine->Exec(World.Get(),TEXT("Quit"));
   return false;
  }
 };
 static FAutoConsoleCommandWithWorldAndArgs GACEPerfScene(TEXT("ace.PerfScene"),
- TEXT("Disconnected development benchmark: outdoor, indoor, glenden (dungeon camera sweep), facility (Hub stairs/room replay), effects, caul, caul-tower (stationary at 0909000B; -ACEPerfCaulCrowd adds 80 creatures and 32 corpses; -ACEPerfCaulUCM=baseline or optimized includes the crowd and stationary UCM workload), swarm, wasps (idle/cast/stop/death), frozen or frozen-tuskers (spawn/death/corpse cycles). Writes Saved/Performance after 75 seconds (wasps: 105). -ACEPerfCleanView hides HUD; -ACEPerfResolution=WxH overrides 1920x1080. Wasps: -ACEPerfPlayerMotion exercises keyboard movement/jumps, -ACEPerfWaspCount=32 (1-128), -ACEPerfVolleyInterval=3 (.5-3 seconds), -ACEPerfVolleyWasps limits each staggered volley, -ACEPerfCastingSeconds runs sustained casts instead of phases. -ACEPerfCombatChat floods combat messages; -ACEPerfConfigPanel opens Options."),
+ TEXT("Disconnected development benchmark: outdoor, sawato-grove (authored trees), indoor, glenden (dungeon camera sweep), facility (Hub stairs/room replay), effects, caul, caul-tower (stationary at 0909000B; -ACEPerfCaulCrowd adds 80 creatures and 32 corpses; -ACEPerfCaulUCM=baseline or optimized includes the crowd and stationary UCM workload), swarm, wasps (idle/cast/stop/death), frozen or frozen-tuskers (spawn/death/corpse cycles). Writes Saved/Performance after 75 seconds (wasps: 105). -ACEPerfOutdoorCrowd=0..32 controls the Yaraq crowd; -ACEPerfCompareTrees measures both tree sets and the original again in the same town; -ACEPerfProfileGPU captures the warmed render passes. -ACEPerfCleanView hides HUD; -ACEPerfResolution=WxH overrides 1920x1080. Wasps: -ACEPerfPlayerMotion exercises keyboard movement/jumps, -ACEPerfWaspCount=32 (1-128), -ACEPerfVolleyInterval=3 (.5-3 seconds), -ACEPerfVolleyWasps limits each staggered volley, -ACEPerfCastingSeconds runs sustained casts instead of phases. -ACEPerfCombatChat floods combat messages; -ACEPerfConfigPanel opens Options."),
  FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&FACEPerformanceScene::Start));
 #endif
 

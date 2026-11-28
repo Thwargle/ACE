@@ -968,6 +968,11 @@ bool FPersonalFarSceneryDrawTest::RunTest(const FString& Parameters)
 			Describe(TEXT("One border east with groups of 4"), Seconds);
 			TestTrue(TEXT("The border step with groups finishes"), Far->bComplete);
 			TestEqual(TEXT("No old unit is left after the border"), Far->Retiring.Num() + Far->Releasing.Num(), 0);
+			for (const auto& Pair : Far->Units)
+			{
+				if (!TestTrue(TEXT("Every settled unit covers its current member blocks"), Pair.Value.BuiltMembers == Pair.Value.Members))
+					break;
+			}
 			Group->Set(1);
 			Run(Sawato, ClearDay);
 			TestEqual(TEXT("Back to single landblocks: visible components match despite retained outer blocks"), VisibleComponents(), SingleVisibleComponents);

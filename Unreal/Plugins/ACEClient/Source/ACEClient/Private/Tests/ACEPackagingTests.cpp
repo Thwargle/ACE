@@ -15,10 +15,10 @@ bool FACEPackagingMaterialsTest::RunTest(const FString& Parameters)
 	TStrongObjectPtr<UGameInstance> Instance(NewObject<UGameInstance>());
 	TStrongObjectPtr<UACEDatSubsystem> Dat(NewObject<UACEDatSubsystem>(Instance.Get()));
 	const auto Parents = Dat->GetRuntimeMaterialParents();
-	TestEqual(TEXT("Complete world/UI/filtered VR widget/pointer/particle/sky/comfort and meadow shader set"), Parents.Num(), 47);
+	TestEqual(TEXT("Complete world/UI/filtered VR widget/pointer/particle/sky/comfort and vegetation shader set"), Parents.Num(), 49);
 	for (const TCHAR* Name : {TEXT("M_ACELegionsGrass_v1"),TEXT("M_ACELandLit_v45"),TEXT("M_ACELegionsSkyAdd_v2"),TEXT("M_ACELegionsSkyAlpha_v1"),TEXT("M_ACESkyColorFill_v8"),
 		TEXT("M_ACEFarScenery_v1_0"),TEXT("M_ACEFarScenery_v1_1"),TEXT("M_ACEFarScenery_v1_2"),
-		TEXT("M_ACEFarScenery_v1_3"),TEXT("M_ACEFarScenery_v1_4")})
+		TEXT("M_ACEFarScenery_v1_3"),TEXT("M_ACEFarScenery_v1_4"),TEXT("M_ACEFarScenery_v1_5"),TEXT("M_ACELegionsLeaves_v1")})
 		TestTrue(Name,Parents.ContainsByPredicate([Name](const UMaterialInterface* Parent)
 		{
 			return Parent && Parent->GetName()==Name;
@@ -30,6 +30,13 @@ bool FACEPackagingMaterialsTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Cookable grass supports walking contact and range fade"),Grass->GetBlendMode()==BLEND_Masked &&
 			Grass->GetVectorParameterValue(TEXT("GrassContact"),Default) && Grass->GetVectorParameterValue(TEXT("GrassTrail"),Default) &&
 			Grass->GetVectorParameterValue(TEXT("GrassView"),Default));
+	}
+	for (const TCHAR* Name : {TEXT("M_ACELegionsLeaves_v1"), TEXT("M_ACEFarScenery_v1_5")})
+	{
+		const FString Path = FString::Printf(TEXT("/Game/ACE/RuntimeMaterials/%s.%s"), Name, Name);
+		const auto* Leaf = LoadObject<UMaterialInterface>(nullptr, *Path);
+		TestTrue(FString(Name) + TEXT(" preserves cutout and back-face rendering in the cooked parent"),
+			Leaf && Leaf->GetBlendMode() == BLEND_Masked && Leaf->IsTwoSided());
 	}
 	const auto* Horizon = LoadObject<UMaterialInterface>(nullptr,TEXT("/Game/ACE/RuntimeMaterials/M_ACESkyColorFill_v8.M_ACESkyColorFill_v8"));
 	float Falloff = -1.f;

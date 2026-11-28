@@ -104,7 +104,7 @@ Use this project's VR-enabled server for its custom VR combat/pose extensions.
 
 UPDATES / TROUBLESHOOTING
 
-- Three dots before the account screen on v166: use the complete v169 Quest
+- Three dots before the account screen on v166: use the complete v170 Quest
   bundle and run its Update-Quest.cmd to replace the APK and keep your DATs
   and logins. The updated APK enables the Quest Vulkan device profile. Data repair
   only checks the DATs. If the dots persist, capture diagnostics while the
